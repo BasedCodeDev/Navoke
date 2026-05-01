@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Workflow Automation</title>
+    <style>
+      body {
+        width: 340px;
+        margin: 0;
+        padding: 14px;
+        font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #0f172a;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        padding: 8px;
+      }
+      button {
+        margin-top: 10px;
+        border: 0;
+        border-radius: 6px;
+        padding: 8px 10px;
+        background: #087ea4;
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .status {
+        margin-top: 12px;
+        padding: 10px;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        background: #f8fafc;
+      }
+      .muted {
+        color: #64748b;
+      }
+    </style>
+  </head>
+  <body>
+    <label for="apiBaseUrl">Local app API URL</label>
+    <input id="apiBaseUrl" value="http://127.0.0.1:39201" />
+    <button id="save">Save</button>
+    <button id="check">Check connection</button>
+    <div id="status" class="status muted">Open ChatGPT in this Chrome profile and keep the Electron app running.</div>
+    <script src="popup.js"></script>
+  </body>
+</html>
