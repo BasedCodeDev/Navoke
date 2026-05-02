@@ -7,6 +7,7 @@ describe("theme registry", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toContain("light");
     expect(ids).toContain("dark");
+    expect(ids).toContain("based-code");
     expect(ids).toContain("tokyo-night-oled");
     expect(appThemes.every((theme) => theme.swatches.length >= 5)).toBe(true);
   });
@@ -14,6 +15,7 @@ describe("theme registry", () => {
   it("resolves persisted light and dark values for compatibility", () => {
     expect(resolveThemeId("light", true)).toBe("light");
     expect(resolveThemeId("dark", false)).toBe("dark");
+    expect(resolveThemeId("matte-purple", false)).toBe("based-code");
   });
 
   it("falls back to system preference for invalid stored values", () => {

@@ -73,6 +73,8 @@ export interface SystemInfo {
     running: number;
     labPending: number;
     labRunning: number;
+    focusPending: number;
+    focusRunning: number;
     requiredProtocolVersion: number;
     connectedClients: Array<{
       id: string;
@@ -243,6 +245,10 @@ export async function getRun(id: string): Promise<RunDetail> {
 
 export async function getSystemInfo(): Promise<SystemInfo> {
   return apiFetch("/api/system");
+}
+
+export async function focusExtensionClient(clientId: string): Promise<{ ok: true; result?: unknown }> {
+  return apiFetch(`/api/extension/clients/${encodeURIComponent(clientId)}/focus`, { method: "POST", body: "{}" });
 }
 
 export async function listLabSessions(): Promise<WorkflowLabSessionSummary[]> {

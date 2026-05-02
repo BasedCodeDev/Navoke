@@ -6,6 +6,7 @@ import {
   Camera,
   CheckCircle2,
   Download,
+  ExternalLink,
   FlaskConical,
   FolderOpen,
   Info,
@@ -27,6 +28,7 @@ import {
   createLabSession,
   createRun,
   deleteRun,
+  focusExtensionClient,
   getConfig,
   getRun,
   getSystemInfo,
@@ -75,6 +77,7 @@ import {
   getChatGptRunInput,
   type ChatGptRunInputModel
 } from "@/lib/chatGptArtifactPairing";
+import { resolveChatGptFocusTarget } from "@/lib/chatGptTabFocus";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -105,6 +108,7 @@ function usesBrowserProfile(workflowId: string): boolean {
 const NEW_CHATGPT_TAB_VALUE = "__new_chatgpt_tab__";
 const CHATGPT_NEW_TAB_URL = "https://chatgpt.com/";
 const CHATGPT_TAB_ROUTING_PARAM = "based-blink-tab";
+const APP_ICON_SRC = "/assets/app-icon.png";
 
 type ChatGptTabInput =
   | { mode: "existing"; clientId: string }
@@ -152,6 +156,7 @@ export default function App(): JSX.Element {
   const [pauseForManualLogin, setPauseForManualLogin] = useState(true);
   const [chatGptTabSelection, setChatGptTabSelection] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [newRunFocusError, setNewRunFocusError] = useState<string | null>(null);
   const [showProjectLanding, setShowProjectLanding] = useState(false);
 
   const configQuery = useQuery({ queryKey: ["config"], queryFn: getConfig });
@@ -212,11 +217,6 @@ export default function App(): JSX.Element {
   }, [apiBaseUrl, hasProject, queryClient, selectedRunId]);
 
   const workflows = workflowsQuery.data ?? [];
-  const selectedWorkflow = useMemo(
-    () => workflows.find((workflow) => workflow.manifest.id === selectedWorkflowId)?.manifest,
-    [workflows, selectedWorkflowId]
-  );
-
   const createRunMutation = useMutation({
     mutationFn: async () => {
       setFormError(null);
@@ -259,6 +259,12 @@ export default function App(): JSX.Element {
     onError: (error) => setFormError(error instanceof Error ? error.message : String(error))
   });
 
+  const focusNewRunTabMutation = useMutation({
+    mutationFn: focusExtensionClient,
+    onSuccess: () => setNewRunFocusError(null),
+    onError: (error) => setNewRunFocusError(error instanceof Error ? error.message : String(error))
+  });
+
   const selectedRunSummary = (runsQuery.data ?? []).find((run) => run.id === selectedRunId);
   const activeRun = selectedRunQuery.data?.run ?? selectedRunSummary;
   const selectedRunDetailError = selectedRunQuery.error
@@ -269,7 +275,7 @@ export default function App(): JSX.Element {
   const selectedRunIds = new Set([selectedRunId]);
   const extensionClients = systemQuery.data?.extension.connectedClients ?? [];
   const compatibleExtensionClients = useMemo(() => extensionClients.filter((client) => client.compatible), [extensionClients]);
-  const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 5;
+  const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 7;
   const isChatGptExtensionWorkflow = selectedWorkflowId === "chatgpt.extension-image-transform";
 
   useEffect(() => {
@@ -317,30 +323,49 @@ export default function App(): JSX.Element {
   }
 
   const showLanding = showProjectLanding || !hasProject;
+  const currentProjectDir = configQuery.data?.projectDir ?? "";
   const projectName = configQuery.data?.projectName ?? "Based BLINK";
 
   return (
-    <main className="min-h-screen bg-background text-foreground transition-colors">
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-6 py-4">
-          <div>
-            <h1 className="text-xl font-semibold">{showLanding ? "Based BLINK" : projectName}</h1>
-            <p className="text-sm text-muted-foreground">
-              {showLanding ? "Choose a Based BLINK project folder to continue." : configQuery.data?.projectDir}
-            </p>
+    <main className="flex h-screen flex-col overflow-hidden bg-background text-foreground transition-colors">
+      <header className="shrink-0 border-b border-border bg-card">
+        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-5 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <img
+              src={APP_ICON_SRC}
+              alt=""
+              className="h-10 w-10 shrink-0 rounded-md border border-border bg-background object-cover"
+              draggable={false}
+            />
+            <div className="min-w-0">
+              <h1 className="truncate text-xl font-semibold">{showLanding ? "Based BLINK" : projectName}</h1>
+              <p className="truncate text-sm text-muted-foreground">
+                {showLanding ? "Choose a Based BLINK project folder to continue." : configQuery.data?.projectDir}
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {!showLanding ? (
               <>
-            <Badge className={cn("border", toneClassNames.neutral)}>
-              Queue: {systemQuery.data?.runner.queued ?? 0} · Running: {systemQuery.data?.runner.running ?? 0}
-            </Badge>
-            <Badge className={cn("border", toneClassNames.info)}>
-              Extension: {systemQuery.data?.extension.connectedClients.length ?? 0}
-            </Badge>
+                <Badge className={cn("border", toneClassNames.neutral)}>
+                  Queue: {systemQuery.data?.runner.queued ?? 0} · Running: {systemQuery.data?.runner.running ?? 0}
+                </Badge>
+                <Badge className={cn("border", toneClassNames.info)}>
+                  Extension: {systemQuery.data?.extension.connectedClients.length ?? 0}
+                </Badge>
                 <Button type="button" variant="outline" size="sm" onClick={() => setShowProjectLanding(true)}>
                   <FolderOpen className="h-4 w-4" />
                   Open Project
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void window.basedBlink.openPath(currentProjectDir)}
+                  disabled={!currentProjectDir}
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Show in File Manager
                 </Button>
               </>
             ) : null}
@@ -372,19 +397,19 @@ export default function App(): JSX.Element {
           }
         />
       ) : (
-      <div className="mx-auto grid max-w-[1500px] grid-cols-[360px_minmax(0,1fr)] gap-5 px-6 py-5">
-        <section className="space-y-5">
+      <div className="mx-auto grid min-h-0 w-full max-w-[1500px] flex-1 grid-cols-[minmax(320px,360px)_minmax(0,1fr)] gap-4 overflow-hidden px-5 py-4">
+        <section className="min-h-0">
           <Card>
-            <CardHeader>
+            <CardHeader className="p-3 pb-1.5">
               <CardTitle>New Run</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
+            <CardContent className="space-y-2 p-3 pt-0">
+              <div className="space-y-1.5">
                 <Label>Workflow</Label>
                 <select
                   value={selectedWorkflowId}
                   onChange={(event) => setSelectedWorkflowId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
                 >
                   {workflows.map((workflow) => (
                     <option key={workflow.manifest.id} value={workflow.manifest.id}>
@@ -392,12 +417,11 @@ export default function App(): JSX.Element {
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-muted-foreground">{selectedWorkflow?.description}</p>
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label>Run name</Label>
-                <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional" />
+                <Input className="h-9" value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional" />
               </div>
 
               {isChatGptExtensionWorkflow ? (
@@ -405,8 +429,17 @@ export default function App(): JSX.Element {
                   clients={extensionClients}
                   requiredProtocolVersion={requiredExtensionProtocol}
                   value={chatGptTabSelection || NEW_CHATGPT_TAB_VALUE}
-                  onChange={setChatGptTabSelection}
+                  onChange={(value) => {
+                    setNewRunFocusError(null);
+                    setChatGptTabSelection(value);
+                  }}
                   onRefresh={() => void queryClient.invalidateQueries({ queryKey: ["system"] })}
+                  onFocusSelected={(clientId) => {
+                    setNewRunFocusError(null);
+                    focusNewRunTabMutation.mutate(clientId);
+                  }}
+                  isFocusingSelected={focusNewRunTabMutation.isPending}
+                  focusError={newRunFocusError}
                 />
               ) : null}
 
@@ -420,9 +453,10 @@ export default function App(): JSX.Element {
                     onChoose={() => void chooseImages(setReferenceFiles, "Choose optional reference images")}
                     onClear={() => setReferenceFiles([])}
                   />
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label>Master prompt</Label>
                     <Textarea
+                      className="min-h-12 py-1.5"
                       value={masterPrompt}
                       onChange={(event) => setMasterPrompt(event.target.value)}
                       placeholder='Initial instruction. Example: "After the first response, respond with images only. When ready, respond READY."'
@@ -436,9 +470,10 @@ export default function App(): JSX.Element {
                     onChoose={() => void chooseImages(setSubjectFiles, "Choose subject images")}
                     onClear={() => setSubjectFiles([])}
                   />
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label>Per-subject instruction</Label>
                     <Textarea
+                      className="min-h-12 py-1.5"
                       value={subjectInstruction}
                       onChange={(event) => setSubjectInstruction(event.target.value)}
                       placeholder="Optional. Leave blank to send each subject image without text."
@@ -458,13 +493,13 @@ export default function App(): JSX.Element {
 
               {!usesMasterPrompt(selectedWorkflowId) ? (
                 <>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label>Prompt</Label>
-                    <Textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Optional model prompt" />
+                    <Textarea className="min-h-12 py-1.5" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Optional model prompt" />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label>Model name</Label>
-                    <Input value={modelName} onChange={(event) => setModelName(event.target.value)} />
+                    <Input className="h-9" value={modelName} onChange={(event) => setModelName(event.target.value)} />
                   </div>
                 </>
               ) : null}
@@ -472,11 +507,11 @@ export default function App(): JSX.Element {
               {usesBrowserProfile(selectedWorkflowId) ? (
                 <>
                   <div className="grid grid-cols-[1fr_auto] items-end gap-3">
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <Label>Browser profile</Label>
-                      <Input value={profileName} onChange={(event) => setProfileName(event.target.value)} />
+                      <Input className="h-9" value={profileName} onChange={(event) => setProfileName(event.target.value)} />
                     </div>
-                    <label className="flex h-10 items-center gap-2 text-sm">
+                    <label className="flex h-9 items-center gap-2 text-sm">
                       <input
                         type="checkbox"
                         checked={pauseForManualLogin}
@@ -487,7 +522,6 @@ export default function App(): JSX.Element {
                   </div>
                 </>
               ) : null}
-
               {!hasProject ? (
                 <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.info)}>
                   <Info className="mt-0.5 h-4 w-4 shrink-0" />
@@ -502,30 +536,15 @@ export default function App(): JSX.Element {
                 </div>
               ) : null}
 
-              <Button className="w-full" onClick={() => createRunMutation.mutate()} disabled={createRunMutation.isPending}>
+              <Button className="h-9 w-full" onClick={() => createRunMutation.mutate()} disabled={createRunMutation.isPending}>
                 <Play className="h-4 w-4" />
                 {hasProject ? "Start run" : "Choose project and start"}
               </Button>
             </CardContent>
           </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Local Runtime</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm text-muted-foreground">
-              <div className="truncate">Project: {configQuery.data?.projectDir ?? "No project selected"}</div>
-              <div className="truncate">Data: {configQuery.data?.dataDir || "Choose a project to create .blink data"}</div>
-              <div className="truncate">API: {configQuery.data?.apiBaseUrl || "Not running"}</div>
-              <div>
-                Extension clients: {systemQuery.data?.extension.connectedClients.length ?? 0}; pending:{" "}
-                {systemQuery.data?.extension.pending ?? 0}
-              </div>
-            </CardContent>
-          </Card>
         </section>
 
-        <section className="space-y-5">
+        <section className="flex min-h-0 flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
             <div className="inline-flex rounded-md border border-border bg-card p-1">
               <button
@@ -559,15 +578,15 @@ export default function App(): JSX.Element {
             </div>
           </div>
 
-          <div className={workspaceView === "lab" ? "" : "hidden"}>
+          <div className={workspaceView === "lab" ? "min-h-0 flex-1 overflow-hidden" : "hidden"}>
             <WorkflowLabPanel extensionClients={extensionClients} hasProject={hasProject} apiBaseUrl={apiBaseUrl} />
           </div>
 
-          <div className={workspaceView === "runs" ? "space-y-5" : "hidden"}>
+          <div className={workspaceView === "runs" ? "flex min-h-0 flex-1 flex-col gap-4" : "hidden"}>
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Runs</h2>
               </div>
-              <div className="space-y-3">
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                 {!hasProject ? (
                   <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">
                     Open a project folder to view and create runs.
@@ -586,12 +605,15 @@ export default function App(): JSX.Element {
       </div>
       )}
 
+      <LocalRuntimeFooter config={configQuery.data} system={systemQuery.data} />
+
       {!showLanding && selectedRunId ? (
         <RunDetailModal
           runId={selectedRunId}
           run={activeRun}
           artifacts={selectedRunQuery.data?.artifacts ?? []}
           events={selectedRunQuery.data?.events ?? []}
+          extensionClients={extensionClients}
           hasDetails={Boolean(selectedRunQuery.data)}
           isLoading={selectedRunQuery.isLoading}
           detailError={selectedRunDetailError}
@@ -600,6 +622,7 @@ export default function App(): JSX.Element {
           onResume={(runId) => void resumeRun(runId).then(() => queryClient.invalidateQueries())}
           onCancel={(runId) => void cancelRun(runId).then(() => queryClient.invalidateQueries())}
           onOpenDataFolder={() => window.basedBlink.openPath(activeRun?.runDir ?? "")}
+          onFocusClient={(clientId) => focusExtensionClient(clientId)}
           onDelete={(runId) => void deleteRunMutation.mutate(runId)}
         />
       ) : null}
@@ -615,6 +638,22 @@ export default function App(): JSX.Element {
         />
       ) : null}
     </main>
+  );
+}
+
+function LocalRuntimeFooter({ config, system }: { config?: BasedBlinkConfig; system?: SystemInfo }): JSX.Element {
+  return (
+    <footer className="shrink-0 overflow-hidden border-t border-border bg-card/90 px-5 py-1 text-[10px] leading-4 text-muted-foreground">
+      <div className="mx-auto flex max-w-[1500px] min-w-0 items-center gap-3 overflow-hidden">
+        <span className="shrink-0 font-medium text-foreground">Local Runtime</span>
+        <span className="min-w-0 flex-[1.2_1_0] truncate">Project: {config?.projectDir ?? "No project selected"}</span>
+        <span className="min-w-0 flex-1 truncate">Data: {config?.dataDir || "Choose a project to create .blink data"}</span>
+        <span className="shrink-0 truncate">API: {config?.apiBaseUrl || "Not running"}</span>
+        <span className="shrink-0">
+          Extension: {system?.extension.connectedClients.length ?? 0}; pending: {system?.extension.pending ?? 0}
+        </span>
+      </div>
+    </footer>
   );
 }
 
@@ -649,7 +688,7 @@ function ThemePickerModal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 overflow-hidden bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
       <div className="mx-auto flex min-h-full max-w-5xl items-start justify-center">
         <div
           className="w-full overflow-hidden rounded-lg border border-border bg-background shadow-xl"
@@ -800,9 +839,15 @@ function ProjectLanding({
   }
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-5.25rem)] max-w-5xl flex-col px-6 py-12">
-      <section className="flex flex-1 flex-col items-center justify-center gap-5 text-center">
+    <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden px-6 py-8">
+      <section className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 text-center">
         <div className="space-y-4">
+          <img
+            src={APP_ICON_SRC}
+            alt=""
+            className="mx-auto h-24 w-24 rounded-lg border border-border bg-background object-cover"
+            draggable={false}
+          />
           <h2 className="text-3xl font-semibold">{config?.projectName ?? "Based BLINK"}</h2>
           <p className="text-sm text-muted-foreground">
             {activeProjectDir ? `Current project: ${activeProjectDir}` : "Open a project folder to load its runs and local workflow data."}
@@ -810,7 +855,7 @@ function ProjectLanding({
         </div>
         <Button type="button" className="h-14 px-8 text-base" onClick={onOpenProject} disabled={isLoading}>
           <FolderOpen className="h-5 w-5" />
-          Open Project
+          Open New Project
         </Button>
         {error ? (
           <div className={cn("flex max-w-xl gap-2 rounded-md border p-3 text-sm", toneClassNames.danger)}>
@@ -820,7 +865,7 @@ function ProjectLanding({
         ) : null}
       </section>
 
-      <section className="space-y-3 pb-10">
+      <section className="min-h-0 space-y-3 overflow-y-auto pb-6">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-semibold">Recent Projects</h3>
           <Badge className={cn("border", toneClassNames.neutral)}>{recentProjects.length}</Badge>
@@ -896,6 +941,7 @@ function RunDetailModal({
   run,
   artifacts,
   events,
+  extensionClients,
   hasDetails,
   isLoading,
   detailError,
@@ -904,12 +950,14 @@ function RunDetailModal({
   onResume,
   onCancel,
   onOpenDataFolder,
+  onFocusClient,
   onDelete
 }: {
   runId: string;
   run?: RunRecord;
   artifacts: ArtifactRecord[];
   events: RuntimeEvent[];
+  extensionClients: SystemInfo["extension"]["connectedClients"];
   hasDetails: boolean;
   isLoading: boolean;
   detailError: string | null;
@@ -918,8 +966,16 @@ function RunDetailModal({
   onResume(runId: string): void;
   onCancel(runId: string): void;
   onOpenDataFolder(): void | Promise<unknown>;
+  onFocusClient(clientId: string): Promise<unknown>;
   onDelete(runId: string): void;
 }): JSX.Element {
+  const [focusError, setFocusError] = useState<string | null>(null);
+  const [isFocusing, setIsFocusing] = useState(false);
+  const chatGptFocusTarget = useMemo(
+    () => resolveChatGptFocusTarget(run, extensionClients),
+    [extensionClients, run]
+  );
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -933,8 +989,25 @@ function RunDetailModal({
     };
   }, [onClose]);
 
+  useEffect(() => {
+    setFocusError(null);
+  }, [runId, chatGptFocusTarget?.clientId]);
+
+  async function focusChatGptTab(): Promise<void> {
+    if (!chatGptFocusTarget?.clientId) return;
+    setFocusError(null);
+    setIsFocusing(true);
+    try {
+      await onFocusClient(chatGptFocusTarget.clientId);
+    } catch (error) {
+      setFocusError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsFocusing(false);
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 overflow-hidden bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
       <div className="mx-auto flex min-h-full max-w-5xl items-start justify-center">
         <div
           className="w-full overflow-hidden rounded-lg border border-border bg-background shadow-xl"
@@ -1009,11 +1082,31 @@ function RunDetailModal({
                   <FolderOpen className="h-4 w-4" />
                   Data folder
                 </Button>
+                {chatGptFocusTarget ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void focusChatGptTab()}
+                    disabled={!chatGptFocusTarget.clientId || isFocusing}
+                    title={
+                      chatGptFocusTarget.disabledReason ??
+                      `Go to ${chatGptFocusTarget.client?.title || "the selected ChatGPT tab"}`
+                    }
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    Go to ChatGPT tab
+                  </Button>
+                ) : null}
                 <Button variant="destructive" size="sm" onClick={() => onDelete(runId)} disabled={isDeleting}>
                   <Trash2 className="h-4 w-4" />
                   Delete
                 </Button>
               </div>
+              {focusError ? (
+                <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>
+                  {focusError}
+                </div>
+              ) : null}
             </section>
 
             {hasDetails ? (
@@ -1023,7 +1116,12 @@ function RunDetailModal({
                   {artifacts.length === 0 ? (
                     <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No artifacts yet.</div>
                   ) : run?.workflowId === "chatgpt.extension-image-transform" && getChatGptRunInput(run.input) ? (
-                    <ChatGptArtifactPairs run={run} artifacts={artifacts} input={getChatGptRunInput(run.input)!} />
+                    <ChatGptArtifactPairs
+                      run={run}
+                      artifacts={artifacts}
+                      input={getChatGptRunInput(run.input)!}
+                      onOpenDataFolder={onOpenDataFolder}
+                    />
                   ) : (
                     <div className="grid gap-3 lg:grid-cols-2">
                       {artifacts.map((artifact) => (
@@ -1068,11 +1166,13 @@ function RunDetailModal({
 function ChatGptArtifactPairs({
   run,
   artifacts,
-  input
+  input,
+  onOpenDataFolder
 }: {
   run: RunRecord;
   artifacts: ArtifactRecord[];
   input: ChatGptRunInputModel;
+  onOpenDataFolder(): void | Promise<unknown>;
 }): JSX.Element {
   const pairing = buildChatGptArtifactPairing(input, artifacts);
 
@@ -1149,6 +1249,12 @@ function ChatGptArtifactPairs({
 
       {pairing.otherArtifacts.length > 0 ? (
         <div className="space-y-3">
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run.runDir}>
+              <FolderOpen className="h-4 w-4" />
+              Data folder
+            </Button>
+          </div>
           <h4 className="text-sm font-semibold">Other artifacts</h4>
           <div className="grid gap-3 lg:grid-cols-2">
             {pairing.otherArtifacts.map((artifact) => (
@@ -1707,16 +1813,23 @@ function ChatGptTabRoutingPanel({
   requiredProtocolVersion,
   value,
   onChange,
-  onRefresh
+  onRefresh,
+  onFocusSelected,
+  isFocusingSelected = false,
+  focusError = null
 }: {
   clients: SystemInfo["extension"]["connectedClients"];
   requiredProtocolVersion: number;
   value: string;
   onChange(value: string): void;
   onRefresh(): void;
+  onFocusSelected?(clientId: string): void;
+  isFocusingSelected?: boolean;
+  focusError?: string | null;
 }): JSX.Element {
   const compatibleClients = clients.filter((client) => client.compatible);
   const incompatibleClients = clients.filter((client) => !client.compatible);
+  const selectedCompatibleClient = compatibleClients.find((client) => client.id === value);
 
   return (
     <div className="space-y-2">
@@ -1799,12 +1912,12 @@ function ChatGptTabRoutingPanel({
         {compatibleClients.length > 0 ? <Badge className={cn("border", toneClassNames.neutral)}>{compatibleClients.length} ready</Badge> : null}
       </div>
 
-      <div className="grid grid-cols-[1fr_auto] gap-2">
+      <div className={cn("grid gap-2", selectedCompatibleClient ? "grid-cols-[1fr_auto_auto]" : "grid-cols-[1fr_auto]")}>
         <select
           id="chatgpt-tab-target"
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className="h-10 min-w-0 rounded-md border border-border bg-background px-3 text-sm"
+          className="h-9 min-w-0 rounded-md border border-border bg-background px-3 text-sm"
         >
           <option value={NEW_CHATGPT_TAB_VALUE}>Open a new ChatGPT tab</option>
           {compatibleClients.map((client) => (
@@ -1817,7 +1930,25 @@ function ChatGptTabRoutingPanel({
           <RefreshCcw className="h-4 w-4" />
           Refresh
         </Button>
+        {selectedCompatibleClient ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onFocusSelected?.(selectedCompatibleClient.id)}
+            disabled={!onFocusSelected || isFocusingSelected}
+            title={`Go to ${selectedCompatibleClient.title || "the selected ChatGPT tab"}`}
+          >
+            <ExternalLink className="h-4 w-4" />
+            Go to tab
+          </Button>
+        ) : null}
       </div>
+      {focusError ? (
+        <div className={cn("rounded-md border p-2 text-xs", toneClassNames.danger)}>
+          {focusError}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1860,11 +1991,16 @@ function ImagePicker({
   onChoose(): void;
   onClear(): void;
 }): JSX.Element {
+  const statusText = files.length === 0 ? emptyText : files.length === 1 ? files[0] : `${files.length} selected`;
+
   return (
-    <div className="space-y-2">
-      <Label>{label}</Label>
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <Label>{label}</Label>
+        <span className="min-w-0 truncate text-xs text-muted-foreground">{statusText}</span>
+      </div>
       <div className="grid grid-cols-[1fr_auto] gap-2">
-        <Button type="button" variant="outline" className="justify-start" onClick={onChoose}>
+        <Button type="button" variant="outline" size="sm" className="justify-start" onClick={onChoose}>
           <Upload className="h-4 w-4" />
           {chooseLabel}
         </Button>
@@ -1872,15 +2008,28 @@ function ImagePicker({
           Clear
         </Button>
       </div>
-      <FileList files={files} emptyText={emptyText} />
     </div>
   );
 }
 
-function FileList({ files, emptyText }: { files: string[]; emptyText: string }): JSX.Element {
+function FileList({ files, emptyText }: { files: string[]; emptyText?: string }): JSX.Element {
+  const visibleFiles = files.slice(0, 2);
+  const remainingCount = files.length - visibleFiles.length;
+
   return (
-    <div className="max-h-24 space-y-1 overflow-auto text-xs text-muted-foreground">
-      {files.length === 0 ? emptyText : files.map((file) => <div key={file} className="truncate">{file}</div>)}
+    <div className="space-y-1 text-xs text-muted-foreground">
+      {files.length > 0 ? (
+        <>
+          {visibleFiles.map((file) => (
+            <div key={file} className="truncate">
+              {file}
+            </div>
+          ))}
+          {remainingCount > 0 ? <div>{remainingCount} more selected</div> : null}
+        </>
+      ) : (
+        emptyText
+      )}
     </div>
   );
 }

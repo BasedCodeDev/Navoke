@@ -161,7 +161,7 @@ function loadContentScript(elements: MockElement[]) {
     collectChatGptSubmitReadyState: (selectors: Record<string, string>) => { stopButtonVisible: boolean; stopButtonLabel: string | null };
     evaluateChatGptSubmitReadyState: (state: unknown) => { satisfied: boolean; reason: string };
     collectNewOutputImageCandidates: (
-      beforeState: { assistantCount: number; articleCount: number; imageFingerprints: Set<string> },
+      beforeState: { assistantCount: number; articleCount: number; imageFingerprints: Set<string>; outputCandidateCount?: number },
       selectors: Record<string, string>
     ) => MockImageElement[];
     selectSingleOutputImage: (images: MockImageElement[], subject: { name: string }) => MockImageElement;
@@ -223,6 +223,44 @@ describe("ChatGPT extension content predicates", () => {
     expect(candidates).toEqual([newImage]);
   });
 
+  it("uses candidate order when ChatGPT reuses one broad assistant container", () => {
+    const oldImage = mockImage("https://chatgpt.test/old.png", { alt: "Generated image" });
+    const newImage = mockImage("https://chatgpt.test/new.png", { alt: "Generated image" });
+    const broadAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImage, newImage] });
+    const content = loadContentScript([mockElement("main", {}, { children: [broadAssistant] })]);
+
+    const candidates = content.collectNewOutputImageCandidates(
+      {
+        assistantCount: 1,
+        articleCount: 0,
+        imageFingerprints: new Set(["https://chatgpt.test/old.png|1024x1024"]),
+        outputCandidateCount: 1
+      },
+      {}
+    );
+
+    expect(candidates).toEqual([newImage]);
+  });
+
+  it("does not treat a volatile prior output URL as a current output candidate", () => {
+    const oldImageWithNewSignedUrl = mockImage("https://chatgpt.test/old-resigned.png", { alt: "Generated image" });
+    const newImage = mockImage("https://chatgpt.test/new.png", { alt: "Generated image" });
+    const broadAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImageWithNewSignedUrl, newImage] });
+    const content = loadContentScript([mockElement("main", {}, { children: [broadAssistant] })]);
+
+    const candidates = content.collectNewOutputImageCandidates(
+      {
+        assistantCount: 1,
+        articleCount: 0,
+        imageFingerprints: new Set(["https://chatgpt.test/old-original.png|1024x1024"]),
+        outputCandidateCount: 1
+      },
+      {}
+    );
+
+    expect(candidates).toEqual([newImage]);
+  });
+
   it("excludes uploaded prompt images from output candidates", () => {
     const uploadedImage = mockImage("https://chatgpt.test/uploaded.png", { alt: "Uploaded image" });
     const generatedImage = mockImage("https://chatgpt.test/generated.png", { alt: "Generated image" });
@@ -261,5 +299,26 @@ describe("ChatGPT extension content predicates", () => {
         { name: "subject.png" }
       )
     ).toThrow("exactly one result per subject");
+  });
+
+  it("rejects multiple generated images appended after the baseline", () => {
+    const oldImage = mockImage("https://chatgpt.test/old.png", { alt: "Generated image" });
+    const firstNewImage = mockImage("https://chatgpt.test/first-new.png", { alt: "Generated image" });
+    const secondNewImage = mockImage("https://chatgpt.test/second-new.png", { alt: "Generated image" });
+    const broadAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImage, firstNewImage, secondNewImage] });
+    const content = loadContentScript([mockElement("main", {}, { children: [broadAssistant] })]);
+
+    const candidates = content.collectNewOutputImageCandidates(
+      {
+        assistantCount: 1,
+        articleCount: 0,
+        imageFingerprints: new Set(["https://chatgpt.test/old.png|1024x1024"]),
+        outputCandidateCount: 1
+      },
+      {}
+    );
+
+    expect(candidates).toEqual([firstNewImage, secondNewImage]);
+    expect(() => content.selectSingleOutputImage(candidates, { name: "subject.png" })).toThrow("exactly one result per subject");
   });
 });

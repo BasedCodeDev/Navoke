@@ -222,4 +222,44 @@ describe("ExtensionBridge", () => {
 
     await expect(wait).resolves.toMatchObject({ url: "https://chatgpt.com/" });
   });
+
+  it("queues, leases, and completes focus commands for a selected compatible extension tab", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      id: "focus-tab",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.7.0"
+    });
+
+    const wait = bridge.focusClient("focus-tab", { timeoutMs: 1_000 });
+
+    expect(bridge.status().focusPending).toBe(1);
+    const command = bridge.nextFocusCommand("focus-tab");
+    expect(command).toMatchObject({
+      kind: "focus-tab",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION
+    });
+    expect(bridge.status().focusRunning).toBe(1);
+
+    bridge.completeFocusCommand(command!.id, { ok: true });
+
+    await expect(wait).resolves.toMatchObject({ ok: true });
+  });
+
+  it("fails and times out focus commands with clear errors", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      id: "focus-tab",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.7.0"
+    });
+
+    const failed = bridge.focusClient("focus-tab", { timeoutMs: 1_000 });
+    const failedCommand = bridge.nextFocusCommand("focus-tab");
+    bridge.failFocusCommand(failedCommand!.id, "Cannot focus sender tab.");
+    await expect(failed).rejects.toThrow("Cannot focus sender tab.");
+
+    const timedOut = bridge.focusClient("focus-tab", { timeoutMs: 5 });
+    await expect(timedOut).rejects.toThrow(/Timed out waiting for the Chrome extension to focus/);
+  });
 });

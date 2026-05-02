@@ -6,9 +6,10 @@ import { inferMimeType } from "../utils/files";
 export type ExtensionTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ExtensionImageGroup = "reference" | "subject";
 
-export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 6;
+export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 7;
 const CLIENT_TTL_MS = 30_000;
 const LAB_COMMAND_LEASE_MS = 60_000;
+const FOCUS_COMMAND_LEASE_MS = 15_000;
 
 export type ChatGptExtensionTaskTarget =
   | { mode: "any" }
@@ -93,6 +94,13 @@ export interface ExtensionLabCommandPayload {
   createdAt: string;
 }
 
+export interface ExtensionFocusCommandPayload {
+  id: string;
+  kind: "focus-tab";
+  protocolVersion: number;
+  createdAt: string;
+}
+
 interface ExtensionTask {
   id: string;
   kind: "chatgpt-image-transform";
@@ -123,6 +131,7 @@ interface Waiter {
 }
 
 type ExtensionLabCommandStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+type ExtensionFocusCommandStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 interface ExtensionLabCommand {
   id: string;
@@ -140,11 +149,28 @@ interface LabWaiter {
   reject(error: Error): void;
 }
 
+interface ExtensionFocusCommand {
+  id: string;
+  clientId: string;
+  status: ExtensionFocusCommandStatus;
+  result?: unknown;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface FocusWaiter {
+  resolve(result: unknown): void;
+  reject(error: Error): void;
+}
+
 export class ExtensionBridge {
   private readonly tasks = new Map<string, ExtensionTask>();
   private readonly waiters = new Map<string, Waiter>();
   private readonly labCommands = new Map<string, ExtensionLabCommand>();
   private readonly labWaiters = new Map<string, LabWaiter>();
+  private readonly focusCommands = new Map<string, ExtensionFocusCommand>();
+  private readonly focusWaiters = new Map<string, FocusWaiter>();
   private readonly clients = new Map<string, ExtensionClientStatus>();
   private readonly events = new EventEmitter();
 
@@ -277,6 +303,82 @@ export class ExtensionBridge {
     this.labWaiters.delete(commandId);
   }
 
+  focusClient(clientId: string, options: { timeoutMs?: number } = {}): Promise<unknown> {
+    const client = this.assertCompatibleClient(clientId);
+    const now = new Date().toISOString();
+    const command: ExtensionFocusCommand = {
+      id: randomUUID(),
+      clientId: client.id,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now
+    };
+    this.focusCommands.set(command.id, command);
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const current = this.focusCommands.get(command.id);
+        if (current && ["pending", "running"].includes(current.status)) {
+          current.status = "cancelled";
+          current.updatedAt = new Date().toISOString();
+        }
+        this.focusWaiters.delete(command.id);
+        reject(new Error("Timed out waiting for the Chrome extension to focus the selected tab."));
+      }, options.timeoutMs ?? 10_000);
+
+      this.focusWaiters.set(command.id, {
+        resolve: (result) => {
+          clearTimeout(timeout);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        }
+      });
+    });
+  }
+
+  nextFocusCommand(clientId: string): ExtensionFocusCommandPayload | null {
+    const client = this.assertCompatibleClient(clientId);
+    const now = Date.now();
+    for (const command of this.focusCommands.values()) {
+      if (command.status === "running" && now - Date.parse(command.updatedAt) > FOCUS_COMMAND_LEASE_MS) {
+        command.status = "pending";
+        command.updatedAt = new Date().toISOString();
+      }
+      if (command.status === "pending" && command.clientId === client.id) {
+        command.status = "running";
+        command.updatedAt = new Date().toISOString();
+        return {
+          id: command.id,
+          kind: "focus-tab",
+          protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+          createdAt: command.createdAt
+        };
+      }
+    }
+    return null;
+  }
+
+  completeFocusCommand(commandId: string, result: unknown): void {
+    const command = this.getFocusCommand(commandId);
+    command.status = "completed";
+    command.result = result;
+    command.updatedAt = new Date().toISOString();
+    this.focusWaiters.get(commandId)?.resolve(result);
+    this.focusWaiters.delete(commandId);
+  }
+
+  failFocusCommand(commandId: string, message: string): void {
+    const command = this.getFocusCommand(commandId);
+    command.status = "failed";
+    command.error = message;
+    command.updatedAt = new Date().toISOString();
+    this.focusWaiters.get(commandId)?.reject(new Error(message));
+    this.focusWaiters.delete(commandId);
+  }
+
   getTaskImagePath(taskId: string, group: ExtensionImageGroup, imageIndex: number): string {
     const task = this.getTask(taskId);
     const paths = group === "reference" ? task.referenceImagePaths : task.subjectImagePaths;
@@ -327,6 +429,8 @@ export class ExtensionBridge {
     running: number;
     labPending: number;
     labRunning: number;
+    focusPending: number;
+    focusRunning: number;
     requiredProtocolVersion: number;
   } {
     const counts = [...this.tasks.values()].reduce(
@@ -345,11 +449,20 @@ export class ExtensionBridge {
       },
       { labPending: 0, labRunning: 0 }
     );
+    const focusCounts = [...this.focusCommands.values()].reduce(
+      (acc, command) => {
+        if (command.status === "pending") acc.focusPending += 1;
+        if (command.status === "running") acc.focusRunning += 1;
+        return acc;
+      },
+      { focusPending: 0, focusRunning: 0 }
+    );
     return {
       connectedClients: this.listClients(),
       requiredProtocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
       ...counts,
-      ...labCounts
+      ...labCounts,
+      ...focusCounts
     };
   }
 
@@ -466,6 +579,12 @@ export class ExtensionBridge {
   private getLabCommand(commandId: string): ExtensionLabCommand {
     const command = this.labCommands.get(commandId);
     if (!command) throw new Error(`Extension Workflow Lab command not found: ${commandId}`);
+    return command;
+  }
+
+  private getFocusCommand(commandId: string): ExtensionFocusCommand {
+    const command = this.focusCommands.get(commandId);
+    if (!command) throw new Error(`Extension focus command not found: ${commandId}`);
     return command;
   }
 

@@ -6,6 +6,7 @@ export type ThemeId =
   | "tokyo-night"
   | "tokyo-night-oled"
   | "matte-black"
+  | "based-code"
   | "kanagawa"
   | "nord"
   | "evergarden"
@@ -323,6 +324,36 @@ export const appThemes: ThemeDefinition[] = [
     }
   },
   {
+    id: "based-code",
+    name: "Based Code",
+    description: "Slightly lifted matte black surfaces with deep purple accents.",
+    appearance: "dark",
+    swatches: ["#1D1D20", "#202024", "#38383F", "#50505A", "#5E316D", "#ECE8F0"],
+    tokens: {
+      background: "#1D1D20",
+      foreground: "#ECE8F0",
+      card: "#202024",
+      cardForeground: "#ECE8F0",
+      border: "#50505A",
+      muted: "#38383F",
+      mutedForeground: "#D8D0DE",
+      primary: "#5E316D",
+      primaryForeground: "#FFFFFF",
+      destructive: "#8A4A9E",
+      destructiveForeground: "#FFFFFF",
+      tones: darkAccentTones({
+        surface: "#202024",
+        border: "#50505A",
+        info: "#C384D4",
+        success: "#A8D990",
+        warning: "#D8BE79",
+        danger: "#D987E8",
+        lab: "#C384D4",
+        neutralForeground: "#ECE8F0"
+      })
+    }
+  },
+  {
     id: "kanagawa",
     name: "Kanagawa",
     description: "Japanese-inspired ink palette with muted blue accents.",
@@ -515,6 +546,7 @@ export function isThemeId(value: string | null | undefined): value is ThemeId {
 }
 
 export function resolveThemeId(storedTheme: string | null | undefined, prefersDark: boolean): ThemeId {
+  if (storedTheme === "matte-purple") return "based-code";
   if (isThemeId(storedTheme)) return storedTheme;
   return prefersDark ? "dark" : "light";
 }

@@ -35,9 +35,19 @@ let mainWindow: BrowserWindow | null = null;
 let runtime: RuntimeState | null = null;
 let settingsStore: AppSettingsStore | null = null;
 let workflows: Map<string, WorkflowDefinition> = new Map();
+const APP_ICON_PNG_RELATIVE_PATH = path.join("assets", "app-icon.png");
+const APP_ICON_ICO_RELATIVE_PATH = path.join("assets", "app-icon.ico");
+const WINDOWS_APP_USER_MODEL_ID = "com.based.blink";
 
 async function bootstrap(): Promise<void> {
   app.setName("Based BLINK");
+  if (process.platform === "win32") {
+    app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+  }
+  const appIconPath = resolveAppIconPath();
+  if (process.platform === "darwin" && appIconPath) {
+    app.dock.setIcon(appIconPath);
+  }
   Menu.setApplicationMenu(null);
   settingsStore = new AppSettingsStore(app.getPath("userData"));
   workflows = createWorkflowRegistry();
@@ -158,7 +168,21 @@ function registerIpc(): void {
   });
 }
 
+function resolveAppIconPath(): string | undefined {
+  const relativePath = process.platform === "win32" ? APP_ICON_ICO_RELATIVE_PATH : APP_ICON_PNG_RELATIVE_PATH;
+  return resolveAssetPath(relativePath) ?? resolveAssetPath(APP_ICON_PNG_RELATIVE_PATH);
+}
+
+function resolveAssetPath(relativePath: string): string | undefined {
+  const candidates = [
+    path.join(__dirname, "../renderer", relativePath),
+    path.join(process.cwd(), "public", relativePath)
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
 function createWindow(): void {
+  const appIconPath = resolveAppIconPath();
   mainWindow = new BrowserWindow({
     title: "Based BLINK",
     width: 1440,
@@ -167,6 +191,7 @@ function createWindow(): void {
     minHeight: 720,
     autoHideMenuBar: true,
     backgroundColor: "#f8fafc",
+    ...(appIconPath ? { icon: appIconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,

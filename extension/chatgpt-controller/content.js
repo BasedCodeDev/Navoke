@@ -1,5 +1,5 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:39201";
-const CHATGPT_EXTENSION_PROTOCOL_VERSION = 6;
+const CHATGPT_EXTENSION_PROTOCOL_VERSION = 7;
 const EXTENSION_VERSION = chrome.runtime?.getManifest?.().version || "unknown";
 const CLIENT_ID_STORAGE_KEY = "basedBlinkClientId";
 const ROUTING_TOKEN_STORAGE_KEY = "basedBlinkRoutingToken";
@@ -522,22 +522,40 @@ function collectNewImagesFromScopes(scopes, beforeState, selectors) {
   );
 }
 
+function collectOutputImageCandidates(selectors) {
+  return filterOutputImageCandidates(collectImages(selectors.outputImage));
+}
+
+function outputCandidateCountBefore(beforeState) {
+  return Number.isInteger(beforeState.outputCandidateCount) ? Math.max(0, beforeState.outputCandidateCount) : null;
+}
+
+function collectAppendedOutputImageCandidates(beforeState, selectors) {
+  const previousCount = outputCandidateCountBefore(beforeState);
+  if (previousCount === null) return [];
+  return collectOutputImageCandidates(selectors).slice(previousCount);
+}
+
 function collectNewOutputImageCandidates(beforeState, selectors) {
   const assistantElements = collectResponseElements("[data-message-author-role='assistant']");
   const newAssistantScopes = assistantElements.slice(beforeState.assistantCount);
-  const assistantScopes = newAssistantScopes.length > 0 ? newAssistantScopes : assistantElements.slice(-1);
-  const assistantImages = collectNewImagesFromScopes(assistantScopes, beforeState, selectors);
-  if (assistantImages.length > 0) return assistantImages;
+  if (newAssistantScopes.length > 0) {
+    const assistantImages = collectNewImagesFromScopes(newAssistantScopes, beforeState, selectors);
+    if (assistantImages.length > 0) return assistantImages;
+  }
 
   const articleElements = collectResponseElements("main article");
   const newArticleScopes = articleElements.slice(beforeState.articleCount);
-  const articleScopes = newArticleScopes.length > 0 ? newArticleScopes : articleElements.slice(-1);
-  const articleImages = collectNewImagesFromScopes(articleScopes, beforeState, selectors);
-  if (articleImages.length > 0) return articleImages;
+  if (newArticleScopes.length > 0) {
+    const articleImages = collectNewImagesFromScopes(newArticleScopes, beforeState, selectors);
+    if (articleImages.length > 0) return articleImages;
+  }
 
-  return filterOutputImageCandidates(
-    collectImages(selectors.outputImage).filter((image) => !beforeState.imageFingerprints.has(imageFingerprint(image)))
-  );
+  const appendedImages = collectAppendedOutputImageCandidates(beforeState, selectors);
+  if (appendedImages.length > 0) return appendedImages;
+
+  if (outputCandidateCountBefore(beforeState) !== null) return [];
+  return filterOutputImageCandidates(collectImages(selectors.outputImage).filter((image) => !beforeState.imageFingerprints.has(imageFingerprint(image))));
 }
 
 function normalizedImageLabel(image) {
@@ -566,12 +584,14 @@ function filterOutputImageCandidates(images) {
 function collectResponseState(selectors) {
   const assistantElements = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
   const articleElements = Array.from(document.querySelectorAll("main article"));
+  const outputCandidates = collectOutputImageCandidates(selectors);
   return {
     assistantCount: assistantElements.length,
     assistantText: assistantElements.map((element) => element.textContent || "").join("\n").trim(),
     articleCount: articleElements.length,
     bodyText: getBodyText(),
-    imageFingerprints: new Set(collectImages(selectors.outputImage).map(imageFingerprint))
+    imageFingerprints: new Set(collectImages(selectors.outputImage).map(imageFingerprint)),
+    outputCandidateCount: outputCandidates.length
   };
 }
 
@@ -580,7 +600,7 @@ async function waitForAnyResponse(task, beforeState, selectors) {
   while (Date.now() - started < 20 * 60 * 1000) {
     assertNotHumanVerification();
     const state = collectResponseState(selectors);
-    const hasNewImage = [...state.imageFingerprints].some((fingerprint) => !beforeState.imageFingerprints.has(fingerprint));
+    const hasNewImage = hasNewImageSignal(beforeState, state);
     const hasAssistantChange =
       state.assistantCount > beforeState.assistantCount ||
       (state.assistantText.length > 0 && state.assistantText !== beforeState.assistantText);
@@ -593,8 +613,14 @@ async function waitForAnyResponse(task, beforeState, selectors) {
   throw new Error("Timed out waiting for ChatGPT to respond to the setup prompt.");
 }
 
+function hasNewImageSignal(beforeState, state) {
+  const beforeCandidateCount = outputCandidateCountBefore(beforeState);
+  if (beforeCandidateCount !== null && state.outputCandidateCount > beforeCandidateCount) return true;
+  return [...state.imageFingerprints].some((fingerprint) => !beforeState.imageFingerprints.has(fingerprint));
+}
+
 function hasResponseChanged(beforeState, state) {
-  const hasNewImage = [...state.imageFingerprints].some((fingerprint) => !beforeState.imageFingerprints.has(fingerprint));
+  const hasNewImage = hasNewImageSignal(beforeState, state);
   const hasAssistantChange =
     state.assistantCount > beforeState.assistantCount ||
     (state.assistantText.length > 0 && state.assistantText !== beforeState.assistantText);
@@ -983,6 +1009,55 @@ async function runWorkflowLabCommand(payload) {
   throw new Error(`Unsupported Workflow Lab command: ${command.kind || "unknown"}`);
 }
 
+function sendRuntimeMessage(message) {
+  return new Promise((resolve, reject) => {
+    if (!chrome.runtime?.sendMessage) {
+      reject(new Error("Chrome runtime messaging is unavailable in this tab."));
+      return;
+    }
+    chrome.runtime.sendMessage(message, (response) => {
+      const runtimeError = chrome.runtime.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message));
+        return;
+      }
+      if (!response?.ok) {
+        reject(new Error(response?.error || "Chrome extension did not focus the tab."));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+async function runFocusCommand(payload) {
+  if (!payload || payload.protocolVersion !== CHATGPT_EXTENSION_PROTOCOL_VERSION || payload.kind !== "focus-tab") {
+    throw protocolError("Focus command extension protocol mismatch.");
+  }
+  return sendRuntimeMessage({ type: "focus-current-tab" });
+}
+
+async function pollFocusCommand() {
+  const focusCommand = await apiFetch(`/api/extension/focus/commands/next?clientId=${encodeURIComponent(clientId)}`);
+  if (!focusCommand) return false;
+
+  try {
+    const result = await runFocusCommand(focusCommand);
+    await apiFetch(`/api/extension/focus/commands/${focusCommand.id}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ result })
+    });
+  } catch (error) {
+    await apiFetch(`/api/extension/focus/commands/${focusCommand.id}/fail`, {
+      method: "POST",
+      body: JSON.stringify({
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }).catch(() => undefined);
+  }
+  return true;
+}
+
 async function submitComposer(task, selectors, imageOnly) {
   const submit = await waitForSubmitButton(task, selectors, imageOnly);
   submit.click();
@@ -1095,6 +1170,8 @@ async function pollOnce() {
       routingToken: getRoutingToken()
     })
   });
+
+  await pollFocusCommand();
 
   if (isRunningTask) return;
   const task = await apiFetch(`/api/extension/tasks/next?clientId=${encodeURIComponent(clientId)}`);

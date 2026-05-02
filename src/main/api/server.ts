@@ -223,6 +223,48 @@ export class ApiServer {
       res.json(this.options.extensionBridge.status());
     });
 
+    app.post("/api/extension/clients/:clientId/focus", (req, res, next) => {
+      void this.options.extensionBridge
+        .focusClient(req.params.clientId)
+        .then((result) => res.json({ ok: true, result }))
+        .catch(next);
+    });
+
+    app.get("/api/extension/focus/commands/next", (req, res, next) => {
+      try {
+        const clientId = String(req.query.clientId ?? "");
+        const command = this.options.extensionBridge.nextFocusCommand(clientId);
+        if (!command) {
+          res.status(204).send();
+          return;
+        }
+        res.json(command);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/extension/focus/commands/:id/complete", (req, res, next) => {
+      try {
+        this.options.extensionBridge.completeFocusCommand(req.params.id, req.body?.result);
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/extension/focus/commands/:id/fail", (req, res, next) => {
+      try {
+        this.options.extensionBridge.failFocusCommand(
+          req.params.id,
+          String(req.body?.message ?? "Extension focus command failed")
+        );
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.get("/api/extension/lab/commands/next", (req, res, next) => {
       try {
         const clientId = String(req.query.clientId ?? "");
