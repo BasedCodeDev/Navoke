@@ -223,16 +223,18 @@ describe("ExtensionBridge", () => {
     await expect(wait).resolves.toMatchObject({ url: "https://chatgpt.com/" });
   });
 
-  it("queues, leases, and completes focus commands for a selected compatible extension tab", async () => {
+  it("queues, leases, and completes focus commands for a selected compatible extension tab even while busy", async () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       id: "focus-tab",
       protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.7.0"
+      extensionVersion: "0.7.0",
+      status: "busy"
     });
 
     const wait = bridge.focusClient("focus-tab", { timeoutMs: 1_000 });
 
+    expect(bridge.status().connectedClients[0]).toMatchObject({ id: "focus-tab", status: "busy" });
     expect(bridge.status().focusPending).toBe(1);
     const command = bridge.nextFocusCommand("focus-tab");
     expect(command).toMatchObject({

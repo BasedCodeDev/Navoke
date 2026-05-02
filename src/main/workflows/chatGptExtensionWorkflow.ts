@@ -23,6 +23,14 @@ const selectorsSchema = z
   })
   .default({});
 
+const chatGptPageSchema = z.object({
+  url: z.string().min(1),
+  title: z.string().optional(),
+  clientId: z.string().optional(),
+  routingToken: z.string().optional(),
+  capturedAt: z.string().min(1)
+});
+
 const inputSchema = z.object({
   referenceImages: z.array(z.string()).optional().default([]),
   subjectImages: z.array(z.string()).min(1, "Choose at least one subject image."),
@@ -32,8 +40,18 @@ const inputSchema = z.object({
   chatGptTab: z
     .discriminatedUnion("mode", [
       z.object({ mode: z.literal("any") }),
-      z.object({ mode: z.literal("existing"), clientId: z.string().trim().min(1, "Choose a ChatGPT tab.") }),
-      z.object({ mode: z.literal("new"), routingToken: z.string().trim().min(8, "New-tab routing token is required.") })
+      z.object({
+        mode: z.literal("existing"),
+        clientId: z.string().trim().min(1, "Choose a ChatGPT tab."),
+        url: z.string().trim().optional(),
+        title: z.string().trim().optional()
+      }),
+      z.object({
+        mode: z.literal("new"),
+        routingToken: z.string().trim().min(8, "New-tab routing token is required."),
+        url: z.string().trim().optional(),
+        title: z.string().trim().optional()
+      })
     ])
     .default({ mode: "any" }),
   selectors: selectorsSchema
@@ -41,7 +59,8 @@ const inputSchema = z.object({
 
 const outputSchema = z.object({
   artifactIds: z.array(z.string()),
-  summary: z.string()
+  summary: z.string(),
+  chatGptPage: chatGptPageSchema.optional()
 });
 
 export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
@@ -83,7 +102,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
     const artifactIds: string[] = [];
     const artifactDir = ctx.artifactDir;
 
-    await ensureChatGptTargetAvailable(input.chatGptTab, ctx);
+    const targetClient = await ensureChatGptTargetAvailable(input.chatGptTab, ctx);
 
     await ctx.step("Queued sequential ChatGPT conversation task", 5, {
       referenceCount: input.referenceImages.length,
@@ -120,6 +139,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
     const registeredOutputs: ExtensionTaskOutput[] = [];
     let outputProcessing = Promise.resolve();
     let outputProcessingError: Error | undefined;
+    let taskResult: ExtensionTaskResult | null = null;
 
     const registerOutputArtifact = async (output: ExtensionTaskOutput): Promise<void> => {
       const subjectIndex = output.subjectIndex;
@@ -192,6 +212,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
         signal: ctx.signal,
         timeoutMs: input.timeoutMinutes * 60_000
       });
+      taskResult = result;
 
       if (result.outputs.length === 0) {
         throw new Error("ChatGPT extension completed without returning any output images.");
@@ -208,6 +229,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
       unsubscribe();
     }
 
+    const chatGptPage = buildChatGptPage(input.chatGptTab, taskResult?.metadata, targetClient);
     const manifestPath = path.join(artifactDir, "chatgpt-extension-manifest.json");
     writeJson(manifestPath, {
       masterPrompt: input.masterPrompt,
@@ -215,6 +237,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
       subjectImages: input.subjectImages,
       subjectInstruction: input.subjectInstruction,
       chatGptTab: redactTargetForManifest(input.chatGptTab),
+      chatGptPage: chatGptPage ?? null,
       selectors: input.selectors,
       outputMappings
     });
@@ -228,12 +251,16 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
 
     return {
       artifactIds,
+      ...(chatGptPage ? { chatGptPage } : {}),
       summary: `Processed ${input.subjectImages.length} subject image(s) through the ChatGPT Chrome extension.`
     };
   }
 };
 
-async function ensureChatGptTargetAvailable(target: ChatGptExtensionTaskTarget, ctx: WorkflowContext): Promise<void> {
+async function ensureChatGptTargetAvailable(
+  target: ChatGptExtensionTaskTarget,
+  ctx: WorkflowContext
+): Promise<ExtensionClientStatus | undefined> {
   if (target.mode === "new") {
     await ctx.step("Waiting for new ChatGPT tab to check in", 3, { targetMode: target.mode });
     const client = await waitForCompatibleTarget(target, ctx.signal, 45_000);
@@ -247,7 +274,7 @@ async function ensureChatGptTargetAvailable(target: ChatGptExtensionTaskTarget, 
       url: client.url,
       targetMode: target.mode
     });
-    return;
+    return client;
   }
 
   if (target.mode === "existing") {
@@ -262,7 +289,7 @@ async function ensureChatGptTargetAvailable(target: ChatGptExtensionTaskTarget, 
       url: client.url,
       targetMode: target.mode
     });
-    return;
+    return client;
   }
 
   let extensionStatus = extensionBridge.status();
@@ -277,6 +304,7 @@ async function ensureChatGptTargetAvailable(target: ChatGptExtensionTaskTarget, 
       `No compatible ChatGPT extension tab is connected. Reload the unpacked Chrome extension and refresh ChatGPT tabs. App requires extension protocol ${extensionStatus.requiredProtocolVersion}.`
     );
   }
+  return undefined;
 }
 
 async function waitForCompatibleTarget(
@@ -300,6 +328,49 @@ function describeClient(client: ExtensionClientStatus): string {
 function redactTargetForManifest(target: ChatGptExtensionTaskTarget): Record<string, string> {
   if (target.mode === "existing") return { mode: target.mode, clientId: target.clientId };
   return { mode: target.mode };
+}
+
+export function buildChatGptPage(
+  target: ChatGptExtensionTaskTarget,
+  metadata: unknown,
+  targetClient?: ExtensionClientStatus
+): z.infer<typeof chatGptPageSchema> | undefined {
+  const pageMetadata = readPageMetadata(metadata);
+  const targetRecord = target as Partial<{ url: string; title: string; routingToken: string; clientId: string }>;
+  const url = firstNonEmptyString(pageMetadata.url, targetClient?.url, targetRecord.url);
+  if (!url) return undefined;
+
+  const title = firstNonEmptyString(pageMetadata.title, targetClient?.title, targetRecord.title);
+  const clientId = firstNonEmptyString(targetClient?.id, target.mode === "existing" ? target.clientId : undefined);
+  const routingToken = firstNonEmptyString(
+    target.mode === "new" ? target.routingToken : undefined,
+    targetClient?.routingToken
+  );
+
+  return {
+    url,
+    ...(title ? { title } : {}),
+    ...(clientId ? { clientId } : {}),
+    ...(routingToken ? { routingToken } : {}),
+    capturedAt: new Date().toISOString()
+  };
+}
+
+function readPageMetadata(metadata: unknown): { url?: string; title?: string } {
+  if (!metadata || typeof metadata !== "object") return {};
+  const record = metadata as Record<string, unknown>;
+  return {
+    url: typeof record.url === "string" ? record.url : undefined,
+    title: typeof record.title === "string" ? record.title : undefined
+  };
+}
+
+function firstNonEmptyString(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
 }
 
 function extensionForMimeType(mimeType: string): string {

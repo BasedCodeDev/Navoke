@@ -39,11 +39,12 @@ function client(input: Partial<ExtensionClient> & { id: string }): ExtensionClie
 describe("ChatGPT tab focus target resolver", () => {
   it("resolves existing client-id targets", () => {
     const target = resolveChatGptFocusTarget(
-      chatGptRun({ chatGptTab: { mode: "existing", clientId: "tab-1" } }),
+      chatGptRun({ chatGptTab: { mode: "existing", clientId: "tab-1", url: "https://chatgpt.com/c/1" } }),
       [client({ id: "tab-1" })]
     );
 
     expect(target).toMatchObject({
+      action: "focus",
       clientId: "tab-1",
       disabledReason: null
     });
@@ -56,13 +57,71 @@ describe("ChatGPT tab focus target resolver", () => {
     );
 
     expect(target).toMatchObject({
+      action: "focus",
       clientId: "tab-2",
+      disabledReason: null
+    });
+  });
+
+  it("resolves connected tabs by tracked URL after the original client id is stale", () => {
+    const target = resolveChatGptFocusTarget(
+      chatGptRun({
+        chatGptTab: { mode: "existing", clientId: "stale-tab", url: "https://chatgpt.com/c/abc" }
+      }),
+      [client({ id: "fresh-tab", url: "https://chatgpt.com/c/abc" })]
+    );
+
+    expect(target).toMatchObject({
+      action: "focus",
+      clientId: "fresh-tab",
+      disabledReason: null
+    });
+  });
+
+  it("opens the tracked URL when no connected tab is available", () => {
+    const target = resolveChatGptFocusTarget(
+      chatGptRun({
+        chatGptTab: { mode: "new", routingToken: "run-token-1", url: "https://chatgpt.com/c/abc" },
+        chatGptPage: { url: "https://chatgpt.com/c/abc", routingToken: "run-token-1", capturedAt: "2026-01-01T00:00:00.000Z" }
+      }),
+      []
+    );
+
+    expect(target).toMatchObject({
+      action: "open",
+      clientId: null,
+      buttonLabel: "Open ChatGPT page",
+      disabledReason: null
+    });
+    expect(target?.url).toContain("https://chatgpt.com/c/abc");
+    expect(target?.url).toContain("based-blink-tab=run-token-1");
+  });
+
+  it("uses completed run page metadata when input target details are missing", () => {
+    const target = resolveChatGptFocusTarget(
+      {
+        ...chatGptRun({ chatGptTab: { mode: "any" } }),
+        output: {
+          chatGptPage: {
+            url: "https://chatgpt.com/c/completed",
+            clientId: "completed-tab",
+            capturedAt: "2026-01-01T00:00:00.000Z"
+          }
+        }
+      },
+      [client({ id: "completed-tab", url: "https://chatgpt.com/c/completed" })]
+    );
+
+    expect(target).toMatchObject({
+      action: "focus",
+      clientId: "completed-tab",
       disabledReason: null
     });
   });
 
   it("disables focus for missing or untargeted ChatGPT tabs", () => {
     expect(resolveChatGptFocusTarget(chatGptRun({}), [])).toMatchObject({
+      action: "disabled",
       clientId: null,
       disabledReason: "This run did not record a specific ChatGPT tab target."
     });
@@ -73,6 +132,7 @@ describe("ChatGPT tab focus target resolver", () => {
       disabledReason: "The selected ChatGPT tab is not connected."
     });
     expect(resolveChatGptFocusTarget(chatGptRun({ chatGptTab: { mode: "any" } }), [])).toMatchObject({
+      action: "disabled",
       clientId: null,
       disabledReason: "This run did not target a specific ChatGPT tab."
     });
@@ -85,6 +145,7 @@ describe("ChatGPT tab focus target resolver", () => {
     );
 
     expect(target).toMatchObject({
+      action: "disabled",
       clientId: null,
       disabledReason: "Reload the extension."
     });

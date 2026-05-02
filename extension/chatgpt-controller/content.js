@@ -1157,7 +1157,7 @@ async function runChatGptImageTask(task) {
   });
 }
 
-async function pollOnce() {
+async function heartbeatOnce() {
   await apiFetch("/api/extension/heartbeat", {
     method: "POST",
     body: JSON.stringify({
@@ -1172,7 +1172,9 @@ async function pollOnce() {
   });
 
   await pollFocusCommand();
+}
 
+async function workOnce() {
   if (isRunningTask) return;
   const task = await apiFetch(`/api/extension/tasks/next?clientId=${encodeURIComponent(clientId)}`);
   if (!task) {
@@ -1214,15 +1216,31 @@ async function pollOnce() {
   }
 }
 
-async function pollLoop() {
+async function heartbeatLoop() {
   while (true) {
     try {
-      await pollOnce();
+      await heartbeatOnce();
     } catch {
       // The Electron app may not be running yet.
     }
     await delay(2000);
   }
+}
+
+async function workLoop() {
+  while (true) {
+    try {
+      await workOnce();
+    } catch {
+      // The Electron app may not be running yet.
+    }
+    await delay(2000);
+  }
+}
+
+function pollLoop() {
+  void heartbeatLoop();
+  void workLoop();
 }
 
 void pollLoop();

@@ -169,6 +169,17 @@ function loadContentScript(elements: MockElement[]) {
 }
 
 describe("ChatGPT extension content predicates", () => {
+  it("keeps heartbeat and work polling in independent loops", () => {
+    const testDir = path.dirname(fileURLToPath(import.meta.url));
+    const contentPath = path.resolve(testDir, "../../extension/chatgpt-controller/content.js");
+    const source = readFileSync(contentPath, "utf8");
+
+    expect(source).toContain("async function heartbeatLoop()");
+    expect(source).toContain("async function workLoop()");
+    expect(source).toContain("void heartbeatLoop();");
+    expect(source).toContain("void workLoop();");
+  });
+
   it("does not treat historical Stopped thinking controls as active stop buttons", () => {
     const composer = mockElement("div", { id: "prompt-textarea", contenteditable: "true" });
     const send = mockElement("button", { "data-testid": "send-button", "aria-label": "Send prompt" });

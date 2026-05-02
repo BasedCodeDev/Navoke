@@ -5,6 +5,7 @@ import {
   Bot,
   Camera,
   CheckCircle2,
+  Copy,
   Download,
   ExternalLink,
   FlaskConical,
@@ -42,8 +43,10 @@ import {
   runInputFileUrl,
   runLabAction,
   subscribeRuntimeEvents,
+  validateFilePaths,
   waitForLabCondition,
   type ArtifactRecord,
+  type FileValidationResult,
   type LabWaitCondition,
   type RunRecord,
   type RuntimeEvent,
@@ -77,6 +80,7 @@ import {
   getChatGptRunInput,
   type ChatGptRunInputModel
 } from "@/lib/chatGptArtifactPairing";
+import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "@/lib/duplicateRunConfiguration";
 import { resolveChatGptFocusTarget } from "@/lib/chatGptTabFocus";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
 import { Badge } from "@/components/ui/badge";
@@ -111,8 +115,8 @@ const CHATGPT_TAB_ROUTING_PARAM = "based-blink-tab";
 const APP_ICON_SRC = "/assets/app-icon.png";
 
 type ChatGptTabInput =
-  | { mode: "existing"; clientId: string }
-  | { mode: "new"; routingToken: string };
+  | { mode: "existing"; clientId: string; url?: string; title?: string }
+  | { mode: "new"; routingToken: string; url?: string; title?: string };
 
 function createRoutingToken(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -124,11 +128,21 @@ function buildNewChatGptTabUrl(routingToken: string): string {
   return url.toString();
 }
 
-function buildChatGptTabInput(selection: string): ChatGptTabInput {
+function buildChatGptTabInput(
+  selection: string,
+  clients: SystemInfo["extension"]["connectedClients"] = []
+): ChatGptTabInput {
   if (selection && selection !== NEW_CHATGPT_TAB_VALUE) {
-    return { mode: "existing", clientId: selection };
+    const client = clients.find((candidate) => candidate.id === selection);
+    return {
+      mode: "existing",
+      clientId: selection,
+      ...(client?.url ? { url: client.url } : {}),
+      ...(client?.title ? { title: client.title } : {})
+    };
   }
-  return { mode: "new", routingToken: createRoutingToken() };
+  const routingToken = createRoutingToken();
+  return { mode: "new", routingToken, url: buildNewChatGptTabUrl(routingToken) };
 }
 
 function chatGptTabOptionLabel(client: SystemInfo["extension"]["connectedClients"][number]): string {
@@ -158,6 +172,10 @@ export default function App(): JSX.Element {
   const [formError, setFormError] = useState<string | null>(null);
   const [newRunFocusError, setNewRunFocusError] = useState<string | null>(null);
   const [showProjectLanding, setShowProjectLanding] = useState(false);
+  const [duplicateSourceRun, setDuplicateSourceRun] = useState<RunRecord | null>(null);
+  const [duplicateValidation, setDuplicateValidation] = useState<DuplicateRunValidationState>({ status: "idle", files: [] });
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [isDuplicating, setIsDuplicating] = useState(false);
 
   const configQuery = useQuery({ queryKey: ["config"], queryFn: getConfig });
   const hasProject = Boolean(configQuery.data?.apiBaseUrl && configQuery.data.projectDir);
@@ -225,9 +243,12 @@ export default function App(): JSX.Element {
         setShowProjectLanding(true);
         throw new Error("Open a project before starting a run.");
       }
-      const chatGptTab = selectedWorkflowId === "chatgpt.extension-image-transform" ? buildChatGptTabInput(chatGptTabSelection) : null;
+      const chatGptTab =
+        selectedWorkflowId === "chatgpt.extension-image-transform"
+          ? buildChatGptTabInput(chatGptTabSelection, compatibleExtensionClients)
+          : null;
       if (chatGptTab?.mode === "new") {
-        await window.basedBlink.openExternal(buildNewChatGptTabUrl(chatGptTab.routingToken));
+        await window.basedBlink.openExternal(chatGptTab.url ?? buildNewChatGptTabUrl(chatGptTab.routingToken));
       }
       const workflowInput =
         selectedWorkflowId === "hunyuan.image-to-model"
@@ -277,6 +298,7 @@ export default function App(): JSX.Element {
   const compatibleExtensionClients = useMemo(() => extensionClients.filter((client) => client.compatible), [extensionClients]);
   const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 7;
   const isChatGptExtensionWorkflow = selectedWorkflowId === "chatgpt.extension-image-transform";
+  const duplicateFilePaths = useMemo(() => collectRunInputFilePaths(duplicateSourceRun?.input), [duplicateSourceRun?.input]);
 
   useEffect(() => {
     if (!isChatGptExtensionWorkflow) return;
@@ -286,6 +308,38 @@ export default function App(): JSX.Element {
       return compatibleExtensionClients[0]?.id ?? NEW_CHATGPT_TAB_VALUE;
     });
   }, [compatibleExtensionClients, isChatGptExtensionWorkflow]);
+
+  useEffect(() => {
+    if (!duplicateSourceRun) return;
+    let active = true;
+    setDuplicateError(null);
+
+    if (duplicateFilePaths.length === 0) {
+      setDuplicateValidation({ status: "ready", files: [] });
+      return () => {
+        active = false;
+      };
+    }
+
+    setDuplicateValidation({ status: "checking", files: [] });
+    void validateFilePaths(duplicateFilePaths)
+      .then((result) => {
+        if (active) setDuplicateValidation({ status: "ready", files: result.files });
+      })
+      .catch((error) => {
+        if (active) {
+          setDuplicateValidation({
+            status: "error",
+            files: [],
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [duplicateFilePaths, duplicateSourceRun]);
 
   async function chooseImages(setFiles: (files: string[]) => void, title: string): Promise<void> {
     const files = await window.basedBlink.selectFiles({
@@ -320,6 +374,54 @@ export default function App(): JSX.Element {
     const config = await renameProject(projectPath, nextName);
     queryClient.setQueryData(["config"], config);
     setFormError(null);
+  }
+
+  async function duplicateRunConfiguration(run: RunRecord): Promise<void> {
+    if (workflows.length > 0 && !workflows.some((workflow) => workflow.manifest.id === run.workflowId)) {
+      throw new Error(`The workflow for this run is not available: ${run.workflowId}`);
+    }
+
+    const duplicate = buildDuplicateRunConfiguration(run, {
+      compatibleClients: compatibleExtensionClients,
+      newChatGptTabValue: NEW_CHATGPT_TAB_VALUE
+    });
+
+    setSelectedWorkflowId(duplicate.workflowId);
+    setName(duplicate.name);
+    setSelectedFiles(duplicate.selectedFiles);
+    setReferenceFiles(duplicate.referenceFiles);
+    setSubjectFiles(duplicate.subjectFiles);
+    setPrompt(duplicate.prompt);
+    setMasterPrompt(duplicate.masterPrompt);
+    setSubjectInstruction(duplicate.subjectInstruction);
+    setModelName(duplicate.modelName);
+    setProfileName(duplicate.profileName);
+    setPauseForManualLogin(duplicate.pauseForManualLogin);
+    setChatGptTabSelection(duplicate.chatGptTabSelection);
+    setFormError(null);
+    setNewRunFocusError(null);
+    setWorkspaceView("runs");
+    setSelectedRunId(null);
+  }
+
+  async function confirmDuplicateRunConfiguration(): Promise<void> {
+    if (!duplicateSourceRun || !canDuplicateRun(duplicateValidation)) return;
+    setDuplicateError(null);
+    setIsDuplicating(true);
+    try {
+      await duplicateRunConfiguration(duplicateSourceRun);
+      setDuplicateSourceRun(null);
+    } catch (error) {
+      setDuplicateError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsDuplicating(false);
+    }
+  }
+
+  function openDuplicateRunDialog(run: RunRecord): void {
+    setDuplicateValidation({ status: "idle", files: [] });
+    setDuplicateError(null);
+    setDuplicateSourceRun(run);
   }
 
   const showLanding = showProjectLanding || !hasProject;
@@ -593,7 +695,13 @@ export default function App(): JSX.Element {
                   </div>
                 ) : null}
                 {(runsQuery.data ?? []).map((run) => (
-                  <RunRow key={run.id} run={run} selected={selectedRunIds.has(run.id)} onSelect={() => setSelectedRunId(run.id)} />
+                  <RunRow
+                    key={run.id}
+                    run={run}
+                    selected={selectedRunIds.has(run.id)}
+                    onSelect={() => setSelectedRunId(run.id)}
+                    onDuplicate={() => openDuplicateRunDialog(run)}
+                  />
                 ))}
                 {hasProject && runsQuery.data?.length === 0 ? (
                   <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">No runs yet.</div>
@@ -624,6 +732,17 @@ export default function App(): JSX.Element {
           onOpenDataFolder={() => window.basedBlink.openPath(activeRun?.runDir ?? "")}
           onFocusClient={(clientId) => focusExtensionClient(clientId)}
           onDelete={(runId) => void deleteRunMutation.mutate(runId)}
+        />
+      ) : null}
+      {duplicateSourceRun ? (
+        <DuplicateRunConfirmDialog
+          runName={duplicateSourceRun.name}
+          fileCount={duplicateFilePaths.length}
+          validation={duplicateValidation}
+          error={duplicateError}
+          isDuplicating={isDuplicating}
+          onCancel={() => setDuplicateSourceRun(null)}
+          onConfirm={() => void confirmDuplicateRunConfiguration()}
         />
       ) : null}
       {themePickerOpen ? (
@@ -936,6 +1055,11 @@ function ProjectLanding({
   );
 }
 
+type DuplicateRunValidationState =
+  | { status: "idle" | "checking"; files: FileValidationResult["files"] }
+  | { status: "ready"; files: FileValidationResult["files"] }
+  | { status: "error"; files: FileValidationResult["files"]; message: string };
+
 function RunDetailModal({
   runId,
   run,
@@ -991,14 +1115,20 @@ function RunDetailModal({
 
   useEffect(() => {
     setFocusError(null);
-  }, [runId, chatGptFocusTarget?.clientId]);
+  }, [runId, chatGptFocusTarget?.clientId, chatGptFocusTarget?.url]);
 
   async function focusChatGptTab(): Promise<void> {
-    if (!chatGptFocusTarget?.clientId) return;
+    if (!chatGptFocusTarget || chatGptFocusTarget.action === "disabled") return;
     setFocusError(null);
     setIsFocusing(true);
     try {
-      await onFocusClient(chatGptFocusTarget.clientId);
+      if (chatGptFocusTarget.action === "focus" && chatGptFocusTarget.clientId) {
+        await onFocusClient(chatGptFocusTarget.clientId);
+        return;
+      }
+      if (chatGptFocusTarget.action === "open" && chatGptFocusTarget.url) {
+        await window.basedBlink.openExternal(chatGptFocusTarget.url);
+      }
     } catch (error) {
       setFocusError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1087,14 +1217,16 @@ function RunDetailModal({
                     variant="outline"
                     size="sm"
                     onClick={() => void focusChatGptTab()}
-                    disabled={!chatGptFocusTarget.clientId || isFocusing}
+                    disabled={chatGptFocusTarget.action === "disabled" || isFocusing}
                     title={
                       chatGptFocusTarget.disabledReason ??
-                      `Go to ${chatGptFocusTarget.client?.title || "the selected ChatGPT tab"}`
+                      (chatGptFocusTarget.action === "open"
+                        ? "Open the tracked ChatGPT page so the extension can reconnect."
+                        : `Go to ${chatGptFocusTarget.client?.title || "the selected ChatGPT tab"}`)
                     }
                   >
                     <ExternalLink className="h-4 w-4" />
-                    Go to ChatGPT tab
+                    {chatGptFocusTarget.buttonLabel}
                   </Button>
                 ) : null}
                 <Button variant="destructive" size="sm" onClick={() => onDelete(runId)} disabled={isDeleting}>
@@ -1161,6 +1293,107 @@ function RunDetailModal({
       </div>
     </div>
   );
+}
+
+function DuplicateRunConfirmDialog({
+  runName,
+  fileCount,
+  validation,
+  error,
+  isDuplicating,
+  onCancel,
+  onConfirm
+}: {
+  runName: string;
+  fileCount: number;
+  validation: DuplicateRunValidationState;
+  error: string | null;
+  isDuplicating: boolean;
+  onCancel(): void;
+  onConfirm(): void;
+}): JSX.Element {
+  const invalidFiles = invalidDuplicateFiles(validation);
+  const canDuplicate = canDuplicateRun(validation);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 px-4" onMouseDown={onCancel}>
+      <div
+        className="w-full max-w-lg rounded-lg border border-border bg-background shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="duplicate-run-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-border px-5 py-4">
+          <h3 id="duplicate-run-title" className="text-base font-semibold">
+            Duplicate Run Configuration
+          </h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Copy the workflow settings from {runName} into the New Run form. This will not start the run.
+          </p>
+        </div>
+
+        <div className="space-y-3 p-5 text-sm">
+          {validation.status === "checking" ? (
+            <div className={cn("flex gap-2 rounded-md border p-3", toneClassNames.info)}>
+              <RefreshCcw className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+              Checking {fileCount} attached file path{fileCount === 1 ? "" : "s"}...
+            </div>
+          ) : null}
+
+          {validation.status === "ready" && invalidFiles.length === 0 ? (
+            <div className={cn("rounded-md border p-3", toneClassNames.success)}>
+              {fileCount === 0
+                ? "This run has no attached input files to validate."
+                : `All ${fileCount} attached input file path${fileCount === 1 ? "" : "s"} are available.`}
+            </div>
+          ) : null}
+
+          {validation.status === "ready" && invalidFiles.length > 0 ? (
+            <div className={cn("space-y-2 rounded-md border p-3", toneClassNames.danger)}>
+              <div className="font-medium">
+                {invalidFiles.length} attached file path{invalidFiles.length === 1 ? "" : "s"} cannot be reused.
+              </div>
+              <div className="max-h-36 space-y-1 overflow-auto text-xs">
+                {invalidFiles.slice(0, 8).map((file) => (
+                  <div key={file.path} className="truncate" title={file.path}>
+                    {file.path}
+                  </div>
+                ))}
+                {invalidFiles.length > 8 ? <div>{invalidFiles.length - 8} more...</div> : null}
+              </div>
+            </div>
+          ) : null}
+
+          {validation.status === "error" ? (
+            <div className={cn("rounded-md border p-3", toneClassNames.danger)}>
+              Could not validate attached file paths: {validation.message}
+            </div>
+          ) : null}
+
+          {error ? <div className={cn("rounded-md border p-3", toneClassNames.danger)}>{error}</div> : null}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-border px-5 py-4">
+          <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={isDuplicating}>
+            Cancel
+          </Button>
+          <Button type="button" size="sm" onClick={onConfirm} disabled={!canDuplicate || isDuplicating}>
+            <Copy className="h-4 w-4" />
+            {isDuplicating ? "Duplicating..." : "Duplicate configuration"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function invalidDuplicateFiles(validation: DuplicateRunValidationState): FileValidationResult["files"] {
+  return validation.files.filter((file) => !file.exists || !file.isFile);
+}
+
+function canDuplicateRun(validation: DuplicateRunValidationState): boolean {
+  return validation.status === "ready" && invalidDuplicateFiles(validation).length === 0;
 }
 
 function ChatGptArtifactPairs({
@@ -1953,26 +2186,42 @@ function ChatGptTabRoutingPanel({
   );
 }
 
-function RunRow({ run, selected, onSelect }: { run: RunRecord; selected: boolean; onSelect: () => void }): JSX.Element {
+function RunRow({
+  run,
+  selected,
+  onSelect,
+  onDuplicate
+}: {
+  run: RunRecord;
+  selected: boolean;
+  onSelect: () => void;
+  onDuplicate: () => void;
+}): JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
+    <div
       className={cn(
-        "w-full rounded-lg border bg-card p-4 text-left shadow-sm transition hover:border-primary",
+        "rounded-lg border bg-card p-4 shadow-sm transition hover:border-primary",
         selected ? "border-primary ring-1 ring-primary" : "border-border"
       )}
     >
       <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0 space-y-1">
-          <div className="truncate font-medium">{run.name}</div>
+        <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
+          <div className="min-w-0 space-y-1">
+            <div className="truncate font-medium">{run.name}</div>
           <div className="text-xs text-muted-foreground">{run.workflowId} · {formatDate(run.createdAt)}</div>
-          <div className="truncate text-sm text-muted-foreground">{run.currentStep ?? "Queued"}</div>
+            <div className="truncate text-sm text-muted-foreground">{run.currentStep ?? "Queued"}</div>
+          </div>
+          <Progress value={run.progress} className="mt-3" />
+        </button>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <Badge className={cn("border", statusTone(run.status))}>{run.status}</Badge>
+          <Button type="button" variant="outline" size="sm" onClick={onDuplicate} title="Duplicate Run Configuration">
+            <Copy className="h-4 w-4" />
+            Duplicate config
+          </Button>
         </div>
-        <Badge className={cn("border", statusTone(run.status))}>{run.status}</Badge>
       </div>
-      <Progress value={run.progress} className="mt-3" />
-    </button>
+    </div>
   );
 }
 

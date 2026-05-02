@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeChatGptExtensionOutputs } from "../../src/main/workflows/chatGptExtensionWorkflow";
+import { buildChatGptPage, normalizeChatGptExtensionOutputs } from "../../src/main/workflows/chatGptExtensionWorkflow";
 import type { ExtensionTaskResult } from "../../src/main/extension/extensionBridge";
 
 function output(subjectIndex: number, base64: string): ExtensionTaskResult["outputs"][number] {
@@ -16,6 +16,46 @@ function output(subjectIndex: number, base64: string): ExtensionTaskResult["outp
 }
 
 describe("ChatGPT extension workflow output normalization", () => {
+  it("promotes extension completion metadata into a durable ChatGPT page target", () => {
+    const page = buildChatGptPage(
+      { mode: "new", routingToken: "run-token-1", url: "https://chatgpt.com/" },
+      { url: "https://chatgpt.com/c/abc", title: "ChatGPT conversation" },
+      {
+        id: "tab-1",
+        url: "https://chatgpt.com/",
+        title: "Initial ChatGPT",
+        status: "busy",
+        protocolVersion: 7,
+        extensionVersion: "0.7.0",
+        routingToken: "run-token-1",
+        compatible: true,
+        lastSeenAt: "2026-01-01T00:00:00.000Z"
+      }
+    );
+
+    expect(page).toMatchObject({
+      url: "https://chatgpt.com/c/abc",
+      title: "ChatGPT conversation",
+      clientId: "tab-1",
+      routingToken: "run-token-1"
+    });
+    expect(page?.capturedAt).toEqual(expect.any(String));
+  });
+
+  it("falls back to the selected tab URL when completion metadata has no page URL", () => {
+    const page = buildChatGptPage(
+      { mode: "existing", clientId: "tab-1", url: "https://chatgpt.com/c/input", title: "Input title" },
+      {},
+      undefined
+    );
+
+    expect(page).toMatchObject({
+      url: "https://chatgpt.com/c/input",
+      title: "Input title",
+      clientId: "tab-1"
+    });
+  });
+
   it("keeps one output per subject", () => {
     const normalized = normalizeChatGptExtensionOutputs([output(0, "first"), output(1, "second")], [
       "C:\\tmp\\first.png",

@@ -104,6 +104,13 @@ export class ApiServer {
       res.json([...this.options.workflows.values()].map((workflow) => ({ manifest: workflow.manifest })));
     });
 
+    app.post("/api/files/validate", (req, res) => {
+      const paths = Array.isArray(req.body?.paths)
+        ? req.body.paths.filter((item: unknown): item is string => typeof item === "string")
+        : [];
+      res.json({ files: paths.map(validateLocalFilePath) });
+    });
+
     app.get("/api/runs", (_req, res) => {
       res.json(this.options.store.listRuns());
     });
@@ -433,4 +440,37 @@ function getRunInputFilePath(input: unknown, field: string, index: number): stri
   if (!Array.isArray(value)) return undefined;
   const filePath = value[index];
   return typeof filePath === "string" ? filePath : undefined;
+}
+
+function validateLocalFilePath(filePath: string): {
+  path: string;
+  exists: boolean;
+  isFile: boolean;
+  size: number | null;
+  error?: string;
+} {
+  try {
+    const stat = fs.statSync(filePath);
+    return {
+      path: filePath,
+      exists: true,
+      isFile: stat.isFile(),
+      size: stat.isFile() ? stat.size : null
+    };
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return { path: filePath, exists: false, isFile: false, size: null };
+    }
+    return {
+      path: filePath,
+      exists: false,
+      isFile: false,
+      size: null,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT");
 }

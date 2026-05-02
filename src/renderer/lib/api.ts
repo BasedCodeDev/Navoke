@@ -59,6 +59,18 @@ export interface RuntimeEvent {
   createdAt: string;
 }
 
+export interface FileValidationRecord {
+  path: string;
+  exists: boolean;
+  isFile: boolean;
+  size: number | null;
+  error?: string;
+}
+
+export interface FileValidationResult {
+  files: FileValidationRecord[];
+}
+
 export interface RunDetail {
   run: RunRecord;
   events: RuntimeEvent[];
@@ -249,6 +261,10 @@ export async function getSystemInfo(): Promise<SystemInfo> {
 
 export async function focusExtensionClient(clientId: string): Promise<{ ok: true; result?: unknown }> {
   return apiFetch(`/api/extension/clients/${encodeURIComponent(clientId)}/focus`, { method: "POST", body: "{}" });
+}
+
+export async function validateFilePaths(paths: string[]): Promise<FileValidationResult> {
+  return apiFetch("/api/files/validate", { method: "POST", body: JSON.stringify({ paths }) });
 }
 
 export async function listLabSessions(): Promise<WorkflowLabSessionSummary[]> {

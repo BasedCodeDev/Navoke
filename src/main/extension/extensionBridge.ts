@@ -13,8 +13,8 @@ const FOCUS_COMMAND_LEASE_MS = 15_000;
 
 export type ChatGptExtensionTaskTarget =
   | { mode: "any" }
-  | { mode: "existing"; clientId: string }
-  | { mode: "new"; routingToken: string };
+  | { mode: "existing"; clientId: string; url?: string; title?: string }
+  | { mode: "new"; routingToken: string; url?: string; title?: string };
 
 export interface ExtensionClientStatus {
   id: string;
