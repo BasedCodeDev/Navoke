@@ -106,6 +106,14 @@ export class SqliteStore {
     return row ? rowToRun(row) : null;
   }
 
+  deleteRunCascade(id: string): void {
+    if (!this.getRun(id)) throw new Error(`Run not found: ${id}`);
+    this.db.run("delete from artifacts where run_id = ?", [id]);
+    this.db.run("delete from events where run_id = ?", [id]);
+    this.db.run("delete from runs where id = ?", [id]);
+    this.persist();
+  }
+
   updateRun(
     id: string,
     patch: Partial<Pick<RunRecord, "status" | "currentStep" | "progress" | "output" | "error">>

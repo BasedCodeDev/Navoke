@@ -112,8 +112,11 @@ Use the Chrome extension path when the workflow must run inside the user's norma
 The current generic form supports:
 
 - `images`
+- `referenceImages`
+- `subjectImages`
 - `prompt`
 - `masterPrompt`
+- `subjectInstruction`
 - `modelName`
 - `profileName`
 - `pauseForManualLogin`

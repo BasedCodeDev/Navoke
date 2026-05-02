@@ -91,6 +91,15 @@ export class ApiServer {
       }
     });
 
+    app.delete("/api/runs/:id", async (req, res, next) => {
+      try {
+        await this.options.runner.deleteRun(req.params.id);
+        res.json({ id: req.params.id, deleted: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.get("/api/artifacts/:id/file", (req, res) => {
       const artifact = this.options.store.getArtifact(req.params.id);
       if (!artifact || !fs.existsSync(artifact.path)) {
@@ -137,18 +146,24 @@ export class ApiServer {
       res.json(this.options.extensionBridge.status());
     });
 
-    app.get("/api/extension/tasks/next", (_req, res) => {
-      const task = this.options.extensionBridge.nextTask();
-      if (!task) {
-        res.status(204).send();
-        return;
+    app.get("/api/extension/tasks/next", (req, res, next) => {
+      try {
+        const clientId = String(req.query.clientId ?? "");
+        const task = this.options.extensionBridge.nextTask(clientId);
+        if (!task) {
+          res.status(204).send();
+          return;
+        }
+        res.json(task);
+      } catch (error) {
+        next(error);
       }
-      res.json(task);
     });
 
-    app.get("/api/extension/tasks/:id/images/:index", (req, res, next) => {
+    app.get("/api/extension/tasks/:id/images/:group/:index", (req, res, next) => {
       try {
-        const filePath = this.options.extensionBridge.getTaskImagePath(req.params.id, Number(req.params.index));
+        const group = req.params.group === "reference" ? "reference" : "subject";
+        const filePath = this.options.extensionBridge.getTaskImagePath(req.params.id, group, Number(req.params.index));
         if (!fs.existsSync(filePath)) {
           res.status(404).json({ error: "Task image not found" });
           return;

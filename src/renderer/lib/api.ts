@@ -70,7 +70,19 @@ export interface SystemInfo {
   extension: {
     pending: number;
     running: number;
-    connectedClients: Array<{ id: string; url: string; title: string; status: string; lastSeenAt: string }>;
+    requiredProtocolVersion: number;
+    connectedClients: Array<{
+      id: string;
+      url: string;
+      title: string;
+      status: string;
+      protocolVersion: number | null;
+      extensionVersion: string;
+      routingToken?: string;
+      compatible: boolean;
+      incompatibilityReason?: string;
+      lastSeenAt: string;
+    }>;
   };
 }
 
@@ -123,6 +135,10 @@ export async function cancelRun(id: string): Promise<RunRecord> {
 
 export async function resumeRun(id: string): Promise<RunRecord> {
   return apiFetch(`/api/runs/${id}/resume`, { method: "POST", body: "{}" });
+}
+
+export async function deleteRun(id: string): Promise<{ id: string; deleted: true }> {
+  return apiFetch(`/api/runs/${id}`, { method: "DELETE" });
 }
 
 export async function artifactUrl(id: string): Promise<string> {

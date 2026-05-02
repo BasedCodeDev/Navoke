@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { RuntimeEventBus } from "./eventBus";
 import type { SqliteStore } from "../db/sqliteStore";
 import type { ArtifactRecord, RunRecord, RuntimePaths, WorkflowContext, WorkflowDefinition } from "./types";
@@ -6,6 +8,8 @@ import type { ArtifactRecord, RunRecord, RuntimePaths, WorkflowContext, Workflow
 function createId(): string {
   return randomUUID();
 }
+
+const DELETE_WAIT_TIMEOUT_MS = 30_000;
 
 interface QueuedRun {
   runId: string;
@@ -90,8 +94,41 @@ export class LocalWorkflowRunner {
     return existing;
   }
 
+  async deleteRun(runId: string): Promise<void> {
+    const existing = this.store.getRun(runId);
+    if (!existing) throw new Error(`Run not found: ${runId}`);
+
+    if (["queued", "running", "waiting_manual"].includes(existing.status)) {
+      this.cancel(runId);
+    }
+
+    await this.waitUntilInactive(runId);
+    this.deleteRunArtifactDir(runId);
+    this.store.deleteRunCascade(runId);
+    this.eventBus.publish({ kind: "run-updated", runId });
+  }
+
   stats(): { queued: number; running: number } {
     return { queued: this.queue.length, running: this.running.size };
+  }
+
+  private async waitUntilInactive(runId: string): Promise<void> {
+    const startedAt = Date.now();
+    while (this.running.has(runId)) {
+      if (Date.now() - startedAt > DELETE_WAIT_TIMEOUT_MS) {
+        throw new Error(`Timed out waiting for run to stop before deletion: ${runId}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  private deleteRunArtifactDir(runId: string): void {
+    const artifactRoot = path.resolve(this.paths.artifactDir);
+    const runArtifactDir = path.resolve(artifactRoot, runId);
+    if (runArtifactDir === artifactRoot || !runArtifactDir.startsWith(`${artifactRoot}${path.sep}`)) {
+      throw new Error(`Refusing to delete artifact path outside artifact directory: ${runArtifactDir}`);
+    }
+    fs.rmSync(runArtifactDir, { recursive: true, force: true });
   }
 
   private async drain(): Promise<void> {

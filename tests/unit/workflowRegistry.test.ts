@@ -12,8 +12,34 @@ describe("workflow registry", () => {
   it("validates required ChatGPT extension inputs", () => {
     const workflow = createWorkflowRegistry().get("chatgpt.extension-image-transform");
     expect(workflow).toBeDefined();
-    const result = workflow!.inputSchema.safeParse({ images: [], masterPrompt: "" });
-    expect(result.success).toBe(false);
+    expect(workflow!.inputSchema.safeParse({ referenceImages: [], subjectImages: [], masterPrompt: "" }).success).toBe(false);
+    expect(
+      workflow!.inputSchema.safeParse({
+        referenceImages: [],
+        subjectImages: ["C:\\tmp\\subject.png"],
+        masterPrompt: "Respond with READY.",
+        subjectInstruction: "",
+        chatGptTab: { mode: "existing", clientId: "client-1" }
+      }).success
+    ).toBe(true);
+    expect(
+      workflow!.inputSchema.safeParse({
+        referenceImages: [],
+        subjectImages: ["C:\\tmp\\subject.png"],
+        masterPrompt: "Respond with READY.",
+        subjectInstruction: "",
+        chatGptTab: { mode: "new", routingToken: "run-token-1" }
+      }).success
+    ).toBe(true);
+    expect(
+      workflow!.inputSchema.safeParse({
+        referenceImages: [],
+        subjectImages: ["C:\\tmp\\subject.png"],
+        masterPrompt: "Respond with READY.",
+        subjectInstruction: "",
+        chatGptTab: { mode: "new", routingToken: "" }
+      }).success
+    ).toBe(false);
   });
 
   it("validates required Hunyuan inputs", () => {

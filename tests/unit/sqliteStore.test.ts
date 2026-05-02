@@ -38,4 +38,38 @@ describe("SqliteStore", () => {
 
     store.close();
   });
+
+  it("deletes a run with its events and artifact records", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-store-"));
+    tempDirs.push(dir);
+    const store = await SqliteStore.open(path.join(dir, "workflow.sqlite"));
+    const artifactPath = path.join(dir, "artifact.json");
+    fs.writeFileSync(artifactPath, "{}");
+
+    const run = store.createRun({
+      id: "run-delete",
+      workflowId: "test.workflow",
+      name: "Delete test",
+      status: "completed",
+      input: { images: [] }
+    });
+    store.addEvent({ runId: run.id, type: "step", message: "Inserted event" });
+    const artifact = store.addArtifact({
+      id: "artifact-delete",
+      runId: run.id,
+      kind: "json",
+      name: "artifact.json",
+      path: artifactPath,
+      mimeType: "application/json"
+    });
+
+    store.deleteRunCascade(run.id);
+
+    expect(store.getRun(run.id)).toBeNull();
+    expect(store.listEvents(run.id)).toHaveLength(0);
+    expect(store.listArtifacts(run.id)).toHaveLength(0);
+    expect(store.getArtifact(artifact.id)).toBeNull();
+
+    store.close();
+  });
 });

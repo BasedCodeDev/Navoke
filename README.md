@@ -44,6 +44,8 @@ For ChatGPT account-based workflows, install the companion extension into the Ch
 6. Open `https://chatgpt.com/` in that Chrome profile and keep the tab open.
 7. In the app, choose **ChatGPT Extension Image Transform**.
 
+This workflow sends the master prompt and optional reference images once, waits for ChatGPT to respond, then sends subject images one at a time. Each subject image is saved as a separate output artifact using the subject filename.
+
 The extension defaults to `http://127.0.0.1:39201`. If the app falls back to another API port, copy the API URL shown in the app's Local Runtime panel into the extension popup.
 
 This extension does not bypass human verification. If ChatGPT asks you to verify, complete that manually in the same Chrome tab and retry or resume the workflow.

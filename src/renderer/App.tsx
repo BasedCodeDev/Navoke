@@ -5,15 +5,18 @@ import {
   Bot,
   CheckCircle2,
   FolderOpen,
+  Info,
   PauseCircle,
   Play,
   RefreshCcw,
   Square,
+  Trash2,
   Upload
 } from "lucide-react";
 import {
   cancelRun,
   createRun,
+  deleteRun,
   getConfig,
   getRun,
   getSystemInfo,
@@ -21,7 +24,8 @@ import {
   listWorkflows,
   resumeRun,
   subscribeRuntimeEvents,
-  type RunRecord
+  type RunRecord,
+  type SystemInfo
 } from "@/lib/api";
 import { cn, formatDate, statusTone } from "@/lib/utils";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
@@ -54,18 +58,52 @@ function usesBrowserProfile(workflowId: string): boolean {
   return ["hunyuan.image-to-model"].includes(workflowId);
 }
 
+const NEW_CHATGPT_TAB_VALUE = "__new_chatgpt_tab__";
+const CHATGPT_NEW_TAB_URL = "https://chatgpt.com/";
+const CHATGPT_TAB_ROUTING_PARAM = "workflow-automation-tab";
+
+type ChatGptTabInput =
+  | { mode: "existing"; clientId: string }
+  | { mode: "new"; routingToken: string };
+
+function createRoutingToken(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function buildNewChatGptTabUrl(routingToken: string): string {
+  const url = new URL(CHATGPT_NEW_TAB_URL);
+  url.hash = `${CHATGPT_TAB_ROUTING_PARAM}=${encodeURIComponent(routingToken)}`;
+  return url.toString();
+}
+
+function buildChatGptTabInput(selection: string): ChatGptTabInput {
+  if (selection && selection !== NEW_CHATGPT_TAB_VALUE) {
+    return { mode: "existing", clientId: selection };
+  }
+  return { mode: "new", routingToken: createRoutingToken() };
+}
+
+function chatGptTabOptionLabel(client: SystemInfo["extension"]["connectedClients"][number]): string {
+  const label = client.title || "ChatGPT tab";
+  return `${label} (${client.status || "ready"})`;
+}
+
 export default function App(): JSX.Element {
   const queryClient = useQueryClient();
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("chatgpt.extension-image-transform");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [referenceFiles, setReferenceFiles] = useState<string[]>([]);
+  const [subjectFiles, setSubjectFiles] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [masterPrompt, setMasterPrompt] = useState("");
+  const [subjectInstruction, setSubjectInstruction] = useState("");
   const [modelName, setModelName] = useState("Demo model");
   const [profileName, setProfileName] = useState("default");
   const [pauseForManualLogin, setPauseForManualLogin] = useState(true);
   const [selectorsJson, setSelectorsJson] = useState("");
+  const [chatGptTabSelection, setChatGptTabSelection] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
 
   const workflowsQuery = useQuery({ queryKey: ["workflows"], queryFn: listWorkflows });
@@ -97,11 +135,15 @@ export default function App(): JSX.Element {
     mutationFn: async () => {
       setFormError(null);
       const selectors = parseJsonObject(selectorsJson);
+      const chatGptTab = selectedWorkflowId === "chatgpt.extension-image-transform" ? buildChatGptTabInput(chatGptTabSelection) : null;
+      if (chatGptTab?.mode === "new") {
+        await window.workflowAutomation.openExternal(buildNewChatGptTabUrl(chatGptTab.routingToken));
+      }
       const workflowInput =
         selectedWorkflowId === "hunyuan.image-to-model"
           ? { images: selectedFiles, prompt, profileName, pauseForManualLogin, selectors }
           : selectedWorkflowId === "chatgpt.extension-image-transform"
-              ? { images: selectedFiles, masterPrompt, selectors }
+              ? { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, chatGptTab, selectors }
               : { images: selectedFiles, prompt, modelName, delayMs: 1_200 };
 
       return createRun({ workflowId: selectedWorkflowId, name, input: workflowInput });
@@ -114,18 +156,44 @@ export default function App(): JSX.Element {
     onError: (error) => setFormError(error instanceof Error ? error.message : String(error))
   });
 
+  const deleteRunMutation = useMutation({
+    mutationFn: deleteRun,
+    onSuccess: (_result, deletedRunId) => {
+      if (selectedRunId === deletedRunId) {
+        setSelectedRunId(null);
+      }
+      queryClient.removeQueries({ queryKey: ["run", deletedRunId] });
+      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["system"] });
+    },
+    onError: (error) => setFormError(error instanceof Error ? error.message : String(error))
+  });
+
   const activeRun = selectedRunQuery.data?.run;
   const selectedRunIds = new Set([selectedRunId]);
+  const extensionClients = systemQuery.data?.extension.connectedClients ?? [];
+  const compatibleExtensionClients = useMemo(() => extensionClients.filter((client) => client.compatible), [extensionClients]);
+  const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 3;
+  const isChatGptExtensionWorkflow = selectedWorkflowId === "chatgpt.extension-image-transform";
 
-  async function chooseImages(): Promise<void> {
+  useEffect(() => {
+    if (!isChatGptExtensionWorkflow) return;
+    setChatGptTabSelection((current) => {
+      if (current === NEW_CHATGPT_TAB_VALUE) return current;
+      if (current && compatibleExtensionClients.some((client) => client.id === current)) return current;
+      return compatibleExtensionClients[0]?.id ?? NEW_CHATGPT_TAB_VALUE;
+    });
+  }, [compatibleExtensionClients, isChatGptExtensionWorkflow]);
+
+  async function chooseImages(setFiles: (files: string[]) => void, title: string): Promise<void> {
     const files = await window.workflowAutomation.selectFiles({
-      title: "Choose workflow input images",
+      title,
       filters: [
         { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
         { name: "All files", extensions: ["*"] }
       ]
     });
-    if (files.length > 0) setSelectedFiles(files);
+    if (files.length > 0) setFiles(files);
   }
 
   return (
@@ -175,16 +243,45 @@ export default function App(): JSX.Element {
                 <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional" />
               </div>
 
-              <div className="space-y-2">
-                <Label>Images</Label>
-                <Button type="button" variant="outline" className="w-full justify-start" onClick={chooseImages}>
-                  <Upload className="h-4 w-4" />
-                  Choose images
-                </Button>
-                <div className="max-h-24 space-y-1 overflow-auto text-xs text-muted-foreground">
-                  {selectedFiles.length === 0 ? "No files selected" : selectedFiles.map((file) => <div key={file} className="truncate">{file}</div>)}
-                </div>
-              </div>
+              {isChatGptExtensionWorkflow ? (
+                <ChatGptTabRoutingPanel
+                  clients={extensionClients}
+                  requiredProtocolVersion={requiredExtensionProtocol}
+                  value={chatGptTabSelection || NEW_CHATGPT_TAB_VALUE}
+                  onChange={setChatGptTabSelection}
+                  onRefresh={() => void queryClient.invalidateQueries({ queryKey: ["system"] })}
+                />
+              ) : null}
+
+              {isChatGptExtensionWorkflow ? (
+                <>
+                  <ImagePicker
+                    label="Reference images"
+                    chooseLabel="Choose references"
+                    files={referenceFiles}
+                    emptyText="No reference files selected"
+                    onChoose={() => void chooseImages(setReferenceFiles, "Choose optional reference images")}
+                    onClear={() => setReferenceFiles([])}
+                  />
+                  <ImagePicker
+                    label="Subject images"
+                    chooseLabel="Choose subjects"
+                    files={subjectFiles}
+                    emptyText="No subject files selected"
+                    onChoose={() => void chooseImages(setSubjectFiles, "Choose subject images")}
+                    onClear={() => setSubjectFiles([])}
+                  />
+                </>
+              ) : (
+                <ImagePicker
+                  label="Images"
+                  chooseLabel="Choose images"
+                  files={selectedFiles}
+                  emptyText="No files selected"
+                  onChoose={() => void chooseImages(setSelectedFiles, "Choose workflow input images")}
+                  onClear={() => setSelectedFiles([])}
+                />
+              )}
 
               {!usesMasterPrompt(selectedWorkflowId) ? (
                 <>
@@ -198,10 +295,24 @@ export default function App(): JSX.Element {
                   </div>
                 </>
               ) : (
-                <div className="space-y-2">
-                  <Label>Master prompt</Label>
-                  <Textarea value={masterPrompt} onChange={(event) => setMasterPrompt(event.target.value)} placeholder="Stable image transformation prompt" />
-                </div>
+                <>
+                  <div className="space-y-2">
+                    <Label>Master prompt</Label>
+                    <Textarea
+                      value={masterPrompt}
+                      onChange={(event) => setMasterPrompt(event.target.value)}
+                      placeholder='Initial instruction. Example: "After the first response, respond with images only. When ready, respond READY."'
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Per-subject instruction</Label>
+                    <Textarea
+                      value={subjectInstruction}
+                      onChange={(event) => setSubjectInstruction(event.target.value)}
+                      placeholder="Optional. Leave blank to send each subject image without text."
+                    />
+                  </div>
+                </>
               )}
 
               {usesBrowserProfile(selectedWorkflowId) ? (
@@ -317,6 +428,15 @@ export default function App(): JSX.Element {
                       <FolderOpen className="h-4 w-4" />
                       Data folder
                     </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => void deleteRunMutation.mutate(activeRun.id)}
+                      disabled={deleteRunMutation.isPending}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </Button>
                   </div>
                   {activeRun.error ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{activeRun.error}</div> : null}
                 </>
@@ -350,6 +470,112 @@ export default function App(): JSX.Element {
   );
 }
 
+function ChatGptTabRoutingPanel({
+  clients,
+  requiredProtocolVersion,
+  value,
+  onChange,
+  onRefresh
+}: {
+  clients: SystemInfo["extension"]["connectedClients"];
+  requiredProtocolVersion: number;
+  value: string;
+  onChange(value: string): void;
+  onRefresh(): void;
+}): JSX.Element {
+  const compatibleClients = clients.filter((client) => client.compatible);
+  const incompatibleClients = clients.filter((client) => !client.compatible);
+
+  return (
+    <div className="rounded-md border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-950">
+      <div className="flex gap-2">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="space-y-1">
+          <div className="font-medium">ChatGPT tab routing</div>
+          <p className="text-xs leading-5 text-cyan-900">
+            Choose the exact compatible ChatGPT tab for this run, or open a new token-routed tab. Other ChatGPT tabs keep
+            polling but will not receive the task.
+          </p>
+          {incompatibleClients.length > 0 ? (
+            <p className="text-xs font-medium leading-5 text-red-700">
+              {incompatibleClients.length} tab{incompatibleClients.length === 1 ? "" : "s"} need the unpacked extension reloaded and
+              ChatGPT refreshed before they can run protocol {requiredProtocolVersion} workflows.
+            </p>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        <Label htmlFor="chatgpt-tab-target" className="text-xs font-medium text-cyan-950">
+          Target tab
+        </Label>
+        <div className="grid grid-cols-[1fr_auto] gap-2">
+          <select
+            id="chatgpt-tab-target"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            className="h-9 min-w-0 rounded-md border border-cyan-200 bg-white px-3 text-xs text-cyan-950"
+          >
+            <option value={NEW_CHATGPT_TAB_VALUE}>Open a new ChatGPT tab</option>
+            {compatibleClients.map((client) => (
+              <option key={client.id} value={client.id}>
+                {chatGptTabOptionLabel(client)}
+              </option>
+            ))}
+          </select>
+          <Button type="button" variant="outline" size="sm" onClick={onRefresh}>
+            <RefreshCcw className="h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
+        <p className="text-xs leading-5 text-cyan-900">
+          New tabs open ChatGPT externally and are matched when the extension reports the run token.
+        </p>
+      </div>
+
+      <div className="mt-3 rounded-md border border-cyan-200 bg-white/70 p-2">
+        <div className="mb-2 text-xs font-medium text-cyan-950">Reporting ChatGPT tabs</div>
+        {clients.length === 0 ? (
+          <div className="text-xs text-cyan-900">No ChatGPT extension tab has checked in yet.</div>
+        ) : (
+          <div className="max-h-28 space-y-2 overflow-auto">
+            {clients.map((client) => (
+              <div key={client.id} className="space-y-1 rounded border border-cyan-100 bg-white p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 truncate text-xs font-medium text-cyan-950">{client.title || "ChatGPT tab"}</div>
+                  <Badge
+                    className={cn(
+                      "shrink-0 border",
+                      !client.compatible
+                        ? "bg-red-100 text-red-800"
+                        : client.status === "busy"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-emerald-100 text-emerald-800"
+                    )}
+                  >
+                    {client.compatible ? client.status : "reload required"}
+                  </Badge>
+                </div>
+                <div className="truncate text-xs text-cyan-800">{client.url || "No URL reported"}</div>
+                <div className="text-xs text-cyan-700">
+                  Extension v{client.extensionVersion || "unknown"} | protocol {client.protocolVersion ?? "unknown"} / required{" "}
+                  {requiredProtocolVersion}
+                </div>
+                {!client.compatible ? (
+                  <div className="text-xs text-red-700">
+                    {client.incompatibilityReason ?? "Reload the unpacked extension and refresh this ChatGPT tab."}
+                  </div>
+                ) : null}
+                <div className="text-xs text-cyan-700">Last seen {formatDate(client.lastSeenAt)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RunRow({ run, selected, onSelect }: { run: RunRecord; selected: boolean; onSelect: () => void }): JSX.Element {
   return (
     <button
@@ -370,5 +596,45 @@ function RunRow({ run, selected, onSelect }: { run: RunRecord; selected: boolean
       </div>
       <Progress value={run.progress} className="mt-3" />
     </button>
+  );
+}
+
+function ImagePicker({
+  label,
+  chooseLabel,
+  files,
+  emptyText,
+  onChoose,
+  onClear
+}: {
+  label: string;
+  chooseLabel: string;
+  files: string[];
+  emptyText: string;
+  onChoose(): void;
+  onClear(): void;
+}): JSX.Element {
+  return (
+    <div className="space-y-2">
+      <Label>{label}</Label>
+      <div className="grid grid-cols-[1fr_auto] gap-2">
+        <Button type="button" variant="outline" className="justify-start" onClick={onChoose}>
+          <Upload className="h-4 w-4" />
+          {chooseLabel}
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={onClear} disabled={files.length === 0}>
+          Clear
+        </Button>
+      </div>
+      <FileList files={files} emptyText={emptyText} />
+    </div>
+  );
+}
+
+function FileList({ files, emptyText }: { files: string[]; emptyText: string }): JSX.Element {
+  return (
+    <div className="max-h-24 space-y-1 overflow-auto text-xs text-muted-foreground">
+      {files.length === 0 ? emptyText : files.map((file) => <div key={file} className="truncate">{file}</div>)}
+    </div>
   );
 }

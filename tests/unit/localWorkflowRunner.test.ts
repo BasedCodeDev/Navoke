@@ -67,4 +67,95 @@ describe("LocalWorkflowRunner", () => {
 
     store.close();
   });
+
+  it("deletes a queued run and its artifact directory", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    let releaseFirstRun: (() => void) | undefined;
+    const workflow: WorkflowDefinition<{ message: string }, { ok: boolean }> = {
+      manifest: {
+        id: "test.blocking",
+        title: "Blocking Workflow",
+        description: "Runtime delete test workflow",
+        category: "utility",
+        version: "0.0.0",
+        concurrency: 1,
+        inputFields: [],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({ message: z.string() }),
+      outputSchema: z.object({ ok: z.boolean() }),
+      async run(_input, ctx) {
+        await ctx.step("Blocking", 10);
+        await new Promise<void>((resolve, reject) => {
+          releaseFirstRun = resolve;
+          ctx.signal.addEventListener("abort", () => reject(new Error("Operation cancelled")), { once: true });
+        });
+        return { ok: true };
+      }
+    };
+    const runner = new LocalWorkflowRunner(new Map([[workflow.manifest.id, workflow]]), store, paths, new RuntimeEventBus());
+
+    const runningRun = runner.enqueue({ workflowId: "test.blocking", name: "Running", workflowInput: { message: "run" } });
+    await waitFor(() => store.getRun(runningRun.id)?.status === "running");
+    const queuedRun = runner.enqueue({ workflowId: "test.blocking", name: "Queued", workflowInput: { message: "queue" } });
+    const artifactDir = path.join(paths.artifactDir, queuedRun.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(artifactDir, "artifact.json"), "{}");
+
+    await runner.deleteRun(queuedRun.id);
+
+    expect(store.getRun(queuedRun.id)).toBeNull();
+    expect(fs.existsSync(artifactDir)).toBe(false);
+    releaseFirstRun?.();
+    await waitFor(() => store.getRun(runningRun.id)?.status === "completed");
+
+    store.close();
+  });
+
+  it("cancels a running run before deletion", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const workflow: WorkflowDefinition<{ message: string }, { ok: boolean }> = {
+      manifest: {
+        id: "test.cancellable",
+        title: "Cancellable Workflow",
+        description: "Runtime delete test workflow",
+        category: "utility",
+        version: "0.0.0",
+        concurrency: 1,
+        inputFields: [],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({ message: z.string() }),
+      outputSchema: z.object({ ok: z.boolean() }),
+      async run(_input, ctx) {
+        await ctx.step("Waiting for cancellation", 10);
+        await new Promise<void>((_resolve, reject) => {
+          if (ctx.signal.aborted) {
+            reject(new Error("Operation cancelled"));
+            return;
+          }
+          ctx.signal.addEventListener("abort", () => reject(new Error("Operation cancelled")), { once: true });
+        });
+        return { ok: true };
+      }
+    };
+    const runner = new LocalWorkflowRunner(new Map([[workflow.manifest.id, workflow]]), store, paths, new RuntimeEventBus());
+
+    const run = runner.enqueue({ workflowId: "test.cancellable", name: "Delete running", workflowInput: { message: "run" } });
+    await waitFor(() => store.getRun(run.id)?.status === "running");
+    await runner.deleteRun(run.id);
+
+    expect(store.getRun(run.id)).toBeNull();
+    expect(runner.stats().running).toBe(0);
+
+    store.close();
+  });
 });

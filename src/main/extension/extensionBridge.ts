@@ -4,42 +4,67 @@ import { randomUUID } from "node:crypto";
 import { inferMimeType } from "../utils/files";
 
 export type ExtensionTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type ExtensionImageGroup = "reference" | "subject";
+
+export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 3;
+const CLIENT_TTL_MS = 30_000;
+
+export type ChatGptExtensionTaskTarget =
+  | { mode: "any" }
+  | { mode: "existing"; clientId: string }
+  | { mode: "new"; routingToken: string };
 
 export interface ExtensionClientStatus {
   id: string;
   url: string;
   title: string;
   status: string;
+  protocolVersion: number | null;
+  extensionVersion: string;
+  routingToken?: string;
+  compatible: boolean;
+  incompatibilityReason?: string;
   lastSeenAt: string;
 }
 
 export interface ChatGptExtensionTaskInput {
   runId: string;
-  prompt: string;
-  imagePath: string;
+  masterPrompt: string;
+  referenceImagePaths: string[];
+  subjectImagePaths: string[];
+  subjectInstruction?: string;
   selectors?: Record<string, unknown>;
+  target?: ChatGptExtensionTaskTarget;
+}
+
+export interface ExtensionTaskImagePayload {
+  index: number;
+  name: string;
+  mimeType: string;
+  url: string;
 }
 
 export interface ExtensionTaskPayload {
   id: string;
   kind: "chatgpt-image-transform";
+  protocolVersion: number;
   runId: string;
-  prompt: string;
-  image: {
-    index: number;
-    name: string;
-    mimeType: string;
-    url: string;
-  };
+  masterPrompt: string;
+  referenceImages: ExtensionTaskImagePayload[];
+  subjectImages: ExtensionTaskImagePayload[];
+  subjectInstruction: string;
   selectors: Record<string, unknown>;
   createdAt: string;
 }
 
 export interface ExtensionTaskResult {
   outputs: Array<{
+    subjectIndex: number;
+    subjectName?: string;
     name?: string;
     mimeType?: string;
     base64: string;
+    metadata?: unknown;
   }>;
   metadata?: unknown;
 }
@@ -56,14 +81,23 @@ interface ExtensionTask {
   id: string;
   kind: "chatgpt-image-transform";
   runId: string;
-  prompt: string;
-  imagePath: string;
+  masterPrompt: string;
+  referenceImagePaths: string[];
+  subjectImagePaths: string[];
+  subjectInstruction: string;
   selectors: Record<string, unknown>;
+  target: ExtensionTaskTargetState;
   status: ExtensionTaskStatus;
   result?: ExtensionTaskResult;
   error?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+interface ExtensionTaskTargetState {
+  mode: "any" | "existing" | "new";
+  clientId?: string;
+  routingToken?: string;
 }
 
 interface Waiter {
@@ -77,25 +111,29 @@ export class ExtensionBridge {
   private readonly clients = new Map<string, ExtensionClientStatus>();
   private readonly events = new EventEmitter();
 
-  createChatGptImageTask(input: ChatGptExtensionTaskInput): ExtensionTaskPayload {
+  createChatGptConversationTask(input: ChatGptExtensionTaskInput): ExtensionTaskPayload {
     const now = new Date().toISOString();
     const task: ExtensionTask = {
       id: randomUUID(),
       kind: "chatgpt-image-transform",
       runId: input.runId,
-      prompt: input.prompt,
-      imagePath: input.imagePath,
+      masterPrompt: input.masterPrompt,
+      referenceImagePaths: input.referenceImagePaths,
+      subjectImagePaths: input.subjectImagePaths,
+      subjectInstruction: input.subjectInstruction?.trim() ?? "",
       selectors: input.selectors ?? {},
+      target: normalizeTaskTarget(input.target),
       status: "pending",
       createdAt: now,
       updatedAt: now
     };
     this.tasks.set(task.id, task);
-    this.emitTaskEvent(task.id, "task.created", "Queued task for ChatGPT extension");
+    this.emitTaskEvent(task.id, "task.created", describeTaskTarget(task.target));
     return this.toPayload(task);
   }
 
-  nextTask(): ExtensionTaskPayload | null {
+  nextTask(clientId: string): ExtensionTaskPayload | null {
+    const client = this.assertCompatibleClient(clientId);
     const now = Date.now();
     for (const task of this.tasks.values()) {
       if (task.status === "running" && now - Date.parse(task.updatedAt) > 120_000) {
@@ -103,29 +141,55 @@ export class ExtensionBridge {
         task.updatedAt = new Date().toISOString();
         this.emitTaskEvent(task.id, "task.requeued", "Extension task lease expired; requeued");
       }
-      if (task.status === "pending") {
+      if (task.status === "pending" && this.matchesTaskTarget(task, client)) {
+        if (task.target.mode === "new" && !task.target.clientId) {
+          task.target.clientId = client.id;
+        }
         task.status = "running";
         task.updatedAt = new Date().toISOString();
-        this.emitTaskEvent(task.id, "task.started", "Extension picked up task");
+        this.emitTaskEvent(task.id, "task.started", "Extension picked up task", {
+          clientId,
+          targetMode: task.target.mode
+        });
         return this.toPayload(task);
       }
     }
     return null;
   }
 
-  getTaskImagePath(taskId: string, imageIndex: number): string {
+  getTaskImagePath(taskId: string, group: ExtensionImageGroup, imageIndex: number): string {
     const task = this.getTask(taskId);
-    if (imageIndex !== 0) throw new Error(`Image index not found: ${imageIndex}`);
-    return task.imagePath;
+    const paths = group === "reference" ? task.referenceImagePaths : task.subjectImagePaths;
+    const imagePath = paths[imageIndex];
+    if (!imagePath) throw new Error(`Image not found: ${group}/${imageIndex}`);
+    return imagePath;
   }
 
-  heartbeat(input: { id?: string; url?: string; title?: string; status?: string }): ExtensionClientStatus {
+  heartbeat(input: {
+    id?: string;
+    url?: string;
+    title?: string;
+    status?: string;
+    protocolVersion?: unknown;
+    extensionVersion?: unknown;
+    routingToken?: unknown;
+  }): ExtensionClientStatus {
     const id = input.id?.trim() || "chatgpt-tab";
+    const protocolVersion = parseProtocolVersion(input.protocolVersion);
+    const compatible = protocolVersion === CHATGPT_EXTENSION_PROTOCOL_VERSION;
+    const routingToken = normalizeRoutingToken(input.routingToken);
     const client: ExtensionClientStatus = {
       id,
       url: input.url ?? "",
       title: input.title ?? "",
       status: input.status ?? "ready",
+      protocolVersion,
+      extensionVersion: typeof input.extensionVersion === "string" ? input.extensionVersion : "unknown",
+      ...(routingToken ? { routingToken } : {}),
+      compatible,
+      incompatibilityReason: compatible
+        ? undefined
+        : `Reload the unpacked Chrome extension and refresh ChatGPT tabs. App requires extension protocol ${CHATGPT_EXTENSION_PROTOCOL_VERSION}.`,
       lastSeenAt: new Date().toISOString()
     };
     this.clients.set(id, client);
@@ -133,10 +197,16 @@ export class ExtensionBridge {
   }
 
   listClients(): ExtensionClientStatus[] {
+    this.pruneStaleClients();
     return [...this.clients.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
   }
 
-  status(): { connectedClients: ExtensionClientStatus[]; pending: number; running: number } {
+  status(): {
+    connectedClients: ExtensionClientStatus[];
+    pending: number;
+    running: number;
+    requiredProtocolVersion: number;
+  } {
     const counts = [...this.tasks.values()].reduce(
       (acc, task) => {
         if (task.status === "pending") acc.pending += 1;
@@ -145,7 +215,19 @@ export class ExtensionBridge {
       },
       { pending: 0, running: 0 }
     );
-    return { connectedClients: this.listClients(), ...counts };
+    return {
+      connectedClients: this.listClients(),
+      requiredProtocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      ...counts
+    };
+  }
+
+  findCompatibleClientForTarget(target: ChatGptExtensionTaskTarget): ExtensionClientStatus | undefined {
+    const normalizedTarget = normalizeTaskTarget(target);
+    this.pruneStaleClients();
+    return [...this.clients.values()].find(
+      (client) => client.compatible && this.matchesTarget(normalizedTarget, client)
+    );
   }
 
   completeTask(taskId: string, result: ExtensionTaskResult): void {
@@ -227,6 +309,51 @@ export class ExtensionBridge {
     return task;
   }
 
+  private assertCompatibleClient(clientId: string): ExtensionClientStatus {
+    this.pruneStaleClients();
+    const normalizedClientId = clientId.trim();
+    if (!normalizedClientId) {
+      throw new Error(
+        `ChatGPT extension task polling requires a client id. Reload the unpacked Chrome extension and refresh ChatGPT tabs. App requires extension protocol ${CHATGPT_EXTENSION_PROTOCOL_VERSION}.`
+      );
+    }
+
+    const client = this.clients.get(normalizedClientId);
+    if (!client) {
+      throw new Error(
+        `ChatGPT extension client ${normalizedClientId} has not checked in. Reload the unpacked Chrome extension and refresh ChatGPT tabs.`
+      );
+    }
+
+    if (!client.compatible) {
+      throw new Error(
+        client.incompatibilityReason ??
+          `Reload the unpacked Chrome extension and refresh ChatGPT tabs. App requires extension protocol ${CHATGPT_EXTENSION_PROTOCOL_VERSION}.`
+      );
+    }
+
+    return client;
+  }
+
+  private matchesTaskTarget(task: ExtensionTask, client: ExtensionClientStatus): boolean {
+    return this.matchesTarget(task.target, client);
+  }
+
+  private matchesTarget(target: ExtensionTaskTargetState, client: ExtensionClientStatus): boolean {
+    if (target.mode === "any") return true;
+    if (target.mode === "existing") return target.clientId === client.id;
+    if (target.clientId) return target.clientId === client.id;
+    return Boolean(target.routingToken && client.routingToken === target.routingToken);
+  }
+
+  private pruneStaleClients(now = Date.now()): void {
+    for (const [id, client] of this.clients) {
+      if (now - Date.parse(client.lastSeenAt) > CLIENT_TTL_MS) {
+        this.clients.delete(id);
+      }
+    }
+  }
+
   private emitTaskEvent(taskId: string, type: string, message: string, data?: unknown): void {
     const event: ExtensionTaskEvent = {
       taskId,
@@ -242,18 +369,64 @@ export class ExtensionBridge {
     return {
       id: task.id,
       kind: task.kind,
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
       runId: task.runId,
-      prompt: task.prompt,
-      image: {
-        index: 0,
-        name: path.basename(task.imagePath),
-        mimeType: inferMimeType(task.imagePath) ?? "application/octet-stream",
-        url: `/api/extension/tasks/${task.id}/images/0`
-      },
+      masterPrompt: task.masterPrompt,
+      referenceImages: task.referenceImagePaths.map((imagePath, index) => this.toImagePayload(task.id, "reference", imagePath, index)),
+      subjectImages: task.subjectImagePaths.map((imagePath, index) => this.toImagePayload(task.id, "subject", imagePath, index)),
+      subjectInstruction: task.subjectInstruction,
       selectors: task.selectors,
       createdAt: task.createdAt
+    };
+  }
+
+  private toImagePayload(
+    taskId: string,
+    group: ExtensionImageGroup,
+    imagePath: string,
+    index: number
+  ): ExtensionTaskImagePayload {
+    return {
+      index,
+      name: path.basename(imagePath),
+      mimeType: inferMimeType(imagePath) ?? "application/octet-stream",
+      url: `/api/extension/tasks/${taskId}/images/${group}/${index}`
     };
   }
 }
 
 export const extensionBridge = new ExtensionBridge();
+
+function parseProtocolVersion(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeRoutingToken(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeTaskTarget(target?: ChatGptExtensionTaskTarget): ExtensionTaskTargetState {
+  if (!target || target.mode === "any") return { mode: "any" };
+  if (target.mode === "existing") {
+    const clientId = target.clientId.trim();
+    if (!clientId) throw new Error("ChatGPT extension target client id is required.");
+    return { mode: "existing", clientId };
+  }
+
+  const routingToken = normalizeRoutingToken(target.routingToken);
+  if (!routingToken) throw new Error("ChatGPT extension new-tab routing token is required.");
+  return { mode: "new", routingToken };
+}
+
+function describeTaskTarget(target: ExtensionTaskTargetState): string {
+  if (target.mode === "existing") return "Queued task for selected ChatGPT tab";
+  if (target.mode === "new") return "Queued task for new ChatGPT tab";
+  return "Queued task for ChatGPT extension";
+}
