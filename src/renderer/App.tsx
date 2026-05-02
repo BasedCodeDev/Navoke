@@ -38,6 +38,7 @@ import {
   listRuns,
   listWorkflows,
   openProject,
+  pauseRun,
   renameProject,
   resumeRun,
   runInputFileUrl,
@@ -81,7 +82,7 @@ import {
   type ChatGptRunInputModel
 } from "@/lib/chatGptArtifactPairing";
 import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "@/lib/duplicateRunConfiguration";
-import { resolveChatGptFocusTarget } from "@/lib/chatGptTabFocus";
+import { isRecoverableFailedChatGptRun, resolveChatGptFocusTarget } from "@/lib/chatGptTabFocus";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -170,6 +171,7 @@ export default function App(): JSX.Element {
   const [pauseForManualLogin, setPauseForManualLogin] = useState(true);
   const [chatGptTabSelection, setChatGptTabSelection] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
   const [newRunFocusError, setNewRunFocusError] = useState<string | null>(null);
   const [showProjectLanding, setShowProjectLanding] = useState(false);
   const [duplicateSourceRun, setDuplicateSourceRun] = useState<RunRecord | null>(null);
@@ -238,6 +240,7 @@ export default function App(): JSX.Element {
   const createRunMutation = useMutation({
     mutationFn: async () => {
       setFormError(null);
+      setActionError(null);
       let activeConfig = configQuery.data;
       if (!activeConfig?.apiBaseUrl || !activeConfig.projectDir) {
         setShowProjectLanding(true);
@@ -264,7 +267,11 @@ export default function App(): JSX.Element {
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       void queryClient.invalidateQueries({ queryKey: ["run"] });
     },
-    onError: (error) => setFormError(error instanceof Error ? error.message : String(error))
+    onError: (error) =>
+      setActionError({
+        title: "Could not start run",
+        message: error instanceof Error ? error.message : String(error)
+      })
   });
 
   const deleteRunMutation = useMutation({
@@ -277,7 +284,11 @@ export default function App(): JSX.Element {
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       void queryClient.invalidateQueries({ queryKey: ["system"] });
     },
-    onError: (error) => setFormError(error instanceof Error ? error.message : String(error))
+    onError: (error) =>
+      setActionError({
+        title: "Could not delete run",
+        message: error instanceof Error ? error.message : String(error)
+      })
   });
 
   const focusNewRunTabMutation = useMutation({
@@ -308,38 +319,6 @@ export default function App(): JSX.Element {
       return compatibleExtensionClients[0]?.id ?? NEW_CHATGPT_TAB_VALUE;
     });
   }, [compatibleExtensionClients, isChatGptExtensionWorkflow]);
-
-  useEffect(() => {
-    if (!duplicateSourceRun) return;
-    let active = true;
-    setDuplicateError(null);
-
-    if (duplicateFilePaths.length === 0) {
-      setDuplicateValidation({ status: "ready", files: [] });
-      return () => {
-        active = false;
-      };
-    }
-
-    setDuplicateValidation({ status: "checking", files: [] });
-    void validateFilePaths(duplicateFilePaths)
-      .then((result) => {
-        if (active) setDuplicateValidation({ status: "ready", files: result.files });
-      })
-      .catch((error) => {
-        if (active) {
-          setDuplicateValidation({
-            status: "error",
-            files: [],
-            message: error instanceof Error ? error.message : String(error)
-          });
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [duplicateFilePaths, duplicateSourceRun]);
 
   async function chooseImages(setFiles: (files: string[]) => void, title: string): Promise<void> {
     const files = await window.basedBlink.selectFiles({
@@ -419,9 +398,22 @@ export default function App(): JSX.Element {
   }
 
   function openDuplicateRunDialog(run: RunRecord): void {
-    setDuplicateValidation({ status: "idle", files: [] });
+    const filePaths = collectRunInputFilePaths(run.input);
     setDuplicateError(null);
     setDuplicateSourceRun(run);
+    setDuplicateValidation(filePaths.length === 0 ? { status: "ready", files: [] } : { status: "checking", files: [] });
+
+    if (filePaths.length === 0) return;
+
+    void validateFilePaths(filePaths)
+      .then((result) => setDuplicateValidation({ status: "ready", files: result.files }))
+      .catch((error) =>
+        setDuplicateValidation({
+          status: "error",
+          files: [],
+          message: error instanceof Error ? error.message : String(error)
+        })
+      );
   }
 
   const showLanding = showProjectLanding || !hasProject;
@@ -727,6 +719,7 @@ export default function App(): JSX.Element {
           detailError={selectedRunDetailError}
           isDeleting={deleteRunMutation.isPending}
           onClose={() => setSelectedRunId(null)}
+          onPause={(runId) => void pauseRun(runId).then(() => queryClient.invalidateQueries())}
           onResume={(runId) => void resumeRun(runId).then(() => queryClient.invalidateQueries())}
           onCancel={(runId) => void cancelRun(runId).then(() => queryClient.invalidateQueries())}
           onOpenDataFolder={() => window.basedBlink.openPath(activeRun?.runDir ?? "")}
@@ -744,6 +737,9 @@ export default function App(): JSX.Element {
           onCancel={() => setDuplicateSourceRun(null)}
           onConfirm={() => void confirmDuplicateRunConfiguration()}
         />
+      ) : null}
+      {actionError ? (
+        <ActionErrorDialog title={actionError.title} message={actionError.message} onClose={() => setActionError(null)} />
       ) : null}
       {themePickerOpen ? (
         <ThemePickerModal
@@ -1071,6 +1067,7 @@ function RunDetailModal({
   detailError,
   isDeleting,
   onClose,
+  onPause,
   onResume,
   onCancel,
   onOpenDataFolder,
@@ -1087,6 +1084,7 @@ function RunDetailModal({
   detailError: string | null;
   isDeleting: boolean;
   onClose(): void;
+  onPause(runId: string): void;
   onResume(runId: string): void;
   onCancel(runId: string): void;
   onOpenDataFolder(): void | Promise<unknown>;
@@ -1099,6 +1097,7 @@ function RunDetailModal({
     () => resolveChatGptFocusTarget(run, extensionClients),
     [extensionClients, run]
   );
+  const canResumeRun = run?.status === "waiting_manual" || isRecoverableFailedChatGptRun(run);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -1196,13 +1195,33 @@ function RunDetailModal({
               )}
 
               <div className="flex flex-wrap gap-2">
-                {run?.status === "waiting_manual" ? (
-                  <Button size="sm" onClick={() => onResume(run.id)}>
+                {run?.workflowId === "chatgpt.extension-image-transform" && run.status === "running" ? (
+                  <Button size="sm" variant="outline" onClick={() => onPause(run.id)}>
+                    <PauseCircle className="h-4 w-4" />
+                    Pause
+                  </Button>
+                ) : null}
+                {run?.status === "pausing" ? (
+                  <Button size="sm" variant="outline" disabled title="Pause is being applied.">
+                    <PauseCircle className="h-4 w-4" />
+                    Pause pending
+                  </Button>
+                ) : null}
+                {run && canResumeRun ? (
+                  <Button
+                    size="sm"
+                    onClick={() => onResume(run.id)}
+                    title={
+                      run.status === "failed"
+                        ? "Resume will inspect the current ChatGPT page before resubmitting unfinished work."
+                        : undefined
+                    }
+                  >
                     <PauseCircle className="h-4 w-4" />
                     Resume
                   </Button>
                 ) : null}
-                {run && ["queued", "running", "waiting_manual"].includes(run.status) ? (
+                {run && ["queued", "running", "pausing", "waiting_manual"].includes(run.status) ? (
                   <Button variant="destructive" size="sm" onClick={() => onCancel(run.id)}>
                     <Square className="h-4 w-4" />
                     Cancel
@@ -1356,8 +1375,11 @@ function DuplicateRunConfirmDialog({
               </div>
               <div className="max-h-36 space-y-1 overflow-auto text-xs">
                 {invalidFiles.slice(0, 8).map((file) => (
-                  <div key={file.path} className="truncate" title={file.path}>
-                    {file.path}
+                  <div key={file.path} className="space-y-0.5" title={file.path}>
+                    <div className="truncate">{file.path}</div>
+                    <div className="text-muted-foreground">
+                      {file.error ?? (file.exists ? "Path is not a file." : "File is missing.")}
+                    </div>
                   </div>
                 ))}
                 {invalidFiles.length > 8 ? <div>{invalidFiles.length - 8} more...</div> : null}
@@ -1381,6 +1403,43 @@ function DuplicateRunConfirmDialog({
           <Button type="button" size="sm" onClick={onConfirm} disabled={!canDuplicate || isDuplicating}>
             <Copy className="h-4 w-4" />
             {isDuplicating ? "Duplicating..." : "Duplicate configuration"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActionErrorDialog({
+  title,
+  message,
+  onClose
+}: {
+  title: string;
+  message: string;
+  onClose(): void;
+}): JSX.Element {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 px-4" onMouseDown={onClose}>
+      <div
+        className="w-full max-w-lg rounded-lg border border-border bg-background shadow-xl"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="action-error-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3 border-b border-border px-5 py-4">
+          <AlertTriangle className={cn("mt-0.5 h-5 w-5 shrink-0", toneTextClassNames.danger)} />
+          <div className="min-w-0">
+            <h3 id="action-error-title" className="text-base font-semibold">
+              {title}
+            </h3>
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm text-muted-foreground">{message}</p>
+          </div>
+        </div>
+        <div className="flex justify-end border-t border-border px-5 py-4">
+          <Button type="button" size="sm" onClick={onClose}>
+            Close
           </Button>
         </div>
       </div>

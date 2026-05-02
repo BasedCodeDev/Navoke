@@ -167,6 +167,14 @@ export class ApiServer {
       }
     });
 
+    app.post("/api/runs/:id/pause", (req, res, next) => {
+      try {
+        res.json(this.options.runner.pause(req.params.id));
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.post("/api/runs/:id/resume", (req, res, next) => {
       try {
         res.json(this.options.runner.resume(req.params.id));
@@ -316,6 +324,15 @@ export class ApiServer {
           return;
         }
         res.json(task);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.get("/api/extension/tasks/:id/control", (req, res, next) => {
+      try {
+        const clientId = String(req.query.clientId ?? "");
+        res.json(this.options.extensionBridge.taskControl(req.params.id, clientId));
       } catch (error) {
         next(error);
       }

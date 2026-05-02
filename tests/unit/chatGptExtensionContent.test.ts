@@ -116,7 +116,17 @@ function hasAncestor(element: MockElement, selector: string): boolean {
   return false;
 }
 
-function loadContentScript(elements: MockElement[]) {
+function loadContentScript(
+  elements: MockElement[],
+  options: {
+    fetch?: (input: string, init?: { method?: string; body?: string; headers?: Record<string, string> }) => Promise<{
+      ok: boolean;
+      status: number;
+      statusText?: string;
+      text(): Promise<string>;
+    }>;
+  } = {}
+) {
   const testDir = path.dirname(fileURLToPath(import.meta.url));
   const contentPath = path.resolve(testDir, "../../extension/chatgpt-controller/content.js");
   const source = readFileSync(contentPath, "utf8").replace(/\nvoid pollLoop\(\);\s*$/, "\n");
@@ -147,6 +157,7 @@ function loadContentScript(elements: MockElement[]) {
     URLSearchParams,
     HTMLImageElement: MockImageElement,
     document,
+    fetch: options.fetch,
     getComputedStyle: (element: MockElement) => ({
       visibility: element.visible ? "visible" : "hidden",
       display: element.visible ? "block" : "none"
@@ -161,10 +172,17 @@ function loadContentScript(elements: MockElement[]) {
     collectChatGptSubmitReadyState: (selectors: Record<string, string>) => { stopButtonVisible: boolean; stopButtonLabel: string | null };
     evaluateChatGptSubmitReadyState: (state: unknown) => { satisfied: boolean; reason: string };
     collectNewOutputImageCandidates: (
-      beforeState: { assistantCount: number; articleCount: number; imageFingerprints: Set<string>; outputCandidateCount?: number },
+      beforeState: {
+        assistantCount: number;
+        articleCount: number;
+        imageFingerprints: Set<string>;
+        outputCandidateCount?: number;
+        generatedOutputCandidateCount?: number;
+      },
       selectors: Record<string, string>
     ) => MockImageElement[];
     selectSingleOutputImage: (images: MockImageElement[], subject: { name: string }) => MockImageElement;
+    runChatGptSubjectTask: (task: unknown) => Promise<void>;
   };
 }
 
@@ -245,12 +263,31 @@ describe("ChatGPT extension content predicates", () => {
         assistantCount: 1,
         articleCount: 0,
         imageFingerprints: new Set(["https://chatgpt.test/old.png|1024x1024"]),
-        outputCandidateCount: 1
+        outputCandidateCount: 1,
+        generatedOutputCandidateCount: 1
       },
       {}
     );
 
     expect(candidates).toEqual([newImage]);
+  });
+
+  it("detects a generated output when the fallback candidate count is unchanged", () => {
+    const generatedImage = mockImage("https://chatgpt.test/generated.png", { alt: "Generated image" });
+    const content = loadContentScript([mockElement("main", {}, { children: [generatedImage] })]);
+
+    const candidates = content.collectNewOutputImageCandidates(
+      {
+        assistantCount: 0,
+        articleCount: 0,
+        imageFingerprints: new Set(["blob:https://chatgpt.test/subject-preview|1024x1024"]),
+        outputCandidateCount: 1,
+        generatedOutputCandidateCount: 0
+      },
+      {}
+    );
+
+    expect(candidates).toEqual([generatedImage]);
   });
 
   it("does not treat a volatile prior output URL as a current output candidate", () => {
@@ -264,12 +301,32 @@ describe("ChatGPT extension content predicates", () => {
         assistantCount: 1,
         articleCount: 0,
         imageFingerprints: new Set(["https://chatgpt.test/old-original.png|1024x1024"]),
-        outputCandidateCount: 1
+        outputCandidateCount: 1,
+        generatedOutputCandidateCount: 1
       },
       {}
     );
 
     expect(candidates).toEqual([newImage]);
+  });
+
+  it("does not treat a re-signed prior generated image as current when no generated image was appended", () => {
+    const oldImageWithNewSignedUrl = mockImage("https://chatgpt.test/old-resigned.png", { alt: "Generated image" });
+    const broadAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImageWithNewSignedUrl] });
+    const content = loadContentScript([mockElement("main", {}, { children: [broadAssistant] })]);
+
+    const candidates = content.collectNewOutputImageCandidates(
+      {
+        assistantCount: 1,
+        articleCount: 0,
+        imageFingerprints: new Set(["https://chatgpt.test/old-original.png|1024x1024"]),
+        outputCandidateCount: 1,
+        generatedOutputCandidateCount: 1
+      },
+      {}
+    );
+
+    expect(candidates).toEqual([]);
   });
 
   it("excludes uploaded prompt images from output candidates", () => {
@@ -324,12 +381,126 @@ describe("ChatGPT extension content predicates", () => {
         assistantCount: 1,
         articleCount: 0,
         imageFingerprints: new Set(["https://chatgpt.test/old.png|1024x1024"]),
-        outputCandidateCount: 1
+        outputCandidateCount: 1,
+        generatedOutputCandidateCount: 1
       },
       {}
     );
 
     expect(candidates).toEqual([firstNewImage, secondNewImage]);
     expect(() => content.selectSingleOutputImage(candidates, { name: "subject.png" })).toThrow("exactly one result per subject");
+  });
+
+  it("captures an existing output without uploading or submitting in capture-existing mode", async () => {
+    const outputImage = mockImage("data:image/png;base64,b3V0cHV0", { alt: "Generated image" });
+    const requests: Array<{ url: string; body?: string }> = [];
+    const content = loadContentScript([mockElement("main", {}, { children: [outputImage] })], {
+      fetch: async (url, init) => {
+        requests.push({ url, body: init?.body });
+        return {
+          ok: true,
+          status: 200,
+          text: async () => "{}"
+        };
+      }
+    });
+
+    await content.runChatGptSubjectTask({
+      id: "task-1",
+      kind: "chatgpt-image-transform",
+      phase: "subject",
+      protocolVersion: 9,
+      runId: "run-1",
+      subjectMode: "capture-existing",
+      subjectImage: { index: 0, name: "subject.png", mimeType: "image/png", url: "/unused" },
+      subjectInstruction: "",
+      subjectBaseline: {
+        assistantCount: 0,
+        assistantText: "",
+        articleCount: 0,
+        bodyText: "",
+        imageFingerprints: [],
+        outputCandidateCount: 0,
+        generatedOutputCandidateCount: 0
+      },
+      selectors: {}
+    });
+
+    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/images/"))).toBe(false);
+    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/outputs"))).toBe(true);
+    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/complete"))).toBe(true);
+  });
+
+  it("captures an existing generated output when a subject preview polluted the fallback baseline count", async () => {
+    const outputImage = mockImage("data:image/png;base64,b3V0cHV0", { alt: "Generated image" });
+    const requests: Array<{ url: string; body?: string }> = [];
+    const content = loadContentScript([mockElement("main", {}, { children: [outputImage] })], {
+      fetch: async (url, init) => {
+        requests.push({ url, body: init?.body });
+        return {
+          ok: true,
+          status: 200,
+          text: async () => "{}"
+        };
+      }
+    });
+
+    await content.runChatGptSubjectTask({
+      id: "task-1",
+      kind: "chatgpt-image-transform",
+      phase: "subject",
+      protocolVersion: 9,
+      runId: "run-1",
+      subjectMode: "capture-existing",
+      subjectImage: { index: 0, name: "subject.png", mimeType: "image/png", url: "/unused" },
+      subjectInstruction: "",
+      subjectBaseline: {
+        assistantCount: 0,
+        assistantText: "",
+        articleCount: 0,
+        bodyText: "",
+        imageFingerprints: ["blob:https://chatgpt.test/subject-preview|1024x1024"],
+        outputCandidateCount: 1,
+        generatedOutputCandidateCount: 0
+      },
+      selectors: {}
+    });
+
+    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/images/"))).toBe(false);
+    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/outputs"))).toBe(true);
+    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/complete"))).toBe(true);
+  });
+
+  it("can capture the latest visible output in capture-existing mode without a saved baseline", async () => {
+    const oldImage = mockImage("data:image/png;base64,b2xk", { alt: "Generated image" });
+    const newImage = mockImage("data:image/png;base64,bmV3", { alt: "Generated image" });
+    const oldAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImage] });
+    const newAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [newImage] });
+    const requests: Array<{ url: string; body?: string }> = [];
+    const content = loadContentScript([mockElement("main", {}, { children: [oldAssistant, newAssistant] })], {
+      fetch: async (url, init) => {
+        requests.push({ url, body: init?.body });
+        return {
+          ok: true,
+          status: 200,
+          text: async () => "{}"
+        };
+      }
+    });
+
+    await content.runChatGptSubjectTask({
+      id: "task-2",
+      kind: "chatgpt-image-transform",
+      phase: "subject",
+      protocolVersion: 9,
+      runId: "run-1",
+      subjectMode: "capture-existing",
+      subjectImage: { index: 0, name: "subject.png", mimeType: "image/png", url: "/unused" },
+      subjectInstruction: "",
+      selectors: {}
+    });
+
+    const outputRequest = requests.find((request) => request.url.includes("/api/extension/tasks/task-2/outputs"));
+    expect(outputRequest?.body).toContain("bmV3");
   });
 });

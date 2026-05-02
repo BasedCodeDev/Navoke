@@ -25,10 +25,12 @@ interface QueuedRun {
   runId: string;
   workflowId: string;
   input: unknown;
+  previousOutput?: unknown | null;
 }
 
 interface RunningRun {
   controller: AbortController;
+  pauseRequested?: boolean;
   resume?: () => void;
 }
 
@@ -119,12 +121,14 @@ export class LocalWorkflowRunner {
     return existing;
   }
 
-  resume(runId: string): RunRecord {
+  pause(runId: string): RunRecord {
     const running = this.running.get(runId);
-    if (running?.resume) {
-      running.resume();
-      running.resume = undefined;
-      const run = this.store.updateRun(runId, { status: "running", currentStep: "Manual step completed" });
+    if (running) {
+      running.pauseRequested = true;
+      const run = this.store.updateRun(runId, {
+        status: running.resume ? "waiting_manual" : "pausing",
+        currentStep: running.resume ? "Waiting for resume" : "Pause requested. Waiting for a safe checkpoint."
+      });
       this.eventBus.publish({ kind: "run-updated", runId });
       return run;
     }
@@ -134,11 +138,72 @@ export class LocalWorkflowRunner {
     return existing;
   }
 
+  resume(runId: string): RunRecord {
+    const running = this.running.get(runId);
+    if (running?.resume) {
+      running.pauseRequested = false;
+      running.resume();
+      running.resume = undefined;
+      const run = this.store.updateRun(runId, { status: "running", currentStep: "Manual step completed" });
+      this.eventBus.publish({ kind: "run-updated", runId });
+      return run;
+    }
+
+    if (running) {
+      const existing = this.store.getRun(runId);
+      if (!existing) throw new Error(`Run not found: ${runId}`);
+      return existing;
+    }
+
+    if (this.queue.some((entry) => entry.runId === runId)) {
+      const existing = this.store.getRun(runId);
+      if (!existing) throw new Error(`Run not found: ${runId}`);
+      return existing;
+    }
+
+    const existing = this.store.getRun(runId);
+    if (!existing) throw new Error(`Run not found: ${runId}`);
+    if (existing.status !== "failed") return existing;
+
+    const workflow = this.workflows.get(existing.workflowId);
+    if (!workflow) throw new Error(`Unknown workflow: ${existing.workflowId}`);
+    if (!workflow.canResumeFailedRun?.(existing)) {
+      throw new Error("This failed run is not recoverable. Create a new run instead.");
+    }
+
+    const parsed = workflow.inputSchema.safeParse(existing.input);
+    if (!parsed.success) {
+      throw new Error(`This failed run has invalid stored input and cannot be resumed: ${parsed.error.message}`);
+    }
+
+    const event = this.store.addEvent({
+      runId,
+      type: "run.resume_requested",
+      message: "Resume requested for failed run",
+      data: { previousStatus: existing.status, previousError: existing.error }
+    });
+    this.eventBus.publish({ kind: "event", event });
+    const run = this.store.updateRun(runId, {
+      status: "queued",
+      currentStep: "Resume queued",
+      error: null
+    });
+    this.queue.push({
+      runId,
+      workflowId: workflow.manifest.id,
+      input: parsed.data,
+      previousOutput: existing.output
+    });
+    this.eventBus.publish({ kind: "run-updated", runId });
+    void this.drain();
+    return run;
+  }
+
   async deleteRun(runId: string): Promise<void> {
     const existing = this.store.getRun(runId);
     if (!existing) throw new Error(`Run not found: ${runId}`);
 
-    if (["queued", "running", "waiting_manual"].includes(existing.status)) {
+    if (["queued", "running", "pausing", "waiting_manual"].includes(existing.status)) {
       this.cancel(runId);
     }
 
@@ -230,7 +295,7 @@ export class LocalWorkflowRunner {
     this.store.updateRun(entry.runId, { status: "running", currentStep: "Starting", progress: 1, error: null });
     this.eventBus.publish({ kind: "run-updated", runId: entry.runId });
 
-    const ctx = this.createContext(entry.runId, controller);
+    const ctx = this.createContext(entry, controller);
     try {
       await ctx.event("run.started", `Started ${workflow.manifest.title}`);
       const output = await workflow.run(entry.input, ctx);
@@ -267,7 +332,8 @@ export class LocalWorkflowRunner {
     }
   }
 
-  private createContext(runId: string, controller: AbortController): WorkflowContext {
+  private createContext(entry: QueuedRun, controller: AbortController): WorkflowContext {
+    const runId = entry.runId;
     const store = this.store;
     const eventBus = this.eventBus;
     const getRunning = () => this.running.get(runId);
@@ -284,9 +350,11 @@ export class LocalWorkflowRunner {
       inputDir,
       artifactDir,
       signal: controller.signal,
+      previousOutput: entry.previousOutput ?? null,
       async step(message, progress, data) {
+        const running = getRunning();
         store.updateRun(runId, {
-          status: "running",
+          status: running?.pauseRequested && !running.resume ? "pausing" : "running",
           currentStep: message,
           progress: progress ?? store.getRun(runId)?.progress ?? 0
         });
@@ -297,6 +365,18 @@ export class LocalWorkflowRunner {
       async event(type, message, data) {
         const event = store.addEvent({ runId, type, message, data });
         eventBus.publish({ kind: "event", event });
+      },
+      async updateOutput(output) {
+        store.updateRun(runId, { output });
+        eventBus.publish({ kind: "run-updated", runId });
+      },
+      isPauseRequested() {
+        return Boolean(getRunning()?.pauseRequested);
+      },
+      async pauseIfRequested(message, data) {
+        const running = getRunning();
+        if (!running?.pauseRequested) return;
+        await this.waitForManualAction(message, data);
       },
       async addArtifact(input): Promise<ArtifactRecord> {
         const artifact = store.addArtifact({

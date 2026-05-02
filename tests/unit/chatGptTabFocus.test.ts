@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunRecord, SystemInfo } from "../../src/renderer/lib/api";
-import { resolveChatGptFocusTarget } from "../../src/renderer/lib/chatGptTabFocus";
+import { isRecoverableFailedChatGptRun, resolveChatGptFocusTarget } from "../../src/renderer/lib/chatGptTabFocus";
 
 type ExtensionClient = SystemInfo["extension"]["connectedClients"][number];
 
@@ -27,8 +27,8 @@ function client(input: Partial<ExtensionClient> & { id: string }): ExtensionClie
     url: input.url ?? "https://chatgpt.com/",
     title: input.title ?? "ChatGPT",
     status: input.status ?? "ready",
-    protocolVersion: input.protocolVersion ?? 7,
-    extensionVersion: input.extensionVersion ?? "0.7.0",
+    protocolVersion: input.protocolVersion ?? 8,
+    extensionVersion: input.extensionVersion ?? "0.8.0",
     routingToken: input.routingToken,
     compatible: input.compatible ?? true,
     incompatibilityReason: input.incompatibilityReason,
@@ -149,5 +149,28 @@ describe("ChatGPT tab focus target resolver", () => {
       clientId: null,
       disabledReason: "Reload the extension."
     });
+  });
+
+  it("identifies recoverable failed ChatGPT runs for the Run Details Resume action", () => {
+    const failedWithUrl = {
+      ...chatGptRun({ chatGptTab: { mode: "existing", clientId: "tab-1", url: "https://chatgpt.com/c/abc" } }),
+      status: "failed" as const,
+      error: "App exited before this run finished."
+    };
+    const failedWithCheckpoint = {
+      ...chatGptRun({ chatGptTab: { mode: "existing", clientId: "tab-1" } }),
+      status: "failed" as const,
+      output: {
+        artifactIds: [],
+        summary: "Checkpoint",
+        checkpoint: { setupCompleted: true, completedSubjectIndexes: [], outputMappings: [] }
+      }
+    };
+
+    expect(isRecoverableFailedChatGptRun(failedWithUrl)).toBe(true);
+    expect(isRecoverableFailedChatGptRun(failedWithCheckpoint)).toBe(true);
+    expect(isRecoverableFailedChatGptRun({ ...failedWithUrl, workflowId: "demo.echo" })).toBe(false);
+    expect(isRecoverableFailedChatGptRun({ ...failedWithUrl, status: "completed" })).toBe(false);
+    expect(isRecoverableFailedChatGptRun({ ...failedWithUrl, input: { chatGptTab: { mode: "any" } }, output: null })).toBe(false);
   });
 });

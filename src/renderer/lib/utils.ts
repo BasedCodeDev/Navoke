@@ -19,6 +19,7 @@ export function statusTone(status: string): string {
       return toneClassNames.success;
     case "running":
       return toneClassNames.info;
+    case "pausing":
     case "waiting_manual":
       return toneClassNames.warning;
     case "failed":

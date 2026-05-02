@@ -90,6 +90,15 @@ export function resolveClientById(clientId: string, clients: ExtensionClient[]):
   return clientToFocusTarget(client);
 }
 
+export function isRecoverableFailedChatGptRun(run: RunRecord | undefined): boolean {
+  if (!run || run.status !== "failed" || run.workflowId !== "chatgpt.extension-image-transform") return false;
+  const target = readChatGptTabTarget(run.input);
+  const page = readChatGptPage(run.output);
+  if (page) return true;
+  if (hasChatGptCheckpoint(run.output)) return true;
+  return Boolean(target?.url);
+}
+
 export function readChatGptTabTarget(input: unknown): ChatGptTabTargetInput | null {
   if (!input || typeof input !== "object") return null;
   const chatGptTab = (input as Record<string, unknown>).chatGptTab;
@@ -129,6 +138,12 @@ export function readChatGptPage(output: unknown): ChatGptPage | null {
     routingToken: typeof record.routingToken === "string" ? record.routingToken : undefined,
     capturedAt: typeof record.capturedAt === "string" ? record.capturedAt : undefined
   };
+}
+
+function hasChatGptCheckpoint(output: unknown): boolean {
+  if (!output || typeof output !== "object") return false;
+  const checkpoint = (output as Record<string, unknown>).checkpoint;
+  return Boolean(checkpoint && typeof checkpoint === "object");
 }
 
 function clientToFocusTarget(client: ExtensionClient): ChatGptFocusTarget {

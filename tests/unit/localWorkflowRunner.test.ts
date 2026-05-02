@@ -59,7 +59,8 @@ describe("LocalWorkflowRunner", () => {
       workflowInput: { message: "test" }
     });
 
-    expect(run.runDir).toContain("Runner test - ");
+    expect(path.basename(run.runDir!)).toMatch(/^Runner-test-[\w]{8}$/);
+    expect(path.basename(run.runDir!)).not.toContain(" ");
     expect(fs.existsSync(path.join(run.runDir!, "prompts.json"))).toBe(true);
 
     await waitFor(() => store.getRun(run.id)?.status === "completed");
@@ -163,6 +164,192 @@ describe("LocalWorkflowRunner", () => {
     store.close();
   });
 
+  it("pauses at a safe checkpoint and resumes the active run", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    let releaseCheckpoint: (() => void) | undefined;
+    let pauseObservedAtCheckpoint = false;
+    const workflow: WorkflowDefinition<{ message: string }, { ok: boolean }> = {
+      manifest: {
+        id: "test.pause",
+        title: "Pause Workflow",
+        description: "Runtime pause test workflow",
+        category: "utility",
+        version: "0.0.0",
+        concurrency: 1,
+        inputFields: [],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({ message: z.string() }),
+      outputSchema: z.object({ ok: z.boolean() }),
+      async run(_input, ctx) {
+        await ctx.step("Before checkpoint", 10);
+        await new Promise<void>((resolve) => {
+          releaseCheckpoint = resolve;
+        });
+        pauseObservedAtCheckpoint = ctx.isPauseRequested();
+        await ctx.pauseIfRequested("Paused at safe checkpoint", { url: "https://chatgpt.com/c/test" });
+        await ctx.step("After resume", 80);
+        return { ok: true };
+      }
+    };
+    const runner = new LocalWorkflowRunner(new Map([[workflow.manifest.id, workflow]]), store, paths, new RuntimeEventBus());
+
+    const run = runner.enqueue({ workflowId: "test.pause", name: "Pause run", workflowInput: { message: "run" } });
+    await waitFor(() => store.getRun(run.id)?.currentStep === "Before checkpoint");
+
+    const pausing = runner.pause(run.id);
+    expect(pausing.status).toBe("pausing");
+    releaseCheckpoint?.();
+    await waitFor(() => store.getRun(run.id)?.status === "waiting_manual");
+
+    expect(store.getRun(run.id)).toMatchObject({
+      currentStep: "Paused at safe checkpoint",
+      status: "waiting_manual"
+    });
+    expect(pauseObservedAtCheckpoint).toBe(true);
+
+    runner.resume(run.id);
+    await waitFor(() => store.getRun(run.id)?.status === "completed");
+
+    expect(store.getRun(run.id)?.output).toEqual({ ok: true });
+    store.close();
+  });
+
+  it("checkpoint pause helper is a no-op when no pause was requested", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const workflow: WorkflowDefinition<{ message: string }, { ok: boolean }> = {
+      manifest: {
+        id: "test.no-pause",
+        title: "No Pause Workflow",
+        description: "Runtime pause helper test workflow",
+        category: "utility",
+        version: "0.0.0",
+        concurrency: 1,
+        inputFields: [],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({ message: z.string() }),
+      outputSchema: z.object({ ok: z.boolean() }),
+      async run(_input, ctx) {
+        expect(ctx.isPauseRequested()).toBe(false);
+        await ctx.pauseIfRequested("Should not pause");
+        return { ok: true };
+      }
+    };
+    const runner = new LocalWorkflowRunner(new Map([[workflow.manifest.id, workflow]]), store, paths, new RuntimeEventBus());
+
+    const run = runner.enqueue({ workflowId: "test.no-pause", name: "No pause run", workflowInput: { message: "run" } });
+    await waitFor(() => store.getRun(run.id)?.status === "completed");
+
+    expect(store.getRun(run.id)?.output).toEqual({ ok: true });
+    store.close();
+  });
+
+  it("requeues a recoverable failed run with the same run id, run directory, and previous output", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const runDir = path.join(paths.runRootDir, "recoverable-failed-run");
+    let observedPreviousOutput: unknown;
+    const workflow: WorkflowDefinition<{ message: string }, { ok: boolean; previousOutput?: unknown }> = {
+      manifest: {
+        id: "test.recoverable",
+        title: "Recoverable Workflow",
+        description: "Runtime failed resume test workflow",
+        category: "utility",
+        version: "0.0.0",
+        concurrency: 1,
+        inputFields: [],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({ message: z.string() }),
+      outputSchema: z.object({ ok: z.boolean(), previousOutput: z.unknown() }),
+      canResumeFailedRun: (run) => run.error === "App exited before this run finished.",
+      async run(input, ctx) {
+        expect(input.message).toBe("resume me");
+        expect(ctx.runDir).toBe(runDir);
+        observedPreviousOutput = ctx.previousOutput;
+        return { ok: true, previousOutput: ctx.previousOutput };
+      }
+    };
+    const runner = new LocalWorkflowRunner(new Map([[workflow.manifest.id, workflow]]), store, paths, new RuntimeEventBus());
+    const run = store.createRun({
+      id: "failed-run-1",
+      workflowId: workflow.manifest.id,
+      name: "Failed run",
+      runDir,
+      status: "failed",
+      input: { message: "resume me" }
+    });
+    store.updateRun(run.id, {
+      output: { checkpoint: { completed: false } },
+      error: "App exited before this run finished."
+    });
+
+    const resumed = runner.resume(run.id);
+    expect(resumed).toMatchObject({ id: run.id, status: "queued", runDir });
+    await waitFor(() => store.getRun(run.id)?.status === "completed");
+
+    expect(observedPreviousOutput).toEqual({ checkpoint: { completed: false } });
+    expect(store.getRun(run.id)).toMatchObject({
+      id: run.id,
+      runDir,
+      output: { ok: true, previousOutput: { checkpoint: { completed: false } } },
+      error: null
+    });
+    expect(store.listEvents(run.id).some((event) => event.type === "run.resume_requested")).toBe(true);
+    store.close();
+  });
+
+  it("rejects failed-run resume when the workflow does not mark it recoverable", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const workflow: WorkflowDefinition<{ message: string }, { ok: boolean }> = {
+      manifest: {
+        id: "test.unrecoverable",
+        title: "Unrecoverable Workflow",
+        description: "Runtime failed resume rejection test workflow",
+        category: "utility",
+        version: "0.0.0",
+        concurrency: 1,
+        inputFields: [],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({ message: z.string() }),
+      outputSchema: z.object({ ok: z.boolean() }),
+      canResumeFailedRun: () => false,
+      async run() {
+        return { ok: true };
+      }
+    };
+    const runner = new LocalWorkflowRunner(new Map([[workflow.manifest.id, workflow]]), store, paths, new RuntimeEventBus());
+    const run = store.createRun({
+      id: "failed-run-2",
+      workflowId: workflow.manifest.id,
+      name: "Failed run",
+      runDir: path.join(paths.runRootDir, "unrecoverable-failed-run"),
+      status: "failed",
+      input: { message: "do not resume" }
+    });
+
+    expect(() => runner.resume(run.id)).toThrow("not recoverable");
+    expect(store.getRun(run.id)?.status).toBe("failed");
+    store.close();
+  });
+
   it("copies file-list inputs into the run folder and records prompts metadata", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
     tempDirs.push(dir);
@@ -221,6 +408,8 @@ describe("LocalWorkflowRunner", () => {
 
     await waitFor(() => store.getRun(run.id)?.status === "completed");
 
+    expect(path.basename(run.runDir!)).toMatch(/^Prompt-Copy-Test-[\w]{8}$/);
+    expect(path.basename(run.runDir!)).not.toContain(" ");
     const storedInput = store.getRun(run.id)?.input as { subjectImages: string[] };
     expect(storedInput.subjectImages[0]).toBe(path.join(run.runDir!, "inputs", "subjectImages", "01-subject.png"));
     const promptsPath = path.join(run.runDir!, "prompts.json");

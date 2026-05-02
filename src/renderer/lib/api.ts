@@ -28,7 +28,7 @@ export interface RunRecord {
   workflowId: string;
   name: string;
   runDir: string | null;
-  status: "queued" | "running" | "waiting_manual" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "pausing" | "waiting_manual" | "completed" | "failed" | "cancelled";
   currentStep: string | null;
   progress: number;
   input: unknown;
@@ -311,6 +311,10 @@ export async function createRun(input: { workflowId: string; name?: string; inpu
 
 export async function cancelRun(id: string): Promise<RunRecord> {
   return apiFetch(`/api/runs/${id}/cancel`, { method: "POST", body: "{}" });
+}
+
+export async function pauseRun(id: string): Promise<RunRecord> {
+  return apiFetch(`/api/runs/${id}/pause`, { method: "POST", body: "{}" });
 }
 
 export async function resumeRun(id: string): Promise<RunRecord> {

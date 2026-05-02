@@ -44,12 +44,13 @@ export function getRunArtifactDir(paths: RuntimePaths, runId: string): string {
 
 export function safeRunFolderName(name: string): string {
   const cleaned = name
-    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "_")
-    .replace(/\s+/g, " ")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
     .trim()
-    .replace(/^[. ]+/g, "")
-    .replace(/[. ]+$/g, "")
+    .replace(/^[.-]+/g, "")
+    .replace(/[.-]+$/g, "")
     .slice(0, 80)
+    .replace(/[.-]+$/g, "")
     .trim();
   return cleaned || "run";
 }
@@ -60,7 +61,7 @@ export function shortRunId(runId: string): string {
 }
 
 export function getRunDir(paths: RuntimePaths, runName: string, runId: string): string {
-  return path.join(paths.runRootDir, `${safeRunFolderName(runName)} - ${shortRunId(runId)}`);
+  return path.join(paths.runRootDir, `${safeRunFolderName(runName)}-${shortRunId(runId)}`);
 }
 
 export function getRunInputDir(runDir: string): string {

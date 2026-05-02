@@ -1,5 +1,5 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:39201";
-const CHATGPT_EXTENSION_PROTOCOL_VERSION = 7;
+const CHATGPT_EXTENSION_PROTOCOL_VERSION = 9;
 const EXTENSION_VERSION = chrome.runtime?.getManifest?.().version || "unknown";
 const CLIENT_ID_STORAGE_KEY = "basedBlinkClientId";
 const ROUTING_TOKEN_STORAGE_KEY = "basedBlinkRoutingToken";
@@ -359,18 +359,66 @@ function validateTaskPayload(task) {
   if (task.kind !== "chatgpt-image-transform") {
     throw protocolError(`Unsupported ChatGPT extension task kind: ${task.kind || "unknown"}.`);
   }
+  if (task.phase !== "setup" && task.phase !== "subject") {
+    throw protocolError(`Unsupported ChatGPT extension task phase: ${task.phase || "unknown"}.`);
+  }
   if (typeof task.id !== "string" || task.id.length === 0) {
     throw protocolError("Invalid ChatGPT extension task payload: task id is missing.");
   }
-  if (typeof task.masterPrompt !== "string" || task.masterPrompt.length === 0) {
-    throw protocolError("Invalid ChatGPT extension task payload: masterPrompt is missing.");
+  const base = {
+    ...task,
+    selectors: task.selectors && typeof task.selectors === "object" ? task.selectors : {},
+    subjectInstruction: typeof task.subjectInstruction === "string" ? task.subjectInstruction : "",
+    subjectMode: task.subjectMode === "capture-existing" ? "capture-existing" : "submit-and-capture"
+  };
+  if (task.phase === "setup") {
+    if (typeof task.masterPrompt !== "string" || task.masterPrompt.length === 0) {
+      throw protocolError("Invalid ChatGPT extension setup task payload: masterPrompt is missing.");
+    }
+    return {
+      ...base,
+      masterPrompt: task.masterPrompt,
+      referenceImages: validateImageList(task.referenceImages || [], "reference")
+    };
   }
   return {
-    ...task,
-    referenceImages: validateImageList(task.referenceImages, "reference"),
-    subjectImages: validateImageList(task.subjectImages, "subject"),
-    selectors: task.selectors && typeof task.selectors === "object" ? task.selectors : {},
-    subjectInstruction: typeof task.subjectInstruction === "string" ? task.subjectInstruction : ""
+    ...base,
+    subjectImage: validateImagePayload(task.subjectImage, "subject", task.subjectImage?.index ?? 0)
+  };
+}
+
+async function readTaskControl(task) {
+  const control = await apiFetch(
+    `/api/extension/tasks/${task.id}/control?clientId=${encodeURIComponent(clientId)}`
+  );
+  if (!control || control.protocolVersion !== CHATGPT_EXTENSION_PROTOCOL_VERSION || control.kind !== "task-control") {
+    throw protocolError("Task control extension protocol mismatch.");
+  }
+  if (control.cancelled || control.status === "cancelled") {
+    throw new Error("Task cancelled");
+  }
+  return control;
+}
+
+async function isTaskPauseRequested(task) {
+  return Boolean((await readTaskControl(task)).pauseRequested);
+}
+
+async function reportPausePending(task, selectors, beforeState, subject, reason) {
+  if (task.__pausePendingReported) return;
+  task.__pausePendingReported = true;
+  await postTaskEvent(task.id, "extension.pause.pending", "Pause requested; waiting until ChatGPT is idle", {
+    reason,
+    subjectIndex: subject?.index,
+    subjectName: subject?.name,
+    diagnostics: collectPauseDiagnostics(selectors, beforeState)
+  });
+}
+
+function pageMetadata() {
+  return {
+    url: location.href,
+    title: document.title
   };
 }
 
@@ -526,14 +574,28 @@ function collectOutputImageCandidates(selectors) {
   return filterOutputImageCandidates(collectImages(selectors.outputImage));
 }
 
+function collectGeneratedOutputImageCandidates(selectors) {
+  return filterGeneratedOutputImageCandidates(collectImages(selectors.outputImage));
+}
+
 function outputCandidateCountBefore(beforeState) {
   return Number.isInteger(beforeState.outputCandidateCount) ? Math.max(0, beforeState.outputCandidateCount) : null;
+}
+
+function generatedOutputCandidateCountBefore(beforeState) {
+  return Number.isInteger(beforeState.generatedOutputCandidateCount) ? Math.max(0, beforeState.generatedOutputCandidateCount) : null;
 }
 
 function collectAppendedOutputImageCandidates(beforeState, selectors) {
   const previousCount = outputCandidateCountBefore(beforeState);
   if (previousCount === null) return [];
   return collectOutputImageCandidates(selectors).slice(previousCount);
+}
+
+function collectAppendedGeneratedOutputImageCandidates(beforeState, selectors) {
+  const previousCount = generatedOutputCandidateCountBefore(beforeState);
+  if (previousCount === null) return [];
+  return collectGeneratedOutputImageCandidates(selectors).slice(previousCount);
 }
 
 function collectNewOutputImageCandidates(beforeState, selectors) {
@@ -551,11 +613,33 @@ function collectNewOutputImageCandidates(beforeState, selectors) {
     if (articleImages.length > 0) return articleImages;
   }
 
+  const appendedGeneratedImages = collectAppendedGeneratedOutputImageCandidates(beforeState, selectors);
+  if (appendedGeneratedImages.length > 0) return appendedGeneratedImages;
+
   const appendedImages = collectAppendedOutputImageCandidates(beforeState, selectors);
   if (appendedImages.length > 0) return appendedImages;
 
   if (outputCandidateCountBefore(beforeState) !== null) return [];
   return filterOutputImageCandidates(collectImages(selectors.outputImage).filter((image) => !beforeState.imageFingerprints.has(imageFingerprint(image))));
+}
+
+function collectLatestOutputImageCandidates(selectors) {
+  const assistantElements = collectResponseElements("[data-message-author-role='assistant']");
+  for (const scope of assistantElements.slice().reverse()) {
+    const candidates = filterOutputImageCandidates(collectImagesFromRoot(scope, selectors.outputImage));
+    if (candidates.length > 0) return candidates;
+  }
+
+  const articleElements = collectResponseElements("main article");
+  for (const scope of articleElements.slice().reverse()) {
+    const candidates = filterOutputImageCandidates(collectImagesFromRoot(scope, selectors.outputImage));
+    if (candidates.length > 0) return candidates;
+  }
+
+  const generatedCandidates = collectGeneratedOutputImageCandidates(selectors);
+  if (generatedCandidates.length > 0) return [generatedCandidates[generatedCandidates.length - 1]];
+  const candidates = collectOutputImageCandidates(selectors);
+  return candidates.length > 0 ? [candidates[candidates.length - 1]] : [];
 }
 
 function normalizedImageLabel(image) {
@@ -581,17 +665,82 @@ function filterOutputImageCandidates(images) {
   return generatedCandidates.length > 0 ? generatedCandidates : candidates;
 }
 
+function filterGeneratedOutputImageCandidates(images) {
+  return dedupeImagesByFingerprint(images).filter((image) => !isUploadedInputImage(image) && isGeneratedOutputImage(image));
+}
+
 function collectResponseState(selectors) {
   const assistantElements = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
   const articleElements = Array.from(document.querySelectorAll("main article"));
   const outputCandidates = collectOutputImageCandidates(selectors);
+  const generatedOutputCandidates = collectGeneratedOutputImageCandidates(selectors);
   return {
     assistantCount: assistantElements.length,
     assistantText: assistantElements.map((element) => element.textContent || "").join("\n").trim(),
     articleCount: articleElements.length,
     bodyText: getBodyText(),
     imageFingerprints: new Set(collectImages(selectors.outputImage).map(imageFingerprint)),
-    outputCandidateCount: outputCandidates.length
+    outputCandidateCount: outputCandidates.length,
+    generatedOutputCandidateCount: generatedOutputCandidates.length
+  };
+}
+
+function serializeResponseState(state) {
+  if (!state || typeof state !== "object") return null;
+  return {
+    assistantCount: Number.isInteger(state.assistantCount) ? state.assistantCount : 0,
+    assistantText: typeof state.assistantText === "string" ? state.assistantText : "",
+    articleCount: Number.isInteger(state.articleCount) ? state.articleCount : 0,
+    bodyText: typeof state.bodyText === "string" ? state.bodyText : "",
+    imageFingerprints: Array.from(state.imageFingerprints instanceof Set ? state.imageFingerprints : []),
+    outputCandidateCount: Number.isInteger(state.outputCandidateCount) ? state.outputCandidateCount : 0,
+    generatedOutputCandidateCount: Number.isInteger(state.generatedOutputCandidateCount) ? state.generatedOutputCandidateCount : null
+  };
+}
+
+function normalizeResponseBaseline(value) {
+  if (!value || typeof value !== "object") return null;
+  const record = value;
+  return {
+    assistantCount: Number.isInteger(record.assistantCount) ? record.assistantCount : 0,
+    assistantText: typeof record.assistantText === "string" ? record.assistantText : "",
+    articleCount: Number.isInteger(record.articleCount) ? record.articleCount : 0,
+    bodyText: typeof record.bodyText === "string" ? record.bodyText : "",
+    imageFingerprints: new Set(Array.isArray(record.imageFingerprints) ? record.imageFingerprints.filter((item) => typeof item === "string") : []),
+    outputCandidateCount: Number.isInteger(record.outputCandidateCount) ? record.outputCandidateCount : 0,
+    generatedOutputCandidateCount: Number.isInteger(record.generatedOutputCandidateCount) ? record.generatedOutputCandidateCount : null
+  };
+}
+
+function collectPauseDiagnostics(selectors, beforeState) {
+  const resolvedSelectors = selectors || {};
+  const submitState = collectChatGptSubmitReadyState(resolvedSelectors);
+  const submitEvaluation = evaluateChatGptSubmitReadyState(submitState);
+  const candidates = beforeState ? collectNewOutputImageCandidates(beforeState, resolvedSelectors) : [];
+  const currentOutputCandidates = collectOutputImageCandidates(resolvedSelectors);
+  const currentGeneratedOutputCandidates = collectGeneratedOutputImageCandidates(resolvedSelectors);
+  return {
+    submit: submitEvaluation,
+    stopButtonVisible: submitState.stopButtonVisible,
+    outputCandidateCount: candidates.length,
+    outputCandidates: candidates.map(describeOutputImageCandidate),
+    currentOutputCandidateCount: currentOutputCandidates.length,
+    currentGeneratedOutputCandidateCount: currentGeneratedOutputCandidates.length,
+    baselineOutputCandidateCount: beforeState ? outputCandidateCountBefore(beforeState) : null,
+    baselineGeneratedOutputCandidateCount: beforeState ? generatedOutputCandidateCountBefore(beforeState) : null
+  };
+}
+
+function buildPausedTaskMetadata(task, reason, beforeState, selectors, subject, extra = {}) {
+  return {
+    ...pageMetadata(),
+    paused: true,
+    pauseReason: reason,
+    subjectIndex: subject?.index,
+    subjectName: subject?.name,
+    subjectBaseline: serializeResponseState(beforeState),
+    captureDiagnostics: collectPauseDiagnostics(selectors || {}, beforeState),
+    ...extra
   };
 }
 
@@ -599,6 +748,7 @@ async function waitForAnyResponse(task, beforeState, selectors) {
   const started = Date.now();
   while (Date.now() - started < 20 * 60 * 1000) {
     assertNotHumanVerification();
+    const control = await readTaskControl(task);
     const state = collectResponseState(selectors);
     const hasNewImage = hasNewImageSignal(beforeState, state);
     const hasAssistantChange =
@@ -608,12 +758,17 @@ async function waitForAnyResponse(task, beforeState, selectors) {
       Date.now() - started > 5_000 && state.assistantCount === 0 && state.articleCount > beforeState.articleCount;
 
     if (hasAssistantChange || hasNewImage || hasFallbackChange) return;
+    if (control.pauseRequested) {
+      await reportPausePending(task, selectors, beforeState, undefined, "Waiting for ChatGPT setup response before pausing.");
+    }
     await delay(1000);
   }
   throw new Error("Timed out waiting for ChatGPT to respond to the setup prompt.");
 }
 
 function hasNewImageSignal(beforeState, state) {
+  const beforeGeneratedCandidateCount = generatedOutputCandidateCountBefore(beforeState);
+  if (beforeGeneratedCandidateCount !== null && state.generatedOutputCandidateCount > beforeGeneratedCandidateCount) return true;
   const beforeCandidateCount = outputCandidateCountBefore(beforeState);
   if (beforeCandidateCount !== null && state.outputCandidateCount > beforeCandidateCount) return true;
   return [...state.imageFingerprints].some((fingerprint) => !beforeState.imageFingerprints.has(fingerprint));
@@ -634,6 +789,7 @@ async function waitForGenerationStarted(task, beforeState, selectors, subject) {
 
   while (Date.now() - started < timeoutMs) {
     assertNotHumanVerification();
+    const control = await readTaskControl(task);
     if (findStopButton(selectors)) {
       return { reason: "stop-button-visible" };
     }
@@ -649,7 +805,33 @@ async function waitForGenerationStarted(task, beforeState, selectors, subject) {
       return { reason: "submit-button-disabled" };
     }
 
+    if (control.pauseRequested && Date.now() - started > 5_000) {
+      return {
+        paused: true,
+        metadata: buildPausedTaskMetadata(
+          task,
+          `Paused before ChatGPT generation visibly started for ${subject.name}. Resume will try to capture the current page output before resubmitting.`,
+          beforeState,
+          selectors,
+          subject
+        )
+      };
+    }
+
     await delay(300);
+  }
+
+  if (await isTaskPauseRequested(task)) {
+    return {
+      paused: true,
+      metadata: buildPausedTaskMetadata(
+        task,
+        `Paused after waiting for ChatGPT generation to start for ${subject.name}. Resume will try to capture the current page output before resubmitting.`,
+        beforeState,
+        selectors,
+        subject
+      )
+    };
   }
 
   throw new Error(`Timed out waiting for ChatGPT generation to start for ${subject.name}.`);
@@ -664,6 +846,7 @@ async function waitForCompletedOutputImages(task, beforeState, selectors, subjec
 
   while (Date.now() - started < timeoutMs) {
     assertNotHumanVerification();
+    const control = await readTaskControl(task);
     const stopVisible = Boolean(findStopButton(selectors));
     const newImages = collectNewOutputImageCandidates(beforeState, selectors);
 
@@ -675,11 +858,46 @@ async function waitForCompletedOutputImages(task, beforeState, selectors, subjec
         lastChangeAt = Date.now();
       }
       if (!stopVisible && Date.now() - lastChangeAt > 3_000) {
-        return newImages;
+        return { images: newImages };
+      }
+    }
+
+    if (control.pauseRequested) {
+      if (stopVisible) {
+        await reportPausePending(
+          task,
+          selectors,
+          beforeState,
+          subject,
+          `Waiting for active ChatGPT generation to finish before pausing ${subject.name}.`
+        );
+      } else if (newImages.length === 0) {
+        return {
+          paused: true,
+          metadata: buildPausedTaskMetadata(
+            task,
+            `Paused after ChatGPT became idle, but no output image was captured for ${subject.name}. Resume will try to capture the current page output before resubmitting.`,
+            beforeState,
+            selectors,
+            subject
+          )
+        };
       }
     }
 
     await delay(stopVisible ? 750 : 1250);
+  }
+  if (await isTaskPauseRequested(task)) {
+    return {
+      paused: true,
+      metadata: buildPausedTaskMetadata(
+        task,
+        `Paused after waiting for a new ChatGPT output image for ${subject.name}. Resume will try to capture the current page output before resubmitting.`,
+        beforeState,
+        selectors,
+        subject
+      )
+    };
   }
   throw new Error(`Timed out waiting for a new ChatGPT output image for ${subject.name}.`);
 }
@@ -1065,12 +1283,100 @@ async function submitComposer(task, selectors, imageOnly) {
 
 async function runChatGptImageTask(task) {
   task = validateTaskPayload(task);
+  if (task.phase === "setup") {
+    await runChatGptSetupTask(task);
+    return;
+  }
+  await runChatGptSubjectTask(task);
+}
+
+async function completeTaskWithPageMetadata(task, metadata = {}) {
+  await apiFetch(`/api/extension/tasks/${task.id}/complete`, {
+    method: "POST",
+    body: JSON.stringify({
+      outputs: [],
+      metadata: {
+        ...pageMetadata(),
+        ...metadata
+      }
+    })
+  });
+}
+
+async function streamSubjectOutput(task, image, subject, metadata = {}) {
+  const output = await imageToOutput(image);
+  await apiFetch(`/api/extension/tasks/${task.id}/outputs`, {
+    method: "POST",
+    body: JSON.stringify({
+      subjectIndex: subject.index,
+      subjectName: subject.name,
+      name: `${subject.name.replace(/\.[^.]+$/, "")}-chatgpt.png`,
+      mimeType: output.mimeType,
+      base64: output.base64,
+      metadata: {
+        url: image.currentSrc || image.src,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        fingerprint: imageFingerprint(image),
+        alt: image.alt || "",
+        ...metadata
+      }
+    })
+  });
+}
+
+async function runCaptureExistingSubjectTask(task) {
+  const selectors = task.selectors || {};
+  const subject = task.subjectImage;
+  assertNotHumanVerification();
+  const baseline = normalizeResponseBaseline(task.subjectBaseline);
+
+  await postTaskEvent(task.id, "extension.subject.capture_existing", `Trying to capture existing output for ${subject.name}`, {
+    subjectIndex: subject.index,
+    subjectName: subject.name,
+    hasBaseline: Boolean(baseline)
+  });
+
+  try {
+    const candidates = baseline
+      ? collectNewOutputImageCandidates(baseline, selectors)
+      : collectLatestOutputImageCandidates(selectors);
+    const image = selectSingleOutputImage(candidates, subject);
+    await streamSubjectOutput(task, image, subject, { captureMode: "capture-existing" });
+    await postTaskEvent(task.id, "extension.subject.completed", `Captured existing output image for ${subject.name}`, {
+      subjectIndex: subject.index,
+      outputCount: 1
+    });
+    await completeTaskWithPageMetadata(task, {
+      captureAttempted: true,
+      captureSucceeded: true,
+      ...(baseline ? { subjectBaseline: serializeResponseState(baseline) } : {})
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await postTaskEvent(task.id, "extension.subject.capture_failed", `Could not capture existing output for ${subject.name}`, {
+      subjectIndex: subject.index,
+      subjectName: subject.name,
+      message,
+      diagnostics: collectPauseDiagnostics(selectors, baseline)
+    });
+    await completeTaskWithPageMetadata(task, {
+      captureAttempted: true,
+      captureSucceeded: false,
+      captureError: message,
+      ...(baseline ? { subjectBaseline: serializeResponseState(baseline) } : {}),
+      captureDiagnostics: collectPauseDiagnostics(selectors, baseline)
+    });
+  }
+}
+
+async function runChatGptSetupTask(task) {
   const selectors = task.selectors || {};
   assertNotHumanVerification();
 
   await postTaskEvent(task.id, "extension.setup", "Preparing ChatGPT setup prompt", {
     referenceCount: task.referenceImages.length,
-    subjectCount: task.subjectImages.length
+    subjectCount: 0
   });
 
   let composer = findComposer(selectors);
@@ -1085,75 +1391,67 @@ async function runChatGptImageTask(task) {
   await postTaskEvent(task.id, "extension.setup.waiting", "Waiting for ChatGPT setup response");
   await waitForAnyResponse(task, setupBefore, selectors);
 
+  await completeTaskWithPageMetadata(task);
+}
+
+async function runChatGptSubjectTask(task) {
+  const selectors = task.selectors || {};
   const subjectInstruction = (task.subjectInstruction || "").trim();
-
-  for (const subject of task.subjectImages) {
-    assertNotHumanVerification();
-    await postTaskEvent(task.id, "extension.subject.started", `Submitting subject ${subject.index + 1} of ${task.subjectImages.length}`, {
-      subjectIndex: subject.index,
-      subjectName: subject.name
-    });
-
-    composer = findComposer(selectors);
-    if (!composer) throw new Error("Could not find ChatGPT composer for subject submission.");
-    await attachImages(task, [subject], selectors, "subject");
-    await delay(1200);
-    const subjectBefore = collectResponseState(selectors);
-
-    if (subjectInstruction) {
-      setComposerText(composer, subjectInstruction);
-    } else {
-      setComposerText(composer, "");
-    }
-
-    await submitComposer(task, selectors, subjectInstruction.length === 0);
-    await postTaskEvent(task.id, "extension.subject.waiting", `Waiting for output image for ${subject.name}`, {
-      subjectIndex: subject.index,
-      subjectName: subject.name
-    });
-
-    const generationStart = await waitForGenerationStarted(task, subjectBefore, selectors, subject);
-    await postTaskEvent(task.id, "extension.subject.generation_started", `Generation started for ${subject.name}`, {
-      subjectIndex: subject.index,
-      subjectName: subject.name,
-      reason: generationStart.reason
-    });
-
-    const images = await waitForCompletedOutputImages(task, subjectBefore, selectors, subject);
-    const image = selectSingleOutputImage(images, subject);
-    const output = await imageToOutput(image);
-    await apiFetch(`/api/extension/tasks/${task.id}/outputs`, {
-      method: "POST",
-      body: JSON.stringify({
-        subjectIndex: subject.index,
-        subjectName: subject.name,
-        name: `${subject.name.replace(/\.[^.]+$/, "")}-chatgpt.png`,
-        mimeType: output.mimeType,
-        base64: output.base64,
-        metadata: {
-          url: image.currentSrc || image.src,
-          naturalWidth: image.naturalWidth,
-          naturalHeight: image.naturalHeight,
-          fingerprint: imageFingerprint(image),
-          alt: image.alt || ""
-        }
-      })
-    });
-    await postTaskEvent(task.id, "extension.subject.completed", `Captured 1 output image for ${subject.name}`, {
-      subjectIndex: subject.index,
-      outputCount: 1
-    });
+  const subject = task.subjectImage;
+  assertNotHumanVerification();
+  if (task.subjectMode === "capture-existing") {
+    await runCaptureExistingSubjectTask(task);
+    return;
   }
 
-  await apiFetch(`/api/extension/tasks/${task.id}/complete`, {
-    method: "POST",
-    body: JSON.stringify({
-      outputs: [],
-      metadata: {
-        url: location.href,
-        title: document.title
-      }
-    })
+  await postTaskEvent(task.id, "extension.subject.started", `Submitting subject ${subject.index + 1}`, {
+    subjectIndex: subject.index,
+    subjectName: subject.name
+  });
+
+  const composer = findComposer(selectors);
+  if (!composer) throw new Error("Could not find ChatGPT composer for subject submission.");
+  await attachImages(task, [subject], selectors, "subject");
+  await delay(1200);
+  const subjectBefore = collectResponseState(selectors);
+
+  if (subjectInstruction) {
+    setComposerText(composer, subjectInstruction);
+  } else {
+    setComposerText(composer, "");
+  }
+
+  await submitComposer(task, selectors, subjectInstruction.length === 0);
+  await postTaskEvent(task.id, "extension.subject.waiting", `Waiting for output image for ${subject.name}`, {
+    subjectIndex: subject.index,
+    subjectName: subject.name
+  });
+
+  const generationStart = await waitForGenerationStarted(task, subjectBefore, selectors, subject);
+  if (generationStart.paused) {
+    await completeTaskWithPageMetadata(task, generationStart.metadata);
+    return;
+  }
+  await postTaskEvent(task.id, "extension.subject.generation_started", `Generation started for ${subject.name}`, {
+    subjectIndex: subject.index,
+    subjectName: subject.name,
+    reason: generationStart.reason
+  });
+
+  const completion = await waitForCompletedOutputImages(task, subjectBefore, selectors, subject);
+  if (completion.paused) {
+    await completeTaskWithPageMetadata(task, completion.metadata);
+    return;
+  }
+  const image = selectSingleOutputImage(completion.images, subject);
+  await streamSubjectOutput(task, image, subject, { captureMode: "submit-and-capture" });
+  await postTaskEvent(task.id, "extension.subject.completed", `Captured 1 output image for ${subject.name}`, {
+    subjectIndex: subject.index,
+    outputCount: 1
+  });
+
+  await completeTaskWithPageMetadata(task, {
+    subjectBaseline: serializeResponseState(subjectBefore)
   });
 }
 

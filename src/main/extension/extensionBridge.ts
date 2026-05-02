@@ -6,7 +6,7 @@ import { inferMimeType } from "../utils/files";
 export type ExtensionTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ExtensionImageGroup = "reference" | "subject";
 
-export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 7;
+export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 9;
 const CLIENT_TTL_MS = 30_000;
 const LAB_COMMAND_LEASE_MS = 60_000;
 const FOCUS_COMMAND_LEASE_MS = 15_000;
@@ -29,12 +29,19 @@ export interface ExtensionClientStatus {
   lastSeenAt: string;
 }
 
+export type ChatGptExtensionTaskPhase = "setup" | "subject";
+export type ChatGptSubjectTaskMode = "submit-and-capture" | "capture-existing";
+
 export interface ChatGptExtensionTaskInput {
   runId: string;
-  masterPrompt: string;
-  referenceImagePaths: string[];
-  subjectImagePaths: string[];
+  phase: ChatGptExtensionTaskPhase;
+  subjectMode?: ChatGptSubjectTaskMode;
+  masterPrompt?: string;
+  referenceImagePaths?: string[];
+  subjectImagePath?: string;
+  subjectIndex?: number;
   subjectInstruction?: string;
+  subjectBaseline?: unknown;
   selectors?: Record<string, unknown>;
   target?: ChatGptExtensionTaskTarget;
 }
@@ -49,12 +56,15 @@ export interface ExtensionTaskImagePayload {
 export interface ExtensionTaskPayload {
   id: string;
   kind: "chatgpt-image-transform";
+  phase: ChatGptExtensionTaskPhase;
   protocolVersion: number;
   runId: string;
-  masterPrompt: string;
-  referenceImages: ExtensionTaskImagePayload[];
-  subjectImages: ExtensionTaskImagePayload[];
+  masterPrompt?: string;
+  referenceImages?: ExtensionTaskImagePayload[];
+  subjectMode?: ChatGptSubjectTaskMode;
+  subjectImage?: ExtensionTaskImagePayload;
   subjectInstruction: string;
+  subjectBaseline?: unknown;
   selectors: Record<string, unknown>;
   createdAt: string;
 }
@@ -101,17 +111,33 @@ export interface ExtensionFocusCommandPayload {
   createdAt: string;
 }
 
+export interface ExtensionTaskControlPayload {
+  id: string;
+  kind: "task-control";
+  protocolVersion: number;
+  status: ExtensionTaskStatus;
+  pauseRequested: boolean;
+  cancelled: boolean;
+  updatedAt: string;
+}
+
 interface ExtensionTask {
   id: string;
   kind: "chatgpt-image-transform";
+  phase: ChatGptExtensionTaskPhase;
   runId: string;
-  masterPrompt: string;
+  subjectMode: ChatGptSubjectTaskMode;
+  masterPrompt?: string;
   referenceImagePaths: string[];
-  subjectImagePaths: string[];
+  subjectImagePath?: string;
+  subjectIndex?: number;
   subjectInstruction: string;
+  subjectBaseline?: unknown;
   selectors: Record<string, unknown>;
   target: ExtensionTaskTargetState;
   status: ExtensionTaskStatus;
+  leasedClientId?: string;
+  pauseRequested: boolean;
   outputs: ExtensionTaskOutput[];
   result?: ExtensionTaskResult;
   error?: string;
@@ -123,6 +149,7 @@ interface ExtensionTaskTargetState {
   mode: "any" | "existing" | "new";
   clientId?: string;
   routingToken?: string;
+  url?: string;
 }
 
 interface Waiter {
@@ -179,20 +206,26 @@ export class ExtensionBridge {
     const task: ExtensionTask = {
       id: randomUUID(),
       kind: "chatgpt-image-transform",
+      phase: input.phase,
       runId: input.runId,
+      subjectMode: input.subjectMode ?? "submit-and-capture",
       masterPrompt: input.masterPrompt,
-      referenceImagePaths: input.referenceImagePaths,
-      subjectImagePaths: input.subjectImagePaths,
+      referenceImagePaths: input.referenceImagePaths ?? [],
+      subjectImagePath: input.subjectImagePath,
+      subjectIndex: input.subjectIndex,
       subjectInstruction: input.subjectInstruction?.trim() ?? "",
+      subjectBaseline: input.subjectBaseline,
       selectors: input.selectors ?? {},
       target: normalizeTaskTarget(input.target),
       status: "pending",
+      pauseRequested: false,
       outputs: [],
       createdAt: now,
       updatedAt: now
     };
+    validateTaskShape(task);
     this.tasks.set(task.id, task);
-    this.emitTaskEvent(task.id, "task.created", describeTaskTarget(task.target));
+    this.emitTaskEvent(task.id, "task.created", describeTaskTarget(task));
     return this.toPayload(task);
   }
 
@@ -202,6 +235,7 @@ export class ExtensionBridge {
     for (const task of this.tasks.values()) {
       if (task.status === "running" && now - Date.parse(task.updatedAt) > 120_000) {
         task.status = "pending";
+        task.leasedClientId = undefined;
         task.updatedAt = new Date().toISOString();
         this.emitTaskEvent(task.id, "task.requeued", "Extension task lease expired; requeued");
       }
@@ -210,10 +244,12 @@ export class ExtensionBridge {
           task.target.clientId = client.id;
         }
         task.status = "running";
+        task.leasedClientId = client.id;
         task.updatedAt = new Date().toISOString();
         this.emitTaskEvent(task.id, "task.started", "Extension picked up task", {
           clientId,
-          targetMode: task.target.mode
+          targetMode: task.target.mode,
+          phase: task.phase
         });
         return this.toPayload(task);
       }
@@ -379,10 +415,47 @@ export class ExtensionBridge {
     this.focusWaiters.delete(commandId);
   }
 
+  requestTaskPause(taskId: string): void {
+    const task = this.getTask(taskId);
+    if (["completed", "failed", "cancelled"].includes(task.status)) return;
+    if (!task.pauseRequested) {
+      task.pauseRequested = true;
+      this.emitTaskEvent(task.id, "task.pause_requested", "Pause requested for active extension task", {
+        phase: task.phase,
+        subjectIndex: task.subjectIndex
+      });
+    }
+    task.updatedAt = new Date().toISOString();
+  }
+
+  taskControl(taskId: string, clientId: string): ExtensionTaskControlPayload {
+    const task = this.getTask(taskId);
+    const client = this.assertCompatibleClient(clientId);
+    if (task.leasedClientId && task.leasedClientId !== client.id) {
+      throw new Error(`Extension task ${taskId} is leased to a different ChatGPT tab.`);
+    }
+    if (task.status === "running") {
+      task.updatedAt = new Date().toISOString();
+    }
+    return {
+      id: task.id,
+      kind: "task-control",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      status: task.status,
+      pauseRequested: task.pauseRequested,
+      cancelled: task.status === "cancelled",
+      updatedAt: task.updatedAt
+    };
+  }
+
   getTaskImagePath(taskId: string, group: ExtensionImageGroup, imageIndex: number): string {
     const task = this.getTask(taskId);
-    const paths = group === "reference" ? task.referenceImagePaths : task.subjectImagePaths;
-    const imagePath = paths[imageIndex];
+    const imagePath =
+      group === "reference"
+        ? task.referenceImagePaths[imageIndex]
+        : task.subjectImagePath && imageIndex === task.subjectIndex
+          ? task.subjectImagePath
+          : undefined;
     if (!imagePath) throw new Error(`Image not found: ${group}/${imageIndex}`);
     return imagePath;
   }
@@ -476,6 +549,7 @@ export class ExtensionBridge {
 
   completeTask(taskId: string, result: ExtensionTaskResult): void {
     const task = this.getTask(taskId);
+    if (task.status === "cancelled") return;
     task.status = "completed";
     task.result = {
       ...result,
@@ -489,6 +563,7 @@ export class ExtensionBridge {
 
   addTaskOutput(taskId: string, output: ExtensionTaskOutput): void {
     const task = this.getTask(taskId);
+    if (task.status === "cancelled") return;
     task.outputs = mergeTaskOutputs(task.outputs, [output]);
     task.updatedAt = new Date().toISOString();
     this.emitTaskEvent(taskId, "task.output", `Extension streamed output for subject ${output.subjectIndex + 1}`, {
@@ -503,6 +578,7 @@ export class ExtensionBridge {
 
   failTask(taskId: string, message: string, data?: unknown): void {
     const task = this.getTask(taskId);
+    if (task.status === "cancelled") return;
     task.status = "failed";
     task.error = message;
     task.updatedAt = new Date().toISOString();
@@ -521,7 +597,9 @@ export class ExtensionBridge {
   }
 
   addTaskEvent(taskId: string, type: string, message: string, data?: unknown): void {
-    this.getTask(taskId).updatedAt = new Date().toISOString();
+    const task = this.getTask(taskId);
+    if (task.status === "cancelled") return;
+    task.updatedAt = new Date().toISOString();
     this.emitTaskEvent(taskId, type, message, data);
   }
 
@@ -529,6 +607,7 @@ export class ExtensionBridge {
     const task = this.getTask(taskId);
     if (task.status === "completed" && task.result) return Promise.resolve(task.result);
     if (task.status === "failed") return Promise.reject(new Error(task.error ?? "Extension task failed"));
+    if (task.status === "cancelled") return Promise.reject(new Error("Task cancelled"));
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -620,9 +699,9 @@ export class ExtensionBridge {
 
   private matchesTarget(target: ExtensionTaskTargetState, client: ExtensionClientStatus): boolean {
     if (target.mode === "any") return true;
-    if (target.mode === "existing") return target.clientId === client.id;
+    if (target.mode === "existing") return target.clientId === client.id || sameUrl(target.url, client.url);
     if (target.clientId) return target.clientId === client.id;
-    return Boolean(target.routingToken && client.routingToken === target.routingToken);
+    return Boolean((target.routingToken && client.routingToken === target.routingToken) || sameUrl(target.url, client.url));
   }
 
   private pruneStaleClients(now = Date.now()): void {
@@ -648,12 +727,25 @@ export class ExtensionBridge {
     return {
       id: task.id,
       kind: task.kind,
+      phase: task.phase,
       protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
       runId: task.runId,
-      masterPrompt: task.masterPrompt,
-      referenceImages: task.referenceImagePaths.map((imagePath, index) => this.toImagePayload(task.id, "reference", imagePath, index)),
-      subjectImages: task.subjectImagePaths.map((imagePath, index) => this.toImagePayload(task.id, "subject", imagePath, index)),
+      ...(task.masterPrompt ? { masterPrompt: task.masterPrompt } : {}),
+      ...(task.referenceImagePaths.length > 0
+        ? {
+            referenceImages: task.referenceImagePaths.map((imagePath, index) =>
+              this.toImagePayload(task.id, "reference", imagePath, index)
+            )
+          }
+        : {}),
+      ...(task.subjectImagePath !== undefined && task.subjectIndex !== undefined
+        ? {
+            subjectMode: task.subjectMode,
+            subjectImage: this.toImagePayload(task.id, "subject", task.subjectImagePath, task.subjectIndex)
+          }
+        : {}),
       subjectInstruction: task.subjectInstruction,
+      ...(task.subjectBaseline !== undefined ? { subjectBaseline: task.subjectBaseline } : {}),
       selectors: task.selectors,
       createdAt: task.createdAt
     };
@@ -696,18 +788,20 @@ function normalizeTaskTarget(target?: ChatGptExtensionTaskTarget): ExtensionTask
   if (target.mode === "existing") {
     const clientId = target.clientId.trim();
     if (!clientId) throw new Error("ChatGPT extension target client id is required.");
-    return { mode: "existing", clientId };
+    return { mode: "existing", clientId, url: normalizeComparableUrl(target.url) };
   }
 
   const routingToken = normalizeRoutingToken(target.routingToken);
   if (!routingToken) throw new Error("ChatGPT extension new-tab routing token is required.");
-  return { mode: "new", routingToken };
+  return { mode: "new", routingToken, url: normalizeComparableUrl(target.url) };
 }
 
-function describeTaskTarget(target: ExtensionTaskTargetState): string {
+function describeTaskTarget(task: ExtensionTask): string {
+  const phase = task.phase === "setup" ? "setup" : `subject ${Number(task.subjectIndex ?? 0) + 1}`;
+  const target = task.target;
   if (target.mode === "existing") return "Queued task for selected ChatGPT tab";
-  if (target.mode === "new") return "Queued task for new ChatGPT tab";
-  return "Queued task for ChatGPT extension";
+  if (target.mode === "new") return `Queued ${phase} task for new ChatGPT tab`;
+  return `Queued ${phase} task for ChatGPT extension`;
 }
 
 function mergeTaskOutputs(existing: ExtensionTaskOutput[], incoming: ExtensionTaskOutput[] = []): ExtensionTaskOutput[] {
@@ -720,4 +814,50 @@ function mergeTaskOutputs(existing: ExtensionTaskOutput[], incoming: ExtensionTa
 
 function outputKey(output: ExtensionTaskOutput): string {
   return `${output.subjectIndex}:${output.mimeType ?? "image/png"}:${output.base64}`;
+}
+
+function validateTaskShape(task: ExtensionTask): void {
+  if (task.phase === "setup") {
+    if (!task.masterPrompt?.trim()) throw new Error("ChatGPT setup task requires masterPrompt.");
+    return;
+  }
+
+  if (task.subjectMode !== "submit-and-capture" && task.subjectMode !== "capture-existing") {
+    throw new Error("ChatGPT subject task mode is invalid.");
+  }
+  if (!Number.isInteger(task.subjectIndex) || (task.subjectIndex ?? -1) < 0) {
+    throw new Error("ChatGPT subject task requires subjectIndex.");
+  }
+  if (!task.subjectImagePath) throw new Error("ChatGPT subject task requires subjectImagePath.");
+}
+
+function normalizeComparableUrl(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  try {
+    const url = new URL(trimmed);
+    removeRoutingToken(url);
+    return url.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
+function sameUrl(left: string | undefined, right: string | undefined): boolean {
+  const normalizedLeft = normalizeComparableUrl(left);
+  const normalizedRight = normalizeComparableUrl(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function removeRoutingToken(url: URL): void {
+  const search = new URLSearchParams(url.search);
+  const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  if (search.has("based-blink-tab")) {
+    search.delete("based-blink-tab");
+    url.search = search.toString();
+  }
+  if (hash.has("based-blink-tab")) {
+    hash.delete("based-blink-tab");
+    url.hash = hash.toString();
+  }
 }

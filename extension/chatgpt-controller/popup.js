@@ -1,5 +1,5 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:39201";
-const CHATGPT_EXTENSION_PROTOCOL_VERSION = 7;
+const CHATGPT_EXTENSION_PROTOCOL_VERSION = 9;
 const EXTENSION_VERSION = chrome.runtime?.getManifest?.().version || "unknown";
 
 function getStorage(keys) {

@@ -3,6 +3,7 @@ import type { z } from "zod";
 export type RunStatus =
   | "queued"
   | "running"
+  | "pausing"
   | "waiting_manual"
   | "completed"
   | "failed"
@@ -89,8 +90,12 @@ export interface WorkflowContext {
   inputDir: string;
   artifactDir: string;
   signal: AbortSignal;
+  previousOutput: unknown | null;
   step(message: string, progress?: number, data?: unknown): Promise<void>;
   event(type: string, message: string, data?: unknown): Promise<void>;
+  updateOutput(output: unknown): Promise<void>;
+  isPauseRequested(): boolean;
+  pauseIfRequested(message: string, data?: unknown): Promise<void>;
   addArtifact(input: {
     kind: ArtifactKind;
     name: string;
@@ -105,6 +110,7 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
   manifest: WorkflowManifest;
   inputSchema: z.ZodType<TInput, z.ZodTypeDef, unknown>;
   outputSchema: z.ZodType<TOutput, z.ZodTypeDef, unknown>;
+  canResumeFailedRun?(run: RunRecord): boolean;
   run(input: TInput, ctx: WorkflowContext): Promise<TOutput>;
 }
 

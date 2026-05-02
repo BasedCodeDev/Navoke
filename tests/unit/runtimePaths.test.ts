@@ -36,9 +36,9 @@ describe("runtime paths", () => {
     tempDirs.push(projectDir);
     const paths = createRuntimePaths(projectDir);
 
-    expect(safeRunFolderName('Bad: Run / Name * ? "')).toBe("Bad_ Run _ Name _ _ _");
+    expect(safeRunFolderName('Bad: Run / Name * ? "')).toBe("Bad-Run-Name");
     expect(safeRunFolderName(".blink")).toBe("blink");
-    expect(getRunDir(paths, "Same Name", "11111111-aaaa")).toBe(path.join(path.resolve(projectDir), "Same Name - 11111111"));
-    expect(getRunDir(paths, "Same Name", "22222222-bbbb")).toBe(path.join(path.resolve(projectDir), "Same Name - 22222222"));
+    expect(getRunDir(paths, "Same Name", "11111111-aaaa")).toBe(path.join(path.resolve(projectDir), "Same-Name-11111111"));
+    expect(getRunDir(paths, "Same Name", "22222222-bbbb")).toBe(path.join(path.resolve(projectDir), "Same-Name-22222222"));
   });
 });

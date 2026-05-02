@@ -223,7 +223,7 @@ export class SqliteStore {
 
   private recoverInterruptedRuns(): void {
     this.db.run(
-      "update runs set status = 'failed', error = 'App exited before this run finished.', updated_at = ? where status in ('running', 'waiting_manual')",
+      "update runs set status = 'failed', error = 'App exited before this run finished.', updated_at = ? where status in ('running', 'pausing', 'waiting_manual')",
       [nowIso()]
     );
   }

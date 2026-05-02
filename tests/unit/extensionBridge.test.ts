@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CHATGPT_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
 
 describe("ExtensionBridge", () => {
-  it("queues, leases, and completes a ChatGPT extension conversation task", async () => {
+  it("queues, leases, and completes a ChatGPT extension setup task", async () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       id: "client-1",
@@ -11,9 +11,9 @@ describe("ExtensionBridge", () => {
     });
     const task = bridge.createChatGptConversationTask({
       runId: "run-1",
+      phase: "setup",
       masterPrompt: "convert these",
       referenceImagePaths: ["C:\\tmp\\reference.png"],
-      subjectImagePaths: ["C:\\tmp\\subject-a.png", "C:\\tmp\\subject-b.png"],
       subjectInstruction: "Apply the transform.",
       selectors: { composer: "#prompt-textarea" }
     });
@@ -21,12 +21,12 @@ describe("ExtensionBridge", () => {
     expect(bridge.status().pending).toBe(1);
     const leased = bridge.nextTask("client-1");
     expect(leased?.id).toBe(task.id);
+    expect(leased?.phase).toBe("setup");
     expect(leased?.protocolVersion).toBe(CHATGPT_EXTENSION_PROTOCOL_VERSION);
     expect(leased?.referenceImages).toHaveLength(1);
-    expect(leased?.subjectImages).toHaveLength(2);
+    expect(leased?.subjectImage).toBeUndefined();
     expect(leased?.subjectInstruction).toBe("Apply the transform.");
     expect(bridge.getTaskImagePath(task.id, "reference", 0)).toBe("C:\\tmp\\reference.png");
-    expect(bridge.getTaskImagePath(task.id, "subject", 1)).toBe("C:\\tmp\\subject-b.png");
     expect(bridge.status().running).toBe(1);
 
     const wait = bridge.waitForTask(task.id, {
@@ -47,6 +47,78 @@ describe("ExtensionBridge", () => {
     await expect(wait).resolves.toMatchObject({ outputs: expect.any(Array) });
   });
 
+  it("queues and leases a ChatGPT extension subject task", () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      id: "client-1",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.8.0"
+    });
+    const task = bridge.createChatGptConversationTask({
+      runId: "run-1",
+      phase: "subject",
+      subjectImagePath: "C:\\tmp\\subject-b.png",
+      subjectIndex: 1,
+      subjectInstruction: "Apply the transform.",
+      selectors: { composer: "#prompt-textarea" }
+    });
+
+    const leased = bridge.nextTask("client-1");
+    expect(leased).toMatchObject({
+      id: task.id,
+      phase: "subject",
+      subjectImage: {
+        index: 1,
+        name: "subject-b.png"
+      }
+    });
+    expect(bridge.getTaskImagePath(task.id, "subject", 1)).toBe("C:\\tmp\\subject-b.png");
+  });
+
+  it("leases capture-existing subject tasks and exposes pause control for running tasks", () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      id: "client-1",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.9.0"
+    });
+    const baseline = { assistantCount: 1, imageFingerprints: ["old|512x512"], outputCandidateCount: 1 };
+    const task = bridge.createChatGptConversationTask({
+      runId: "run-1",
+      phase: "subject",
+      subjectMode: "capture-existing",
+      subjectImagePath: "C:\\tmp\\subject-b.png",
+      subjectIndex: 1,
+      subjectBaseline: baseline,
+      subjectInstruction: "",
+      selectors: {}
+    });
+
+    const leased = bridge.nextTask("client-1");
+    expect(leased).toMatchObject({
+      id: task.id,
+      subjectMode: "capture-existing",
+      subjectBaseline: baseline
+    });
+    bridge.requestTaskPause(task.id);
+
+    const control = bridge.taskControl(task.id, "client-1");
+    expect(control).toMatchObject({
+      kind: "task-control",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      status: "running",
+      pauseRequested: true,
+      cancelled: false
+    });
+    expect(bridge.status().running).toBe(1);
+
+    bridge.cancelTask(task.id);
+    expect(bridge.taskControl(task.id, "client-1")).toMatchObject({
+      status: "cancelled",
+      cancelled: true
+    });
+  });
+
   it("streams task outputs before completion and resolves them with the final result", async () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
@@ -56,9 +128,9 @@ describe("ExtensionBridge", () => {
     });
     const task = bridge.createChatGptConversationTask({
       runId: "run-1",
-      masterPrompt: "convert these",
-      referenceImagePaths: [],
-      subjectImagePaths: ["C:\\tmp\\subject-a.png"],
+      phase: "subject",
+      subjectImagePath: "C:\\tmp\\subject-a.png",
+      subjectIndex: 0,
       subjectInstruction: "",
       selectors: {}
     });
@@ -117,9 +189,9 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     const task = bridge.createChatGptConversationTask({
       runId: "run-1",
-      masterPrompt: "convert these",
-      referenceImagePaths: [],
-      subjectImagePaths: ["C:\\tmp\\subject-a.png"],
+      phase: "subject",
+      subjectImagePath: "C:\\tmp\\subject-a.png",
+      subjectIndex: 0,
       subjectInstruction: "",
       selectors: {}
     });
@@ -153,9 +225,9 @@ describe("ExtensionBridge", () => {
     });
     const task = bridge.createChatGptConversationTask({
       runId: "run-1",
-      masterPrompt: "convert these",
-      referenceImagePaths: [],
-      subjectImagePaths: ["C:\\tmp\\subject-a.png"],
+      phase: "subject",
+      subjectImagePath: "C:\\tmp\\subject-a.png",
+      subjectIndex: 0,
       subjectInstruction: "",
       selectors: {},
       target: { mode: "existing", clientId: "client-2" }
@@ -181,9 +253,9 @@ describe("ExtensionBridge", () => {
     });
     const task = bridge.createChatGptConversationTask({
       runId: "run-1",
-      masterPrompt: "convert these",
-      referenceImagePaths: [],
-      subjectImagePaths: ["C:\\tmp\\subject-a.png"],
+      phase: "subject",
+      subjectImagePath: "C:\\tmp\\subject-a.png",
+      subjectIndex: 0,
       subjectInstruction: "",
       selectors: {},
       target: { mode: "new", routingToken: "run-token-1" }
@@ -193,6 +265,28 @@ describe("ExtensionBridge", () => {
     expect(bridge.nextTask("existing-tab")).toBeNull();
     expect(bridge.status().pending).toBe(1);
     expect(bridge.nextTask("new-tab")?.id).toBe(task.id);
+  });
+
+  it("leases a recoverable task to a compatible tab with the same tracked URL", () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      id: "old-tab",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.8.0",
+      url: "https://chatgpt.com/c/abc"
+    });
+    const task = bridge.createChatGptConversationTask({
+      runId: "run-1",
+      phase: "subject",
+      subjectImagePath: "C:\\tmp\\subject-a.png",
+      subjectIndex: 0,
+      subjectInstruction: "",
+      selectors: {},
+      target: { mode: "existing", clientId: "missing-tab", url: "https://chatgpt.com/c/abc#based-blink-tab=run-token-1" }
+    });
+
+    expect(bridge.findCompatibleClientForTarget({ mode: "existing", clientId: "missing-tab", url: "https://chatgpt.com/c/abc" })?.id).toBe("old-tab");
+    expect(bridge.nextTask("old-tab")?.id).toBe(task.id);
   });
 
   it("queues Workflow Lab commands for a selected compatible extension tab", async () => {
@@ -228,7 +322,7 @@ describe("ExtensionBridge", () => {
     bridge.heartbeat({
       id: "focus-tab",
       protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.7.0",
+      extensionVersion: "0.8.0",
       status: "busy"
     });
 
@@ -253,7 +347,7 @@ describe("ExtensionBridge", () => {
     bridge.heartbeat({
       id: "focus-tab",
       protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.7.0"
+      extensionVersion: "0.8.0"
     });
 
     const failed = bridge.focusClient("focus-tab", { timeoutMs: 1_000 });
