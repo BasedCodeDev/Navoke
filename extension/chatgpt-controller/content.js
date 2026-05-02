@@ -1,5 +1,5 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:39201";
-const CHATGPT_EXTENSION_PROTOCOL_VERSION = 5;
+const CHATGPT_EXTENSION_PROTOCOL_VERSION = 6;
 const EXTENSION_VERSION = chrome.runtime?.getManifest?.().version || "unknown";
 const CLIENT_ID_STORAGE_KEY = "workflowAutomationClientId";
 const ROUTING_TOKEN_STORAGE_KEY = "workflowAutomationRoutingToken";
@@ -1010,7 +1010,6 @@ async function runChatGptImageTask(task) {
   await postTaskEvent(task.id, "extension.setup.waiting", "Waiting for ChatGPT setup response");
   await waitForAnyResponse(task, setupBefore, selectors);
 
-  const outputs = [];
   const subjectInstruction = (task.subjectInstruction || "").trim();
 
   for (const subject of task.subjectImages) {
@@ -1048,19 +1047,22 @@ async function runChatGptImageTask(task) {
     const images = await waitForCompletedOutputImages(task, subjectBefore, selectors, subject);
     const image = selectSingleOutputImage(images, subject);
     const output = await imageToOutput(image);
-    outputs.push({
-      subjectIndex: subject.index,
-      subjectName: subject.name,
-      name: `${subject.name.replace(/\.[^.]+$/, "")}-chatgpt.png`,
-      mimeType: output.mimeType,
-      base64: output.base64,
-      metadata: {
-        url: image.currentSrc || image.src,
-        naturalWidth: image.naturalWidth,
-        naturalHeight: image.naturalHeight,
-        fingerprint: imageFingerprint(image),
-        alt: image.alt || ""
-      }
+    await apiFetch(`/api/extension/tasks/${task.id}/outputs`, {
+      method: "POST",
+      body: JSON.stringify({
+        subjectIndex: subject.index,
+        subjectName: subject.name,
+        name: `${subject.name.replace(/\.[^.]+$/, "")}-chatgpt.png`,
+        mimeType: output.mimeType,
+        base64: output.base64,
+        metadata: {
+          url: image.currentSrc || image.src,
+          naturalWidth: image.naturalWidth,
+          naturalHeight: image.naturalHeight,
+          fingerprint: imageFingerprint(image),
+          alt: image.alt || ""
+        }
+      })
     });
     await postTaskEvent(task.id, "extension.subject.completed", `Captured 1 output image for ${subject.name}`, {
       subjectIndex: subject.index,
@@ -1071,7 +1073,7 @@ async function runChatGptImageTask(task) {
   await apiFetch(`/api/extension/tasks/${task.id}/complete`, {
     method: "POST",
     body: JSON.stringify({
-      outputs,
+      outputs: [],
       metadata: {
         url: location.href,
         title: document.title

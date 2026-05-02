@@ -6,7 +6,7 @@ import { inferMimeType } from "../utils/files";
 export type ExtensionTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ExtensionImageGroup = "reference" | "subject";
 
-export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 5;
+export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 6;
 const CLIENT_TTL_MS = 30_000;
 const LAB_COMMAND_LEASE_MS = 60_000;
 
@@ -58,15 +58,17 @@ export interface ExtensionTaskPayload {
   createdAt: string;
 }
 
+export interface ExtensionTaskOutput {
+  subjectIndex: number;
+  subjectName?: string;
+  name?: string;
+  mimeType?: string;
+  base64: string;
+  metadata?: unknown;
+}
+
 export interface ExtensionTaskResult {
-  outputs: Array<{
-    subjectIndex: number;
-    subjectName?: string;
-    name?: string;
-    mimeType?: string;
-    base64: string;
-    metadata?: unknown;
-  }>;
+  outputs: ExtensionTaskOutput[];
   metadata?: unknown;
 }
 
@@ -102,6 +104,7 @@ interface ExtensionTask {
   selectors: Record<string, unknown>;
   target: ExtensionTaskTargetState;
   status: ExtensionTaskStatus;
+  outputs: ExtensionTaskOutput[];
   result?: ExtensionTaskResult;
   error?: string;
   createdAt: string;
@@ -158,6 +161,7 @@ export class ExtensionBridge {
       selectors: input.selectors ?? {},
       target: normalizeTaskTarget(input.target),
       status: "pending",
+      outputs: [],
       createdAt: now,
       updatedAt: now
     };
@@ -360,11 +364,28 @@ export class ExtensionBridge {
   completeTask(taskId: string, result: ExtensionTaskResult): void {
     const task = this.getTask(taskId);
     task.status = "completed";
-    task.result = result;
+    task.result = {
+      ...result,
+      outputs: mergeTaskOutputs(task.outputs, result.outputs)
+    };
     task.updatedAt = new Date().toISOString();
     this.emitTaskEvent(task.id, "task.completed", "Extension completed task", result.metadata);
-    this.waiters.get(taskId)?.resolve(result);
+    this.waiters.get(taskId)?.resolve(task.result);
     this.waiters.delete(taskId);
+  }
+
+  addTaskOutput(taskId: string, output: ExtensionTaskOutput): void {
+    const task = this.getTask(taskId);
+    task.outputs = mergeTaskOutputs(task.outputs, [output]);
+    task.updatedAt = new Date().toISOString();
+    this.emitTaskEvent(taskId, "task.output", `Extension streamed output for subject ${output.subjectIndex + 1}`, {
+      subjectIndex: output.subjectIndex,
+      subjectName: output.subjectName,
+      name: output.name,
+      mimeType: output.mimeType,
+      metadata: output.metadata
+    });
+    this.events.emit(`task-output:${taskId}`, output);
   }
 
   failTask(taskId: string, message: string, data?: unknown): void {
@@ -426,6 +447,12 @@ export class ExtensionBridge {
 
   subscribeTask(taskId: string, listener: (event: ExtensionTaskEvent) => void): () => void {
     const eventName = `task:${taskId}`;
+    this.events.on(eventName, listener);
+    return () => this.events.off(eventName, listener);
+  }
+
+  subscribeTaskOutput(taskId: string, listener: (output: ExtensionTaskOutput) => void): () => void {
+    const eventName = `task-output:${taskId}`;
     this.events.on(eventName, listener);
     return () => this.events.off(eventName, listener);
   }
@@ -562,4 +589,16 @@ function describeTaskTarget(target: ExtensionTaskTargetState): string {
   if (target.mode === "existing") return "Queued task for selected ChatGPT tab";
   if (target.mode === "new") return "Queued task for new ChatGPT tab";
   return "Queued task for ChatGPT extension";
+}
+
+function mergeTaskOutputs(existing: ExtensionTaskOutput[], incoming: ExtensionTaskOutput[] = []): ExtensionTaskOutput[] {
+  const merged = new Map<string, ExtensionTaskOutput>();
+  for (const output of [...existing, ...incoming]) {
+    merged.set(outputKey(output), output);
+  }
+  return [...merged.values()];
+}
+
+function outputKey(output: ExtensionTaskOutput): string {
+  return `${output.subjectIndex}:${output.mimeType ?? "image/png"}:${output.base64}`;
 }

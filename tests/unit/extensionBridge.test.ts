@@ -47,6 +47,46 @@ describe("ExtensionBridge", () => {
     await expect(wait).resolves.toMatchObject({ outputs: expect.any(Array) });
   });
 
+  it("streams task outputs before completion and resolves them with the final result", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      id: "client-1",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.6.0"
+    });
+    const task = bridge.createChatGptConversationTask({
+      runId: "run-1",
+      masterPrompt: "convert these",
+      referenceImagePaths: [],
+      subjectImagePaths: ["C:\\tmp\\subject-a.png"],
+      subjectInstruction: "",
+      selectors: {}
+    });
+    const streamedOutputs: Array<{ subjectIndex: number; base64: string }> = [];
+    const unsubscribe = bridge.subscribeTaskOutput(task.id, (output) => {
+      streamedOutputs.push({ subjectIndex: output.subjectIndex, base64: output.base64 });
+    });
+
+    bridge.nextTask("client-1");
+    const wait = bridge.waitForTask(task.id, {
+      signal: new AbortController().signal,
+      timeoutMs: 1_000
+    });
+    bridge.addTaskOutput(task.id, {
+      subjectIndex: 0,
+      subjectName: "subject-a.png",
+      mimeType: "image/png",
+      base64: Buffer.from("image").toString("base64")
+    });
+    bridge.completeTask(task.id, { outputs: [], metadata: { title: "ChatGPT" } });
+
+    await expect(wait).resolves.toMatchObject({
+      outputs: [{ subjectIndex: 0, base64: Buffer.from("image").toString("base64") }]
+    });
+    expect(streamedOutputs).toEqual([{ subjectIndex: 0, base64: Buffer.from("image").toString("base64") }]);
+    unsubscribe();
+  });
+
   it("marks compatible and incompatible extension clients", () => {
     const bridge = new ExtensionBridge();
 

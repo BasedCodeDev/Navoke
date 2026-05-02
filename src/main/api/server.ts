@@ -300,6 +300,15 @@ export class ApiServer {
       }
     });
 
+    app.post("/api/extension/tasks/:id/outputs", (req, res, next) => {
+      try {
+        this.options.extensionBridge.addTaskOutput(req.params.id, req.body);
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.post("/api/extension/tasks/:id/complete", (req, res, next) => {
       try {
         this.options.extensionBridge.completeTask(req.params.id, {

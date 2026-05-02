@@ -6,6 +6,7 @@ import {
   extensionBridge,
   type ChatGptExtensionTaskTarget,
   type ExtensionClientStatus,
+  type ExtensionTaskOutput,
   type ExtensionTaskResult
 } from "../extension/extensionBridge";
 import { getRunArtifactDir } from "../runtime/paths";
@@ -115,6 +116,77 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
       artifactId: string;
       outputPath: string;
     }> = [];
+    const usedOutputNames = new Set<string>();
+    const outputKeysBySubject = new Map<number, string>();
+    const registeredOutputs: ExtensionTaskOutput[] = [];
+    let outputProcessing = Promise.resolve();
+    let outputProcessingError: Error | undefined;
+
+    const registerOutputArtifact = async (output: ExtensionTaskOutput): Promise<void> => {
+      const subjectIndex = output.subjectIndex;
+      const subjectImage = input.subjectImages[subjectIndex];
+      if (!Number.isInteger(subjectIndex) || !subjectImage) {
+        throw new Error(`ChatGPT extension returned output for unknown subject index ${subjectIndex}.`);
+      }
+      if (typeof output.base64 !== "string" || output.base64.length === 0) {
+        throw new Error(`ChatGPT extension returned an empty output image for subject ${subjectIndex + 1}.`);
+      }
+
+      const key = outputIdentityKey(output);
+      const existingKey = outputKeysBySubject.get(subjectIndex);
+      if (existingKey) {
+        if (existingKey === key) return;
+        throw new Error(
+          `ChatGPT extension returned multiple distinct output images for subject ${subjectIndex + 1}. ` +
+            "This workflow expects exactly one result per subject."
+        );
+      }
+      outputKeysBySubject.set(subjectIndex, key);
+
+      const pairId = `subject-${subjectIndex + 1}`;
+      const mimeType = output.mimeType ?? "image/png";
+      const extension = extensionForMimeType(mimeType);
+      const outputPath = path.join(runDir, outputFileNameForSubject(subjectImage, subjectIndex, extension, usedOutputNames));
+      fs.writeFileSync(outputPath, Buffer.from(output.base64, "base64"));
+      const artifact = await ctx.addArtifact({
+        kind: "image",
+        name: path.basename(outputPath),
+        path: outputPath,
+        mimeType: inferMimeType(outputPath) ?? mimeType,
+        metadata: {
+          source: "chatgpt-extension",
+          inputImage: subjectImage,
+          subjectIndex,
+          pairId,
+          taskId: task.id,
+          masterPrompt: input.masterPrompt,
+          subjectInstruction: input.subjectInstruction,
+          referenceImages: input.referenceImages,
+          extensionMetadata: output.metadata ?? null
+        }
+      });
+      artifactIds.push(artifact.id);
+      outputMappings.push({ subjectIndex, subjectImage, pairId, artifactId: artifact.id, outputPath });
+      registeredOutputs.push(output);
+      await ctx.step(`Registered ChatGPT result ${outputMappings.length} of ${input.subjectImages.length}`, Math.min(95, 20 + (outputMappings.length / input.subjectImages.length) * 70), {
+        subjectIndex,
+        artifactId: artifact.id
+      });
+    };
+
+    const queueOutput = (output: ExtensionTaskOutput): void => {
+      outputProcessing = outputProcessing.then(async () => {
+        if (outputProcessingError) return;
+        try {
+          await registerOutputArtifact(output);
+        } catch (error) {
+          outputProcessingError = error instanceof Error ? error : new Error(String(error));
+        }
+      });
+      void outputProcessing;
+    };
+
+    const unsubscribeOutput = extensionBridge.subscribeTaskOutput(task.id, queueOutput);
 
     try {
       const result = await extensionBridge.waitForTask(task.id, {
@@ -126,35 +198,14 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
         throw new Error("ChatGPT extension completed without returning any output images.");
       }
 
-      const normalizedOutputs = normalizeChatGptExtensionOutputs(result.outputs, input.subjectImages);
-      const usedOutputNames = new Set<string>();
-
-      for (const { output, subjectIndex, subjectImage, pairId } of normalizedOutputs) {
-        const mimeType = output.mimeType ?? "image/png";
-        const extension = extensionForMimeType(mimeType);
-        const outputPath = path.join(runDir, outputFileNameForSubject(subjectImage, subjectIndex, extension, usedOutputNames));
-        fs.writeFileSync(outputPath, Buffer.from(output.base64, "base64"));
-        const artifact = await ctx.addArtifact({
-          kind: "image",
-          name: path.basename(outputPath),
-          path: outputPath,
-          mimeType: inferMimeType(outputPath) ?? mimeType,
-          metadata: {
-            source: "chatgpt-extension",
-            inputImage: subjectImage,
-            subjectIndex,
-            pairId,
-            taskId: task.id,
-            masterPrompt: input.masterPrompt,
-            subjectInstruction: input.subjectInstruction,
-            referenceImages: input.referenceImages,
-            extensionMetadata: output.metadata ?? null
-          }
-        });
-        artifactIds.push(artifact.id);
-        outputMappings.push({ subjectIndex, subjectImage, pairId, artifactId: artifact.id, outputPath });
+      for (const output of result.outputs) {
+        queueOutput(output);
       }
+      await outputProcessing;
+      if (outputProcessingError) throw outputProcessingError;
+      normalizeChatGptExtensionOutputs(registeredOutputs, input.subjectImages);
     } finally {
+      unsubscribeOutput();
       unsubscribe();
     }
 
