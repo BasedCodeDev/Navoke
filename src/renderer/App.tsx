@@ -13,6 +13,7 @@ import {
   Info,
   MousePointerClick,
   Palette,
+  Pencil,
   PauseCircle,
   Play,
   RefreshCcw,
@@ -40,6 +41,7 @@ import {
   openProject,
   pauseRun,
   renameProject,
+  renameRun,
   resumeRun,
   runInputFileUrl,
   runLabAction,
@@ -287,6 +289,20 @@ export default function App(): JSX.Element {
     onError: (error) =>
       setActionError({
         title: "Could not delete run",
+        message: error instanceof Error ? error.message : String(error)
+      })
+  });
+
+  const renameRunMutation = useMutation({
+    mutationFn: ({ runId, nextName }: { runId: string; nextName: string }) => renameRun(runId, nextName),
+    onSuccess: (run) => {
+      setSelectedRunId(run.id);
+      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["run"] });
+    },
+    onError: (error) =>
+      setActionError({
+        title: "Could not rename run",
         message: error instanceof Error ? error.message : String(error)
       })
   });
@@ -724,6 +740,7 @@ export default function App(): JSX.Element {
           onCancel={(runId) => void cancelRun(runId).then(() => queryClient.invalidateQueries())}
           onOpenDataFolder={() => window.basedBlink.openPath(activeRun?.runDir ?? "")}
           onFocusClient={(clientId) => focusExtensionClient(clientId)}
+          onRename={(runId, nextName) => renameRunMutation.mutateAsync({ runId, nextName }).then(() => undefined)}
           onDelete={(runId) => void deleteRunMutation.mutate(runId)}
         />
       ) : null}
@@ -1072,6 +1089,7 @@ function RunDetailModal({
   onCancel,
   onOpenDataFolder,
   onFocusClient,
+  onRename,
   onDelete
 }: {
   runId: string;
@@ -1089,15 +1107,21 @@ function RunDetailModal({
   onCancel(runId: string): void;
   onOpenDataFolder(): void | Promise<unknown>;
   onFocusClient(clientId: string): Promise<unknown>;
+  onRename(runId: string, nextName: string): Promise<void>;
   onDelete(runId: string): void;
 }): JSX.Element {
   const [focusError, setFocusError] = useState<string | null>(null);
   const [isFocusing, setIsFocusing] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editingName, setEditingName] = useState(run?.name ?? "");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [isRenaming, setIsRenaming] = useState(false);
   const chatGptFocusTarget = useMemo(
     () => resolveChatGptFocusTarget(run, extensionClients),
     [extensionClients, run]
   );
   const canResumeRun = run?.status === "waiting_manual" || isRecoverableFailedChatGptRun(run);
+  const canRenameRun = Boolean(run && !["queued", "running", "pausing", "waiting_manual"].includes(run.status));
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -1115,6 +1139,28 @@ function RunDetailModal({
   useEffect(() => {
     setFocusError(null);
   }, [runId, chatGptFocusTarget?.clientId, chatGptFocusTarget?.url]);
+
+  useEffect(() => {
+    if (!isEditingName) {
+      setEditingName(run?.name ?? "");
+      setRenameError(null);
+    }
+  }, [isEditingName, run?.name, runId]);
+
+  async function submitRunRename(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!run) return;
+    setRenameError(null);
+    setIsRenaming(true);
+    try {
+      await onRename(run.id, editingName);
+      setIsEditingName(false);
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRenaming(false);
+    }
+  }
 
   async function focusChatGptTab(): Promise<void> {
     if (!chatGptFocusTarget || chatGptFocusTarget.action === "disabled") return;
@@ -1177,7 +1223,33 @@ function RunDetailModal({
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate font-medium">{run.name}</div>
+                        {isEditingName ? (
+                          <form className="flex min-w-0 flex-wrap items-center gap-2" onSubmit={(event) => void submitRunRename(event)}>
+                            <Input
+                              value={editingName}
+                              onChange={(event) => setEditingName(event.target.value)}
+                              autoFocus
+                              aria-label="Run name"
+                              className="h-9 min-w-64"
+                            />
+                            <Button type="submit" size="sm" disabled={isRenaming}>
+                              Save
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setIsEditingName(false);
+                                setRenameError(null);
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                          </form>
+                        ) : (
+                          <div className="truncate font-medium">{run.name}</div>
+                        )}
                         <div className="text-xs text-muted-foreground">{run.workflowId}</div>
                       </div>
                       <Badge className={cn("border", statusTone(run.status))}>{run.status}</Badge>
@@ -1187,6 +1259,7 @@ function RunDetailModal({
                   </div>
 
                   {run.error ? <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>{run.error}</div> : null}
+                  {renameError ? <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>{renameError}</div> : null}
                 </>
               ) : (
                 <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
@@ -1230,6 +1303,20 @@ function RunDetailModal({
                 <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run?.runDir}>
                   <FolderOpen className="h-4 w-4" />
                   Data folder
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setEditingName(run?.name ?? "");
+                    setRenameError(null);
+                    setIsEditingName(true);
+                  }}
+                  disabled={!run || !canRenameRun}
+                  title={canRenameRun ? "Rename run and data folder" : "Runs can be renamed after they are inactive."}
+                >
+                  <Pencil className="h-4 w-4" />
+                  Rename
                 </Button>
                 {chatGptFocusTarget ? (
                   <Button

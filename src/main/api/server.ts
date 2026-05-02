@@ -141,6 +141,14 @@ export class ApiServer {
       });
     });
 
+    app.patch("/api/runs/:id", (req, res, next) => {
+      try {
+        res.json(this.options.runner.renameRun(req.params.id, String(req.body?.name ?? "")));
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.get("/api/runs/:id/input-files/:field/:index", (req, res, next) => {
       try {
         const run = this.options.store.getRun(req.params.id);

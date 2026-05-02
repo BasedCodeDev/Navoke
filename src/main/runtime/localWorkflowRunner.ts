@@ -12,6 +12,7 @@ function createId(): string {
 }
 
 const DELETE_WAIT_TIMEOUT_MS = 30_000;
+const ACTIVE_RENAME_STATUSES = new Set(["queued", "running", "pausing", "waiting_manual"]);
 
 interface FileInputMapping {
   field: string;
@@ -213,6 +214,27 @@ export class LocalWorkflowRunner {
     this.eventBus.publish({ kind: "run-updated", runId });
   }
 
+  renameRun(runId: string, name: string): RunRecord {
+    const existing = this.store.getRun(runId);
+    if (!existing) throw new Error(`Run not found: ${runId}`);
+    if (ACTIVE_RENAME_STATUSES.has(existing.status)) {
+      throw new Error("Run can only be renamed after it is inactive.");
+    }
+
+    const runName = name.trim();
+    if (!runName) throw new Error("Run name is required.");
+
+    const update = this.renameRunData(existing, runName);
+    const run = this.store.updateRun(runId, {
+      name: runName,
+      runDir: update.runDir,
+      input: update.input,
+      output: update.output
+    });
+    this.eventBus.publish({ kind: "run-updated", runId });
+    return run;
+  }
+
   async shutdown(): Promise<void> {
     const queued = this.queue.splice(0);
     for (const entry of queued) {
@@ -271,6 +293,55 @@ export class LocalWorkflowRunner {
       throw new Error(`Refusing to delete artifact path outside artifact directory: ${runArtifactDir}`);
     }
     fs.rmSync(runArtifactDir, { recursive: true, force: true });
+  }
+
+  private renameRunData(run: RunRecord, runName: string): { runDir: string | null; input: unknown; output: unknown } {
+    if (!run.runDir) {
+      return { runDir: null, input: run.input, output: run.output };
+    }
+
+    const oldRunDir = path.resolve(run.runDir);
+    this.assertRunDirIsSafe(oldRunDir);
+    const newRunDir = path.resolve(getRunDir(this.paths, runName, run.id));
+    const hasNewPath = !samePath(oldRunDir, newRunDir);
+
+    if (hasNewPath) {
+      if (!fs.existsSync(oldRunDir)) {
+        throw new Error(`Run data folder not found: ${oldRunDir}`);
+      }
+      if (fs.existsSync(newRunDir)) {
+        throw new Error(`Run data folder already exists: ${newRunDir}`);
+      }
+      fs.renameSync(oldRunDir, newRunDir);
+    }
+
+    const finalRunDir = hasNewPath ? newRunDir : oldRunDir;
+    const input = hasNewPath ? replacePathReferences(run.input, oldRunDir, finalRunDir) : run.input;
+    const output = hasNewPath ? replacePathReferences(run.output, oldRunDir, finalRunDir) : run.output;
+
+    if (hasNewPath) {
+      for (const artifact of this.store.listArtifacts(run.id)) {
+        const nextPath = replacePathReferences(artifact.path, oldRunDir, finalRunDir);
+        this.store.updateArtifact(artifact.id, {
+          path: typeof nextPath === "string" ? nextPath : artifact.path,
+          metadata: replacePathReferences(artifact.metadata, oldRunDir, finalRunDir)
+        });
+      }
+    }
+
+    rewritePromptsJson(finalRunDir, runName, oldRunDir, finalRunDir);
+    return { runDir: finalRunDir, input, output };
+  }
+
+  private assertRunDirIsSafe(runDir: string): void {
+    const projectRoot = path.resolve(this.paths.runRootDir);
+    const internalRoot = path.resolve(this.paths.internalDir);
+    if (samePath(runDir, projectRoot) || !isSameOrChildPath(runDir, projectRoot)) {
+      throw new Error(`Refusing to rename run path outside project directory: ${runDir}`);
+    }
+    if (isSameOrChildPath(runDir, internalRoot)) {
+      throw new Error(`Refusing to rename internal project path as run data: ${runDir}`);
+    }
   }
 
   private async drain(): Promise<void> {
@@ -495,4 +566,56 @@ function mappedPathsForField(fileMappings: FileInputMapping[], field: string): A
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function rewritePromptsJson(runDir: string, runName: string, oldRunDir: string, newRunDir: string): void {
+  const promptsPath = path.join(runDir, "prompts.json");
+  if (!fs.existsSync(promptsPath)) return;
+
+  try {
+    const prompts = replacePathReferences(JSON.parse(fs.readFileSync(promptsPath, "utf8")) as unknown, oldRunDir, newRunDir);
+    if (isRecord(prompts)) {
+      prompts.runName = runName;
+    }
+    writeJson(promptsPath, prompts);
+  } catch {
+    // Malformed historical prompts should not block renaming the run.
+  }
+}
+
+function replacePathReferences(value: unknown, oldRunDir: string, newRunDir: string): unknown {
+  if (typeof value === "string") {
+    return replacePathString(value, oldRunDir, newRunDir);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => replacePathReferences(item, oldRunDir, newRunDir));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, replacePathReferences(item, oldRunDir, newRunDir)])
+    );
+  }
+  return value;
+}
+
+function replacePathString(value: string, oldRunDir: string, newRunDir: string): string {
+  if (!path.isAbsolute(value)) return value;
+  const resolvedValue = path.resolve(value);
+  if (!isSameOrChildPath(resolvedValue, oldRunDir)) return value;
+  return path.join(newRunDir, path.relative(oldRunDir, resolvedValue));
+}
+
+function isSameOrChildPath(candidate: string, parent: string): boolean {
+  const comparisonCandidate = pathComparisonKey(candidate);
+  const comparisonParent = pathComparisonKey(parent);
+  return comparisonCandidate === comparisonParent || comparisonCandidate.startsWith(`${comparisonParent}${path.sep}`);
+}
+
+function samePath(left: string, right: string): boolean {
+  return pathComparisonKey(left) === pathComparisonKey(right);
+}
+
+function pathComparisonKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }

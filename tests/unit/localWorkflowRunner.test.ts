@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SqliteStore } from "../../src/main/db/sqliteStore";
 import { RuntimeEventBus } from "../../src/main/runtime/eventBus";
 import { LocalWorkflowRunner } from "../../src/main/runtime/localWorkflowRunner";
-import { createRuntimePaths } from "../../src/main/runtime/paths";
+import { createRuntimePaths, getRunDir } from "../../src/main/runtime/paths";
 import type { WorkflowDefinition } from "../../src/main/runtime/types";
 
 const tempDirs: string[] = [];
@@ -426,6 +426,91 @@ describe("LocalWorkflowRunner", () => {
       }
     ]);
     expect(store.listArtifacts(run.id).some((artifact) => artifact.name === "prompts.json")).toBe(true);
+
+    store.close();
+  });
+
+  it("renames inactive runs and moves stored run data", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const runner = new LocalWorkflowRunner(new Map(), store, paths, new RuntimeEventBus());
+    const runId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const oldRunDir = getRunDir(paths, "Old Run Name", runId);
+    const inputPath = path.join(oldRunDir, "inputs", "images", "01-source.png");
+    const artifactPath = path.join(oldRunDir, "artifacts", "result.json");
+    const promptsPath = path.join(oldRunDir, "prompts.json");
+    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    fs.writeFileSync(inputPath, "image");
+    fs.writeFileSync(artifactPath, "{}");
+    fs.writeFileSync(
+      promptsPath,
+      `${JSON.stringify({ runName: "Old Run Name", runDir: oldRunDir, input: { copied: { images: [inputPath] } } }, null, 2)}\n`,
+      "utf8"
+    );
+
+    const run = store.createRun({
+      id: runId,
+      workflowId: "test.workflow",
+      name: "Old Run Name",
+      runDir: oldRunDir,
+      status: "completed",
+      input: { images: [inputPath] }
+    });
+    store.updateRun(run.id, { output: { resultPath: artifactPath } });
+    const artifact = store.addArtifact({
+      id: "artifact-rename",
+      runId,
+      kind: "json",
+      name: "result.json",
+      path: artifactPath,
+      mimeType: "application/json",
+      metadata: { artifactDir: path.dirname(artifactPath) }
+    });
+
+    const renamed = runner.renameRun(run.id, "New Run Name");
+    const newRunDir = getRunDir(paths, "New Run Name", run.id);
+
+    expect(renamed.name).toBe("New Run Name");
+    expect(renamed.runDir).toBe(newRunDir);
+    expect(fs.existsSync(oldRunDir)).toBe(false);
+    expect(fs.existsSync(newRunDir)).toBe(true);
+    expect(path.basename(newRunDir)).toBe("New-Run-Name-aaaaaaaa");
+    expect((renamed.input as { images: string[] }).images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
+    expect((renamed.output as { resultPath: string }).resultPath).toBe(path.join(newRunDir, "artifacts", "result.json"));
+    expect(store.getArtifact(artifact.id)?.path).toBe(path.join(newRunDir, "artifacts", "result.json"));
+    expect(store.getArtifact(artifact.id)?.metadata).toEqual({ artifactDir: path.join(newRunDir, "artifacts") });
+    const prompts = JSON.parse(fs.readFileSync(path.join(newRunDir, "prompts.json"), "utf8")) as {
+      runName: string;
+      runDir: string;
+      input: { copied: { images: string[] } };
+    };
+    expect(prompts.runName).toBe("New Run Name");
+    expect(prompts.runDir).toBe(newRunDir);
+    expect(prompts.input.copied.images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
+
+    store.close();
+  });
+
+  it("rejects renaming active runs", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const runner = new LocalWorkflowRunner(new Map(), store, paths, new RuntimeEventBus());
+    const run = store.createRun({
+      id: "active-run",
+      workflowId: "test.workflow",
+      name: "Active Run",
+      runDir: getRunDir(paths, "Active Run", "active-run"),
+      status: "running",
+      input: {}
+    });
+
+    expect(() => runner.renameRun(run.id, "New Name")).toThrow("Run can only be renamed after it is inactive.");
+    expect(store.getRun(run.id)?.name).toBe("Active Run");
 
     store.close();
   });

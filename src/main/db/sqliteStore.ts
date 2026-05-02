@@ -127,10 +127,18 @@ export class SqliteStore {
 
   updateRun(
     id: string,
-    patch: Partial<Pick<RunRecord, "status" | "currentStep" | "progress" | "output" | "error">>
+    patch: Partial<Pick<RunRecord, "name" | "runDir" | "status" | "currentStep" | "progress" | "input" | "output" | "error">>
   ): RunRecord {
     const sets: string[] = ["updated_at = ?"];
     const params: unknown[] = [nowIso()];
+    if (patch.name !== undefined) {
+      sets.push("name = ?");
+      params.push(patch.name);
+    }
+    if (patch.runDir !== undefined) {
+      sets.push("run_dir = ?");
+      params.push(patch.runDir);
+    }
     if (patch.status !== undefined) {
       sets.push("status = ?");
       params.push(patch.status);
@@ -142,6 +150,10 @@ export class SqliteStore {
     if (patch.progress !== undefined) {
       sets.push("progress = ?");
       params.push(Math.max(0, Math.min(100, patch.progress)));
+    }
+    if (patch.input !== undefined) {
+      sets.push("input_json = ?");
+      params.push(JSON.stringify(patch.input));
     }
     if (patch.output !== undefined) {
       sets.push("output_json = ?");
@@ -219,6 +231,33 @@ export class SqliteStore {
     return this.all<Record<string, unknown>>("select * from artifacts where run_id = ? order by created_at asc", [
       runId
     ]).map(rowToArtifact);
+  }
+
+  updateArtifact(
+    id: string,
+    patch: Partial<Pick<ArtifactRecord, "path" | "metadata">>
+  ): ArtifactRecord {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (patch.path !== undefined) {
+      sets.push("path = ?", "size = ?");
+      params.push(patch.path, fileSize(patch.path));
+    }
+    if (patch.metadata !== undefined) {
+      sets.push("metadata_json = ?");
+      params.push(JSON.stringify(patch.metadata));
+    }
+    if (sets.length === 0) {
+      const artifact = this.getArtifact(id);
+      if (!artifact) throw new Error(`Artifact not found: ${id}`);
+      return artifact;
+    }
+    params.push(id);
+    this.db.run(`update artifacts set ${sets.join(", ")} where id = ?`, params as any);
+    this.persist();
+    const artifact = this.getArtifact(id);
+    if (!artifact) throw new Error(`Artifact not found after update: ${id}`);
+    return artifact;
   }
 
   private recoverInterruptedRuns(): void {

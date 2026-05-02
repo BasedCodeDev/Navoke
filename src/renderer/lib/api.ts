@@ -309,6 +309,10 @@ export async function createRun(input: { workflowId: string; name?: string; inpu
   return apiFetch("/api/runs", { method: "POST", body: JSON.stringify(input) });
 }
 
+export async function renameRun(id: string, name: string): Promise<RunRecord> {
+  return apiFetch(`/api/runs/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+}
+
 export async function cancelRun(id: string): Promise<RunRecord> {
   return apiFetch(`/api/runs/${id}/cancel`, { method: "POST", body: "{}" });
 }
