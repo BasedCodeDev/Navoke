@@ -164,6 +164,11 @@ export type LabWaitCondition =
   | { kind: "text"; text: string; state: "present" | "absent"; timeoutMs?: number }
   | { kind: "image-count"; selector?: string; minCount: number; previousFingerprints?: string[]; timeoutMs?: number }
   | { kind: "stop-button"; selector?: string; state: "visible" | "hidden"; timeoutMs?: number }
+  | {
+      kind: "chatgpt-submit-ready";
+      selectors?: { composer?: string; submitButton?: string; stopButton?: string; fileInput?: string };
+      timeoutMs?: number;
+    }
   | { kind: "network-idle"; timeoutMs?: number };
 
 export interface WorkflowLabInspectionResult {

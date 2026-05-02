@@ -6,7 +6,7 @@ import { inferMimeType } from "../utils/files";
 export type ExtensionTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ExtensionImageGroup = "reference" | "subject";
 
-export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 4;
+export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 5;
 const CLIENT_TTL_MS = 30_000;
 const LAB_COMMAND_LEASE_MS = 60_000;
 

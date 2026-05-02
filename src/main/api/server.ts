@@ -72,6 +72,16 @@ export class ApiServer {
       void this.options.workflowLab.closeSession(req.params.id).then((session) => res.json(session)).catch(next);
     });
 
+    app.get("/api/lab/sessions/:id/files/:fileId", (req, res, next) => {
+      try {
+        const file = this.options.workflowLab.getStagedFile(req.params.id, req.params.fileId);
+        res.type(file.mimeType);
+        res.sendFile(file.path);
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.post("/api/lab/sessions/:id/inspect", (req, res, next) => {
       void this.options.workflowLab.inspect(req.params.id).then((result) => res.json(result)).catch(next);
     });

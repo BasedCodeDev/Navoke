@@ -103,6 +103,7 @@ function chatGptTabOptionLabel(client: SystemInfo["extension"]["connectedClients
 export default function App(): JSX.Element {
   const queryClient = useQueryClient();
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("chatgpt.extension-image-transform");
+  const [workspaceView, setWorkspaceView] = useState<"runs" | "lab">("runs");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [referenceFiles, setReferenceFiles] = useState<string[]>([]);
@@ -185,7 +186,7 @@ export default function App(): JSX.Element {
   const selectedRunIds = new Set([selectedRunId]);
   const extensionClients = systemQuery.data?.extension.connectedClients ?? [];
   const compatibleExtensionClients = useMemo(() => extensionClients.filter((client) => client.compatible), [extensionClients]);
-  const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 3;
+  const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 5;
   const isChatGptExtensionWorkflow = selectedWorkflowId === "chatgpt.extension-image-transform";
 
   useEffect(() => {
@@ -387,26 +388,60 @@ export default function App(): JSX.Element {
           </Card>
         </section>
 
-        <section className="space-y-5">
-          <WorkflowLabPanel extensionClients={extensionClients} />
-
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Runs</h2>
-            <Button variant="outline" size="sm" onClick={() => void queryClient.invalidateQueries()}>
-              <RefreshCcw className="h-4 w-4" />
-              Refresh
-            </Button>
+        <section className={cn("space-y-5", workspaceView === "lab" ? "col-span-2" : "")}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="inline-flex rounded-md border border-border bg-card p-1">
+              <button
+                type="button"
+                onClick={() => setWorkspaceView("runs")}
+                className={cn(
+                  "rounded px-3 py-1.5 text-sm font-medium transition",
+                  workspaceView === "runs" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Runs
+              </button>
+              <button
+                type="button"
+                onClick={() => setWorkspaceView("lab")}
+                className={cn(
+                  "rounded px-3 py-1.5 text-sm font-medium transition",
+                  workspaceView === "lab" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Workflow Lab
+              </button>
+            </div>
+            {workspaceView === "runs" ? (
+              <Button variant="outline" size="sm" onClick={() => void queryClient.invalidateQueries()}>
+                <RefreshCcw className="h-4 w-4" />
+                Refresh
+              </Button>
+            ) : null}
           </div>
-          <div className="space-y-3">
-            {(runsQuery.data ?? []).map((run) => (
-              <RunRow key={run.id} run={run} selected={selectedRunIds.has(run.id)} onSelect={() => setSelectedRunId(run.id)} />
-            ))}
-            {runsQuery.data?.length === 0 ? <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">No runs yet.</div> : null}
+
+          <div className={workspaceView === "lab" ? "" : "hidden"}>
+            <WorkflowLabPanel extensionClients={extensionClients} />
+          </div>
+
+          <div className={workspaceView === "runs" ? "space-y-5" : "hidden"}>
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Runs</h2>
+              </div>
+              <div className="space-y-3">
+                {(runsQuery.data ?? []).map((run) => (
+                  <RunRow key={run.id} run={run} selected={selectedRunIds.has(run.id)} onSelect={() => setSelectedRunId(run.id)} />
+                ))}
+                {runsQuery.data?.length === 0 ? (
+                  <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">No runs yet.</div>
+                ) : null}
+              </div>
           </div>
         </section>
 
-        <aside className="space-y-5">
-          <Card>
+        {workspaceView === "runs" ? (
+          <aside className="space-y-5">
+            <Card>
             <CardHeader>
               <CardTitle>Run Detail</CardTitle>
             </CardHeader>
@@ -478,7 +513,8 @@ export default function App(): JSX.Element {
               </CardContent>
             </Card>
           ) : null}
-        </aside>
+          </aside>
+        ) : null}
       </div>
     </main>
   );
@@ -497,9 +533,10 @@ function WorkflowLabPanel({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [inspection, setInspection] = useState<WorkflowLabInspectionResult | null>(null);
   const [selector, setSelector] = useState("");
-  const [actionKind, setActionKind] = useState<"click" | "fill" | "submit">("click");
+  const [actionKind, setActionKind] = useState<"click" | "fill" | "submit" | "attach-file">("click");
   const [fillValue, setFillValue] = useState("");
-  const [waitKind, setWaitKind] = useState<"element" | "text" | "image-count" | "stop-button" | "network-idle">("element");
+  const [actionFiles, setActionFiles] = useState<string[]>([]);
+  const [waitKind, setWaitKind] = useState<"element" | "text" | "image-count" | "stop-button" | "chatgpt-submit-ready" | "network-idle">("element");
   const [waitState, setWaitState] = useState("visible");
   const [waitText, setWaitText] = useState("");
   const [waitMinImages, setWaitMinImages] = useState(1);
@@ -588,12 +625,23 @@ function WorkflowLabPanel({
     if (!trimmedSelector) throw new Error("Choose a selector for the action probe.");
     if (actionKind === "fill") return { kind: "fill" as const, selector: trimmedSelector, value: fillValue };
     if (actionKind === "submit") return { kind: "submit" as const, selector: trimmedSelector };
+    if (actionKind === "attach-file") {
+      if (actionFiles.length === 0) throw new Error("Choose at least one file to attach.");
+      return { kind: "attach-file" as const, selector: trimmedSelector, filePaths: actionFiles };
+    }
     return { kind: "click" as const, selector: trimmedSelector };
   }
 
   function buildWaitCondition(): LabWaitCondition {
     const trimmedSelector = selector.trim();
     if (waitKind === "network-idle") return { kind: "network-idle", timeoutMs: 15_000 };
+    if (waitKind === "chatgpt-submit-ready") {
+      return {
+        kind: "chatgpt-submit-ready",
+        selectors: trimmedSelector ? { submitButton: trimmedSelector } : undefined,
+        timeoutMs: 120_000
+      };
+    }
     if (waitKind === "text") return { kind: "text", text: waitText, state: waitState === "absent" ? "absent" : "present", timeoutMs: 30_000 };
     if (waitKind === "image-count") {
       return {
@@ -640,6 +688,17 @@ function WorkflowLabPanel({
     } catch (error) {
       setLabError(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  async function chooseActionFiles(): Promise<void> {
+    const files = await window.workflowAutomation.selectFiles({
+      title: "Choose files for Workflow Lab attach-file probe",
+      filters: [
+        { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] },
+        { name: "All files", extensions: ["*"] }
+      ]
+    });
+    if (files.length > 0) setActionFiles(files);
   }
 
   return (
@@ -757,12 +816,13 @@ function WorkflowLabPanel({
                 <Label>Action</Label>
                 <select
                   value={actionKind}
-                  onChange={(event) => setActionKind(event.target.value as "click" | "fill" | "submit")}
+                  onChange={(event) => setActionKind(event.target.value as "click" | "fill" | "submit" | "attach-file")}
                   className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
                 >
                   <option value="click">Click</option>
                   <option value="fill">Fill</option>
                   <option value="submit">Submit</option>
+                  <option value="attach-file">Attach file</option>
                 </select>
               </div>
             </div>
@@ -770,6 +830,21 @@ function WorkflowLabPanel({
               <div className="mt-3 space-y-2">
                 <Label>Fill value</Label>
                 <Textarea value={fillValue} onChange={(event) => setFillValue(event.target.value)} />
+              </div>
+            ) : null}
+            {actionKind === "attach-file" ? (
+              <div className="mt-3 space-y-2">
+                <Label>Files</Label>
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => void chooseActionFiles()}>
+                    <Upload className="h-4 w-4" />
+                    Choose files
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setActionFiles([])} disabled={actionFiles.length === 0}>
+                    Clear
+                  </Button>
+                </div>
+                <FileList files={actionFiles} emptyText="No files selected" />
               </div>
             ) : null}
             <div className="mt-3 flex flex-wrap gap-2">
@@ -786,6 +861,7 @@ function WorkflowLabPanel({
                 <option value="text">Text state</option>
                 <option value="image-count">New images</option>
                 <option value="stop-button">Stop button</option>
+                <option value="chatgpt-submit-ready">ChatGPT submit ready</option>
                 <option value="network-idle">Network idle</option>
               </select>
               {waitKind === "image-count" ? (
@@ -798,7 +874,7 @@ function WorkflowLabPanel({
                 />
               ) : waitKind === "text" ? (
                 <Input className="h-9 w-60" value={waitText} onChange={(event) => setWaitText(event.target.value)} placeholder="Text to wait for" />
-              ) : waitKind !== "network-idle" ? (
+              ) : waitKind !== "network-idle" && waitKind !== "chatgpt-submit-ready" ? (
                 <select
                   value={waitState}
                   onChange={(event) => setWaitState(event.target.value)}

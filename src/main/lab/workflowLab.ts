@@ -6,7 +6,7 @@ import { launchPersistentProfile } from "../automation/browserHarness";
 import type { ExtensionBridge } from "../extension/extensionBridge";
 import type { RuntimePaths } from "../runtime/types";
 import { ensureDir } from "../runtime/paths";
-import { writeJson } from "../utils/files";
+import { inferMimeType, safeBaseName, writeJson } from "../utils/files";
 import { sleep } from "../utils/sleep";
 import {
   buildInspectionModel,
@@ -31,6 +31,14 @@ export type WorkflowLabAction =
   | { kind: "fill"; selector: string; value: string }
   | { kind: "submit"; selector: string }
   | { kind: "attach-file"; selector: string; filePaths: string[] };
+
+interface WorkflowLabStagedFile {
+  id: string;
+  sourcePath: string;
+  name: string;
+  mimeType: string;
+  url: string;
+}
 
 export interface WorkflowLabSessionCreateInput {
   mode: WorkflowLabSessionMode;
@@ -106,6 +114,7 @@ interface WorkflowLabSessionState {
   updatedAt: string;
   artifacts: WorkflowLabArtifactRef[];
   actionLog: WorkflowLabActionLogEntry[];
+  stagedFiles: Map<string, WorkflowLabStagedFile>;
 }
 
 export class WorkflowLab {
@@ -133,7 +142,8 @@ export class WorkflowLab {
       createdAt: now,
       updatedAt: now,
       artifacts: [],
-      actionLog: []
+      actionLog: [],
+      stagedFiles: new Map()
     };
 
     ensureDir(this.getSessionDir(id));
@@ -245,6 +255,14 @@ export class WorkflowLab {
     return { session: this.toSummary(session), entry };
   }
 
+  getStagedFile(sessionId: string, fileId: string): { path: string; mimeType: string; name: string } {
+    const session = this.requireOpenSession(sessionId);
+    const stagedFile = session.stagedFiles.get(fileId);
+    if (!stagedFile) throw new Error(`Workflow Lab staged file not found: ${fileId}`);
+    if (!fs.existsSync(stagedFile.sourcePath)) throw new Error(`Workflow Lab staged file no longer exists: ${fileId}`);
+    return { path: stagedFile.sourcePath, mimeType: stagedFile.mimeType, name: stagedFile.name };
+  }
+
   async waitFor(sessionId: string, condition: LabWaitCondition): Promise<WorkflowLabWaitResult> {
     const session = this.requireOpenSession(sessionId);
     assertWaitCondition(condition);
@@ -305,11 +323,38 @@ export class WorkflowLab {
   }
 
   private async runExtensionAction(session: WorkflowLabSessionState, action: WorkflowLabAction): Promise<void> {
+    const commandAction = action.kind === "attach-file" ? this.stageAttachFileAction(session, action) : action;
     await this.extensionBridge.executeLabCommand({
       clientId: session.clientId!,
-      command: { kind: "action", action },
+      command: { kind: "action", action: commandAction },
       timeoutMs: 30_000
     });
+  }
+
+  private stageAttachFileAction(
+    session: WorkflowLabSessionState,
+    action: Extract<WorkflowLabAction, { kind: "attach-file" }>
+  ): { kind: "attach-file"; selector: string; files: Array<Omit<WorkflowLabStagedFile, "sourcePath">> } {
+    const files = action.filePaths.map((filePath) => {
+      if (!fs.existsSync(filePath)) throw new Error(`Workflow Lab file not found: ${filePath}`);
+      const id = randomUUID();
+      const stagedFile: WorkflowLabStagedFile = {
+        id,
+        sourcePath: filePath,
+        name: safeBaseName(filePath),
+        mimeType: inferMimeType(filePath) ?? "application/octet-stream",
+        url: `/api/lab/sessions/${session.id}/files/${id}`
+      };
+      session.stagedFiles.set(id, stagedFile);
+      return {
+        id: stagedFile.id,
+        name: stagedFile.name,
+        mimeType: stagedFile.mimeType,
+        url: stagedFile.url
+      };
+    });
+
+    return { kind: "attach-file", selector: action.selector, files };
   }
 
   private async waitForPlaywrightCondition(
@@ -449,11 +494,14 @@ function assertLabAction(action: WorkflowLabAction): void {
   if (!("selector" in action) || typeof action.selector !== "string" || action.selector.trim().length === 0) {
     throw new Error("Workflow Lab action selector is required.");
   }
+  if (action.kind === "attach-file" && (!Array.isArray(action.filePaths) || action.filePaths.length === 0)) {
+    throw new Error("Workflow Lab attach-file action requires at least one file path.");
+  }
 }
 
 function assertWaitCondition(condition: LabWaitCondition): void {
   if (!condition || typeof condition !== "object") throw new Error("Workflow Lab wait condition is required.");
-  if (!["element", "text", "image-count", "stop-button", "network-idle"].includes(condition.kind)) {
+  if (!["element", "text", "image-count", "stop-button", "chatgpt-submit-ready", "network-idle"].includes(condition.kind)) {
     throw new Error("Unsupported Workflow Lab wait condition kind.");
   }
 }
@@ -601,6 +649,8 @@ function collectBrowserPageState(): LabRawPageState {
 }
 
 function collectWaitPageState(condition: LabWaitCondition): LabWaitPageState {
+  type ChatGptSelectors = Extract<LabWaitCondition, { kind: "chatgpt-submit-ready" }>["selectors"];
+
   function isVisible(element: Element | null): boolean {
     if (!element) return false;
     const rect = element.getBoundingClientRect();
@@ -614,18 +664,88 @@ function collectWaitPageState(condition: LabWaitCondition): LabWaitPageState {
     return Boolean("disabled" in candidate && candidate.disabled) || element.getAttribute("aria-disabled") === "true";
   }
 
+  function getButtonLabel(button: Element | null): string {
+    return `${button?.getAttribute("aria-label") || ""} ${button?.getAttribute("title") || ""} ${button?.textContent || ""}`
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isChatGptActiveStopButtonLabel(label: string): boolean {
+    const normalized = String(label || "").trim();
+    if (!normalized || /\bstopped\b/i.test(normalized)) return false;
+    return (
+      /^(stop|cancel)$/i.test(normalized) ||
+      /^stop (generating|generation|streaming|response|thinking|request)$/i.test(normalized) ||
+      /^cancel (generating|generation|streaming|response|request)$/i.test(normalized)
+    );
+  }
+
+  function findVisibleElement(selectors: Array<string | undefined>): Element | null {
+    for (const selector of selectors) {
+      if (!selector) continue;
+      const visible = Array.from(document.querySelectorAll(selector)).find((element) => isVisible(element));
+      if (visible) return visible;
+    }
+    return null;
+  }
+
   function findStopButton(selector?: string): Element | null {
     if (selector) {
       const configured = document.querySelector(selector);
-      if (configured) return configured;
+      if (configured && isVisible(configured)) return configured;
     }
+    const knownStopButton = findVisibleElement([
+      "button[data-testid='stop-button']",
+      "button[data-testid='composer-stop-button']",
+      "button[aria-label='Stop']",
+      "button[aria-label='Stop generating']",
+      "button[aria-label='Stop generation']",
+      "button[aria-label='Stop streaming']",
+      "button[aria-label='Stop response']",
+      "button[aria-label='Stop thinking']",
+      "button[aria-label='Cancel generation']",
+      "button[aria-label='Cancel response']",
+      "button[aria-label='Cancel request']"
+    ]);
+    if (knownStopButton) return knownStopButton;
+
     const buttons = Array.from(document.querySelectorAll("button"));
     return (
       buttons.find((button) => {
-        const label = `${button.getAttribute("aria-label") || ""} ${button.getAttribute("title") || ""} ${button.textContent || ""}`;
-        return /stop|cancel/i.test(label) && isVisible(button);
+        return isVisible(button) && isChatGptActiveStopButtonLabel(getButtonLabel(button));
       }) ?? null
     );
+  }
+
+  function findFirst(selectors: Array<string | undefined>): Element | null {
+    for (const selector of selectors) {
+      if (!selector) continue;
+      const element = document.querySelector(selector);
+      if (element) return element;
+    }
+    return null;
+  }
+
+  function findComposer(selectors?: ChatGptSelectors): Element | null {
+    return findFirst([selectors?.composer, "#prompt-textarea", "textarea[data-id='root']", "textarea", "[contenteditable='true']"]);
+  }
+
+  function findSubmitButton(selectors?: ChatGptSelectors): Element | null {
+    return findFirst([
+      selectors?.submitButton,
+      "button[data-testid='send-button']",
+      "button[aria-label='Send prompt']",
+      "button[aria-label='Send message']",
+      "form button[type='submit']"
+    ]);
+  }
+
+  function visibleButtonLabels(): string[] {
+    return Array.from(document.querySelectorAll("button"))
+      .filter((button) => isVisible(button))
+      .slice(0, 12)
+      .map((button) => getButtonLabel(button))
+      .filter(Boolean);
   }
 
   function imageFingerprint(image: HTMLImageElement): string {
@@ -643,6 +763,12 @@ function collectWaitPageState(condition: LabWaitCondition): LabWaitPageState {
       Boolean(image.currentSrc || image.src)
   );
   const stopButton = findStopButton(condition.kind === "stop-button" ? condition.selector : undefined);
+  const chatGptSelectors = condition.kind === "chatgpt-submit-ready" ? condition.selectors : undefined;
+  const chatGptComposer = condition.kind === "chatgpt-submit-ready" ? findComposer(chatGptSelectors) : null;
+  const chatGptSubmit = condition.kind === "chatgpt-submit-ready" ? findSubmitButton(chatGptSelectors) : null;
+  const chatGptStop = condition.kind === "chatgpt-submit-ready" ? findStopButton(chatGptSelectors?.stopButton) : null;
+  const chatGptFileInput =
+    condition.kind === "chatgpt-submit-ready" ? findFirst([chatGptSelectors?.fileInput, "input[type='file']"]) : null;
 
   return {
     bodyText: document.body?.innerText || "",
@@ -657,6 +783,22 @@ function collectWaitPageState(condition: LabWaitCondition): LabWaitPageState {
         }
       : {}),
     imageFingerprints: images.map(imageFingerprint),
-    stopButtonVisible: Boolean(stopButton)
+    stopButtonVisible: Boolean(stopButton),
+    ...(condition.kind === "chatgpt-submit-ready"
+      ? {
+          chatGptSubmit: {
+            composerFound: Boolean(chatGptComposer),
+            composerVisible: isVisible(chatGptComposer),
+            submitFound: Boolean(chatGptSubmit),
+            submitVisible: isVisible(chatGptSubmit),
+            submitEnabled: Boolean(chatGptSubmit) && isVisible(chatGptSubmit) && !isDisabled(chatGptSubmit),
+            stopButtonVisible: Boolean(chatGptStop),
+            stopButtonLabel: chatGptStop ? getButtonLabel(chatGptStop) : null,
+            fileInputFound: Boolean(chatGptFileInput),
+            visibleButtons: visibleButtonLabels(),
+            imageCount: images.length
+          }
+        }
+      : {})
   };
 }

@@ -45,4 +45,110 @@ describe("Workflow Lab wait predicates", () => {
       ).satisfied
     ).toBe(true);
   });
+
+  it("waits for ChatGPT submit readiness after uploads finish", () => {
+    const result = evaluateWaitCondition(
+      { kind: "chatgpt-submit-ready" },
+      {
+        bodyText: "",
+        imageFingerprints: [],
+        stopButtonVisible: false,
+        chatGptSubmit: {
+          composerFound: true,
+          composerVisible: true,
+          submitFound: true,
+          submitVisible: true,
+          submitEnabled: true,
+          stopButtonVisible: false,
+          fileInputFound: true,
+          visibleButtons: ["Send"],
+          imageCount: 1
+        }
+      }
+    );
+
+    expect(result.satisfied).toBe(true);
+    expect(result.reason).toMatch(/ready/i);
+  });
+
+  it("keeps waiting when ChatGPT submit is disabled during processing", () => {
+    const result = evaluateWaitCondition(
+      { kind: "chatgpt-submit-ready" },
+      {
+        bodyText: "",
+        imageFingerprints: [],
+        stopButtonVisible: false,
+        chatGptSubmit: {
+          composerFound: true,
+          composerVisible: true,
+          submitFound: true,
+          submitVisible: true,
+          submitEnabled: false,
+          stopButtonVisible: false,
+          fileInputFound: true,
+          visibleButtons: ["Send"],
+          imageCount: 1
+        }
+      }
+    );
+
+    expect(result.satisfied).toBe(false);
+    expect(result.reason).toMatch(/disabled/i);
+    expect(result.diagnostics).toMatchObject({ submitEnabled: false });
+  });
+
+  it("keeps waiting while ChatGPT generation is active", () => {
+    const result = evaluateWaitCondition(
+      { kind: "chatgpt-submit-ready" },
+      {
+        bodyText: "",
+        imageFingerprints: [],
+        stopButtonVisible: true,
+        chatGptSubmit: {
+          composerFound: true,
+          composerVisible: true,
+          submitFound: true,
+          submitVisible: true,
+          submitEnabled: true,
+          stopButtonVisible: true,
+          fileInputFound: true,
+          visibleButtons: ["Stop"],
+          imageCount: 2
+        }
+      }
+    );
+
+    expect(result.satisfied).toBe(false);
+    expect(result.reason).toMatch(/generation is still active/i);
+  });
+
+  it("reports useful diagnostics when ChatGPT submit is missing", () => {
+    const result = evaluateWaitCondition(
+      { kind: "chatgpt-submit-ready" },
+      {
+        bodyText: "",
+        imageFingerprints: [],
+        stopButtonVisible: false,
+        chatGptSubmit: {
+          composerFound: true,
+          composerVisible: true,
+          submitFound: false,
+          submitVisible: false,
+          submitEnabled: false,
+          stopButtonVisible: false,
+          fileInputFound: true,
+          visibleButtons: ["Attach files"],
+          imageCount: 0
+        }
+      }
+    );
+
+    expect(result.satisfied).toBe(false);
+    expect(result.reason).toMatch(/submit button was not found/i);
+    expect(result.diagnostics).toMatchObject({
+      submitFound: false,
+      visibleButtons: ["Attach files"],
+      fileInputFound: true
+    });
+  });
 });

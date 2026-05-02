@@ -1,5 +1,5 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:39201";
-const CHATGPT_EXTENSION_PROTOCOL_VERSION = 4;
+const CHATGPT_EXTENSION_PROTOCOL_VERSION = 5;
 const EXTENSION_VERSION = chrome.runtime?.getManifest?.().version || "unknown";
 const CLIENT_ID_STORAGE_KEY = "workflowAutomationClientId";
 const ROUTING_TOKEN_STORAGE_KEY = "workflowAutomationRoutingToken";
@@ -162,14 +162,55 @@ function findSubmitButton(selectors) {
   ]);
 }
 
+function findVisibleElementBySelectors(selectors) {
+  for (const selector of selectors.filter(Boolean)) {
+    const elements = Array.from(document.querySelectorAll(selector));
+    const visible = elements.find((element) => isElementVisible(element));
+    if (visible) return visible;
+  }
+  return null;
+}
+
+function getButtonLabel(button) {
+  return `${button?.getAttribute?.("aria-label") || ""} ${button?.getAttribute?.("title") || ""} ${button?.textContent || ""}`
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isChatGptActiveStopButtonLabel(label) {
+  const normalized = String(label || "").trim();
+  if (!normalized || /\bstopped\b/i.test(normalized)) return false;
+  return (
+    /^(stop|cancel)$/i.test(normalized) ||
+    /^stop (generating|generation|streaming|response|thinking|request)$/i.test(normalized) ||
+    /^cancel (generating|generation|streaming|response|request)$/i.test(normalized)
+  );
+}
+
 function findStopButton(selectors) {
-  const configured = findElement(selectors.stopButton, []);
+  const normalizedSelectors = selectors || {};
+  const configured = findElement(normalizedSelectors.stopButton, []);
   if (configured && isElementVisible(configured)) return configured;
+
+  const knownStopButton = findVisibleElementBySelectors([
+    "button[data-testid='stop-button']",
+    "button[data-testid='composer-stop-button']",
+    "button[aria-label='Stop']",
+    "button[aria-label='Stop generating']",
+    "button[aria-label='Stop generation']",
+    "button[aria-label='Stop streaming']",
+    "button[aria-label='Stop response']",
+    "button[aria-label='Stop thinking']",
+    "button[aria-label='Cancel generation']",
+    "button[aria-label='Cancel response']",
+    "button[aria-label='Cancel request']"
+  ]);
+  if (knownStopButton) return knownStopButton;
+
   const buttons = Array.from(document.querySelectorAll("button"));
   return (
     buttons.find((button) => {
-      const label = `${button.getAttribute("aria-label") || ""} ${button.getAttribute("title") || ""} ${button.textContent || ""}`;
-      return /stop|cancel/i.test(label) && isElementVisible(button);
+      return isElementVisible(button) && isChatGptActiveStopButtonLabel(getButtonLabel(button));
     }) || null
   );
 }
@@ -205,7 +246,79 @@ function setComposerText(composer, text) {
 }
 
 function isSubmitEnabled(button) {
-  return Boolean(button) && !button.disabled && button.getAttribute("aria-disabled") !== "true";
+  return Boolean(button) && isElementVisible(button) && !button.disabled && button.getAttribute("aria-disabled") !== "true";
+}
+
+function collectVisibleButtonLabels() {
+  return Array.from(document.querySelectorAll("button"))
+    .filter((button) => isElementVisible(button))
+    .slice(0, 16)
+    .map((button) => getButtonLabel(button))
+    .filter(Boolean);
+}
+
+function collectVisibleImageCount() {
+  return Array.from(document.images).filter(
+    (image) => image.naturalWidth > 0 && image.naturalHeight > 0 && isElementVisible(image) && Boolean(image.currentSrc || image.src)
+  ).length;
+}
+
+function collectChatGptSubmitReadyState(selectors) {
+  const normalizedSelectors = selectors || {};
+  const composer = findComposer(normalizedSelectors);
+  const submit = findSubmitButton(normalizedSelectors);
+  const stopButton = findStopButton(normalizedSelectors);
+  const fileInput = findFileInput(normalizedSelectors);
+
+  return {
+    composerFound: Boolean(composer),
+    composerVisible: isElementVisible(composer),
+    submitFound: Boolean(submit),
+    submitVisible: isElementVisible(submit),
+    submitEnabled: isSubmitEnabled(submit),
+    stopButtonVisible: Boolean(stopButton),
+    stopButtonLabel: stopButton ? getButtonLabel(stopButton) : null,
+    fileInputFound: Boolean(fileInput),
+    visibleButtons: collectVisibleButtonLabels(),
+    imageCount: collectVisibleImageCount()
+  };
+}
+
+function evaluateChatGptSubmitReadyState(state) {
+  if (!state) {
+    return {
+      satisfied: false,
+      reason: "ChatGPT submit state was not captured.",
+      diagnostics: {}
+    };
+  }
+
+  const satisfied =
+    state.composerFound &&
+    state.composerVisible &&
+    state.submitFound &&
+    state.submitVisible &&
+    state.submitEnabled &&
+    !state.stopButtonVisible;
+  const reason = satisfied
+    ? "ChatGPT submit button is ready."
+    : state.stopButtonVisible
+      ? "ChatGPT generation is still active; stop button is visible."
+      : !state.composerFound
+        ? "ChatGPT composer was not found."
+        : !state.submitFound
+          ? "ChatGPT submit button was not found."
+          : !state.submitVisible
+            ? "ChatGPT submit button is not visible."
+            : !state.submitEnabled
+              ? "ChatGPT submit button is still disabled, likely while uploads or processing finish."
+              : "ChatGPT submit button is not ready.";
+
+  return {
+    satisfied,
+    reason,
+    diagnostics: state
+  };
 }
 
 function protocolError(message) {
@@ -263,18 +376,49 @@ function validateTaskPayload(task) {
 
 async function waitForSubmitButton(task, selectors, imageOnly) {
   const started = Date.now();
-  while (Date.now() - started < 20_000) {
-    const submit = findSubmitButton(selectors);
-    if (isSubmitEnabled(submit)) return submit;
-    await delay(500);
+  const timeoutMs = 180_000;
+  let reportedSlowWait = false;
+  let lastEvaluation = {
+    satisfied: false,
+    reason: "Submit readiness has not been evaluated yet.",
+    diagnostics: {}
+  };
+
+  while (Date.now() - started < timeoutMs) {
+    assertNotHumanVerification();
+    const state = collectChatGptSubmitReadyState(selectors);
+    lastEvaluation = evaluateChatGptSubmitReadyState(state);
+    if (lastEvaluation.satisfied) {
+      const submit = findSubmitButton(selectors);
+      if (submit) return submit;
+    }
+
+    if (!reportedSlowWait && Date.now() - started > 20_000) {
+      reportedSlowWait = true;
+      await postTaskEvent(task.id, "extension.submit.waiting", "Waiting for ChatGPT submit button to become ready", {
+        imageOnly,
+        reason: lastEvaluation.reason,
+        diagnostics: lastEvaluation.diagnostics
+      });
+    }
+
+    await delay(state.stopButtonVisible ? 750 : 500);
   }
+
+  await postTaskEvent(task.id, "extension.submit.timeout", "Timed out waiting for ChatGPT submit button", {
+    imageOnly,
+    timeoutMs,
+    reason: lastEvaluation.reason,
+    diagnostics: lastEvaluation.diagnostics
+  });
 
   if (imageOnly) {
     throw new Error(
-      "ChatGPT did not enable submit for an image-only subject. Add a short per-subject instruction and retry."
+      `Timed out waiting for ChatGPT to enable submit for an image-only subject. ${lastEvaluation.reason} Add a short per-subject instruction and retry.`
     );
   }
-  throw new Error("Could not find an enabled ChatGPT submit button. Provide selectors.submitButton in the workflow.");
+
+  throw new Error(`Timed out waiting for ChatGPT submit button to become ready. ${lastEvaluation.reason}`);
 }
 
 async function fetchTaskImage(image, apiBase) {
@@ -303,6 +447,32 @@ async function attachImages(task, images, selectors, label) {
   input.files = dataTransfer.files;
   dispatchInputEvents(input);
   await postTaskEvent(task.id, "extension.uploaded", `Attached ${images.length} ${label} image(s)`);
+}
+
+async function attachWorkflowLabFiles(action) {
+  const selector = String(action.selector || "");
+  const files = Array.isArray(action.files) ? action.files : [];
+  if (!selector) throw new Error("Workflow Lab attach-file action requires a file input selector.");
+  if (files.length === 0) throw new Error("Workflow Lab attach-file action requires at least one staged file.");
+
+  const input = document.querySelector(selector);
+  if (!(input instanceof HTMLInputElement) || input.type !== "file") {
+    throw new Error(`Workflow Lab attach-file selector did not resolve to a file input: ${selector}`);
+  }
+
+  const apiBase = await getApiBase();
+  const dataTransfer = new DataTransfer();
+  for (const [index, file] of files.entries()) {
+    dataTransfer.items.add(await fetchTaskImage(validateImagePayload(file, "lab", index), apiBase));
+  }
+  input.files = dataTransfer.files;
+  dispatchInputEvents(input);
+
+  return {
+    ok: true,
+    attachedCount: files.length,
+    fileNames: files.map((file) => file.name)
+  };
 }
 
 function imageFingerprint(image) {
@@ -579,6 +749,7 @@ function collectWorkflowLabWaitState(condition) {
       Boolean(image.currentSrc || image.src)
   );
   const stopButton = findStopButton({ stopButton: condition.kind === "stop-button" ? condition.selector : undefined });
+  const chatGptSubmit = condition.kind === "chatgpt-submit-ready" ? collectChatGptSubmitReadyState(condition.selectors || {}) : undefined;
 
   return {
     bodyText: document.body?.innerText || "",
@@ -594,6 +765,7 @@ function collectWorkflowLabWaitState(condition) {
       : {}),
     imageFingerprints: images.map(imageFingerprint),
     stopButtonVisible: Boolean(stopButton),
+    ...(chatGptSubmit ? { chatGptSubmit } : {}),
     networkIdle: document.readyState === "complete"
   };
 }
@@ -650,6 +822,10 @@ function evaluateWorkflowLabWaitCondition(condition, state) {
     };
   }
 
+  if (condition.kind === "chatgpt-submit-ready") {
+    return evaluateChatGptSubmitReadyState(state.chatGptSubmit);
+  }
+
   return {
     satisfied: state.networkIdle === true,
     reason: state.networkIdle === true ? "Document is ready." : "Document is not ready yet.",
@@ -658,7 +834,7 @@ function evaluateWorkflowLabWaitCondition(condition, state) {
 }
 
 function workflowLabWaitTimeout(condition) {
-  return Number(condition.timeoutMs || (condition.kind === "network-idle" ? 15000 : 30000));
+  return Number(condition.timeoutMs || (condition.kind === "network-idle" ? 15000 : condition.kind === "chatgpt-submit-ready" ? 120000 : 30000));
 }
 
 async function waitForWorkflowLabCondition(condition) {
@@ -683,7 +859,7 @@ async function waitForWorkflowLabCondition(condition) {
 async function runWorkflowLabAction(action) {
   if (!action || typeof action !== "object") throw new Error("Invalid Workflow Lab action.");
   if (action.kind === "attach-file") {
-    throw new Error("Extension Workflow Lab cannot attach arbitrary local files. Use a Playwright lab session for file probes.");
+    return attachWorkflowLabFiles(action);
   }
   const selector = String(action.selector || "");
   const element = document.querySelector(selector);

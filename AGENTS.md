@@ -107,6 +107,10 @@ Use the Chrome extension path when the workflow must run inside the user's norma
 - Keep extension selectors configurable where the target UI may change.
 - Never add logic intended to evade human verification. If the site asks for verification, report it and let the user handle it manually in the normal browser tab.
 
+## Workflow Lab
+
+Detailed Workflow Lab guidance lives in `.agents/skills/workflow-lab/SKILL.md`. Use that skill when inspecting pages, calibrating selectors, debugging ChatGPT tab states, adding Lab actions, adding Lab wait conditions, or turning Lab observations into workflow code.
+
 ## Renderer Form Wiring
 
 The current generic form supports:
