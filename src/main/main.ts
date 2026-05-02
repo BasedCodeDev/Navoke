@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { ApiServer } from "./api/server";
 import { SqliteStore } from "./db/sqliteStore";
 import { extensionBridge } from "./extension/extensionBridge";
 import { WorkflowLab } from "./lab/workflowLab";
-import { AppSettingsStore } from "./projectSettings";
+import { AppSettingsStore, projectDisplayName, renameProject as writeProjectName } from "./projectSettings";
 import { RuntimeEventBus } from "./runtime/eventBus";
 import { LocalWorkflowRunner } from "./runtime/localWorkflowRunner";
 import { createRuntimePaths } from "./runtime/paths";
@@ -25,6 +25,7 @@ interface AppConfig {
   apiBaseUrl: string;
   dataDir: string;
   projectDir: string | null;
+  projectName: string | null;
   recentProjects: Array<{ name: string; path: string; exists: boolean }>;
   projectDialogCancelled?: boolean;
   platform: NodeJS.Platform;
@@ -36,7 +37,8 @@ let settingsStore: AppSettingsStore | null = null;
 let workflows: Map<string, WorkflowDefinition> = new Map();
 
 async function bootstrap(): Promise<void> {
-  app.setName("Browser Workflow Automation");
+  app.setName("Based BLINK");
+  Menu.setApplicationMenu(null);
   settingsStore = new AppSettingsStore(app.getPath("userData"));
   workflows = createWorkflowRegistry();
   registerIpc();
@@ -58,17 +60,21 @@ function getConfig(): AppConfig {
     apiBaseUrl: runtime?.apiServer.baseUrl ?? "",
     dataDir: runtime?.paths.dataDir ?? "",
     projectDir: runtime?.paths.projectDir ?? null,
+    projectName: runtime?.paths.projectDir ? projectDisplayName(runtime.paths.projectDir) : null,
     recentProjects: getRecentProjects(),
     platform: process.platform
   };
 }
 
 function getRecentProjects(): Array<{ name: string; path: string; exists: boolean }> {
-  return (settingsStore?.recentProjectDirs ?? []).map((projectDir) => ({
-    name: path.basename(projectDir) || projectDir,
-    path: projectDir,
-    exists: fs.existsSync(projectDir)
-  }));
+  return (settingsStore?.recentProjectDirs ?? []).map((projectDir) => {
+    const exists = fs.existsSync(projectDir);
+    return {
+      name: exists ? projectDisplayName(projectDir) : path.basename(projectDir) || projectDir,
+      path: projectDir,
+      exists
+    };
+  });
 }
 
 async function openProject(projectDir: string): Promise<AppConfig> {
@@ -116,9 +122,16 @@ function registerIpc(): void {
   ipcMain.handle("app:get-config", () => getConfig());
 
   ipcMain.handle("project:open", async (_event, targetPath?: string) => {
-    const projectDir = targetPath?.trim() || (await chooseProjectDirectory("Open Blink project folder"));
+    const projectDir = targetPath?.trim() || (await chooseProjectDirectory("Open Based BLINK project folder"));
     if (!projectDir) return { ...getConfig(), projectDialogCancelled: true };
     return openProject(projectDir);
+  });
+
+  ipcMain.handle("project:rename", async (_event, input?: { projectPath?: string; name?: string }) => {
+    const projectDir = input?.projectPath?.trim();
+    if (!projectDir) throw new Error("Project path is required.");
+    writeProjectName(projectDir, input?.name ?? "");
+    return getConfig();
   });
 
   ipcMain.handle("dialog:select-files", async (_event, options?: { title?: string; filters?: Electron.FileFilter[] }) => {
@@ -147,10 +160,12 @@ function registerIpc(): void {
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
+    title: "Based BLINK",
     width: 1440,
     height: 960,
     minWidth: 1120,
     minHeight: 720,
+    autoHideMenuBar: true,
     backgroundColor: "#f8fafc",
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),

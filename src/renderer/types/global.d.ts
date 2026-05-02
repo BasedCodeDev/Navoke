@@ -1,19 +1,21 @@
 export {};
 
 declare global {
-  interface WorkflowAutomationConfig {
+  interface BasedBlinkConfig {
     apiBaseUrl: string;
     dataDir: string;
     projectDir: string | null;
+    projectName: string | null;
     recentProjects: Array<{ name: string; path: string; exists: boolean }>;
     projectDialogCancelled?: boolean;
     platform: string;
   }
 
   interface Window {
-    workflowAutomation: {
-      getConfig(): Promise<WorkflowAutomationConfig>;
-      openProject(path?: string): Promise<WorkflowAutomationConfig>;
+    basedBlink: {
+      getConfig(): Promise<BasedBlinkConfig>;
+      openProject(path?: string): Promise<BasedBlinkConfig>;
+      renameProject(projectPath: string, name: string): Promise<BasedBlinkConfig>;
       selectFiles(options?: {
         title?: string;
         filters?: Array<{ name: string; extensions: string[] }>;

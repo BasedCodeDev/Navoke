@@ -1,9 +1,9 @@
 {
-  "name": "based-workflow-automation",
+  "name": "based-blink",
   "version": "0.1.0",
   "private": true,
   "license": "GPL-3.0-only",
-  "description": "Local desktop app for durable browser workflow automation.",
+  "description": "Local desktop app for Based BLINK browser workflow automation.",
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "npm run build:main && concurrently -k -n renderer,electron -c cyan,green \"vite --host 127.0.0.1 --port 5173\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist/main/main.js\"",
@@ -16,6 +16,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@google/model-viewer": "^4.2.0",
     "@radix-ui/react-progress": "^1.1.7",
     "@radix-ui/react-slot": "^1.2.3",

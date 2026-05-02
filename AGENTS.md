@@ -1,4 +1,4 @@
-# Workflow Automation Agent Guide
+# Based BLINK Agent Guide
 
 This repo is a local Electron app for browser-based automation workflows. New automations should be code-first TypeScript workflow modules that expose a typed manifest, typed input/output schemas, and a single `run()` function.
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Browser Workflow Automation - ChatGPT Controller",
+  "name": "Based BLINK - ChatGPT Controller",
   "version": "0.6.0",
-  "description": "Runs local Browser Workflow Automation tasks inside your normal ChatGPT tab.",
+  "description": "Runs local Based BLINK tasks inside your normal ChatGPT tab.",
   "permissions": ["storage"],
   "host_permissions": [
     "http://127.0.0.1:*/*",
@@ -19,6 +19,6 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Workflow Automation"
+    "default_title": "Based BLINK"
   }
 }

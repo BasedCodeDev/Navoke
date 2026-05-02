@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { BLINK_INTERNAL_DIR_NAME } from "./runtime/paths";
 
 interface AppSettingsModel {
   lastProjectDir?: string;
@@ -42,6 +43,43 @@ export class AppSettingsStore {
     fs.mkdirSync(path.dirname(this.settingsPath), { recursive: true });
     fs.writeFileSync(this.settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
   }
+}
+
+export function projectDisplayName(projectDir: string): string {
+  const metadataName = readProjectMetadataName(projectDir);
+  if (metadataName) return metadataName;
+  return path.basename(path.resolve(projectDir)) || path.resolve(projectDir);
+}
+
+export function renameProject(projectDir: string, name: string): string {
+  const resolvedProjectDir = path.resolve(projectDir);
+  if (!fs.existsSync(resolvedProjectDir) || !fs.statSync(resolvedProjectDir).isDirectory()) {
+    throw new Error(`Project folder not found: ${resolvedProjectDir}`);
+  }
+
+  const displayName = normalizeProjectName(name);
+  fs.mkdirSync(path.dirname(projectMetadataPath(resolvedProjectDir)), { recursive: true });
+  fs.writeFileSync(projectMetadataPath(resolvedProjectDir), `${JSON.stringify({ name: displayName }, null, 2)}\n`, "utf8");
+  return displayName;
+}
+
+export function projectMetadataPath(projectDir: string): string {
+  return path.join(path.resolve(projectDir), BLINK_INTERNAL_DIR_NAME, "project.json");
+}
+
+function readProjectMetadataName(projectDir: string): string | null {
+  try {
+    const metadata = JSON.parse(fs.readFileSync(projectMetadataPath(projectDir), "utf8")) as { name?: unknown };
+    return typeof metadata.name === "string" ? normalizeProjectName(metadata.name) : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeProjectName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Project name is required.");
+  return trimmed;
 }
 
 function normalizeRecentProjectDirs(settings: AppSettingsModel): string[] {

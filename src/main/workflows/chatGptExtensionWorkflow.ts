@@ -239,7 +239,7 @@ async function ensureChatGptTargetAvailable(target: ChatGptExtensionTaskTarget, 
     const client = await waitForCompatibleTarget(target, ctx.signal, 45_000);
     if (!client) {
       throw new Error(
-        "Could not detect the newly opened ChatGPT tab. Open ChatGPT in the Chrome profile with the Browser Workflow Automation extension installed, then start the run again."
+        "Could not detect the newly opened ChatGPT tab. Open ChatGPT in the Chrome profile with the Based BLINK extension installed, then start the run again."
       );
     }
     await ctx.event("extension.routing", `Targeting new ChatGPT tab: ${describeClient(client)}`, {
@@ -268,7 +268,7 @@ async function ensureChatGptTargetAvailable(target: ChatGptExtensionTaskTarget, 
   let extensionStatus = extensionBridge.status();
   if (!extensionStatus.connectedClients.some((client) => client.compatible)) {
     await ctx.waitForManualAction(
-      "Open ChatGPT in Chrome with the Browser Workflow Automation extension installed. If Chrome already has the extension open, reload the unpacked extension and refresh ChatGPT tabs, then resume this run."
+      "Open ChatGPT in Chrome with the Based BLINK extension installed. If Chrome already has the extension open, reload the unpacked extension and refresh ChatGPT tabs, then resume this run."
     );
   }
   extensionStatus = extensionBridge.status();

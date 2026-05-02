@@ -89,7 +89,7 @@ export interface SystemInfo {
   };
 }
 
-export type AppConfig = WorkflowAutomationConfig;
+export type AppConfig = BasedBlinkConfig;
 
 export type WorkflowLabSessionMode = "playwright" | "extension";
 
@@ -194,12 +194,18 @@ export interface WorkflowLabWaitResult {
 let configPromise: Promise<AppConfig> | null = null;
 
 export function getConfig(): Promise<AppConfig> {
-  configPromise ??= window.workflowAutomation.getConfig();
+  configPromise ??= window.basedBlink.getConfig();
   return configPromise;
 }
 
 export async function openProject(path?: string): Promise<AppConfig> {
-  const config = await window.workflowAutomation.openProject(path);
+  const config = await window.basedBlink.openProject(path);
+  configPromise = Promise.resolve(config);
+  return config;
+}
+
+export async function renameProject(projectPath: string, name: string): Promise<AppConfig> {
+  const config = await window.basedBlink.renameProject(projectPath, name);
   configPromise = Promise.resolve(config);
   return config;
 }

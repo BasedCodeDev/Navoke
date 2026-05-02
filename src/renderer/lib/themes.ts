@@ -15,7 +15,7 @@ export type ThemeId =
 
 export type ThemeAppearance = "light" | "dark";
 
-export const THEME_STORAGE_KEY = "workflowAutomationTheme";
+export const THEME_STORAGE_KEY = "basedBlinkTheme";
 
 interface SemanticTone {
   background: string;

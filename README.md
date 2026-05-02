@@ -1,4 +1,6 @@
-# Browser Workflow Automation
+# Based BLINK
+
+Browser Linked Interaction Navigation Kit.
 
 Local Electron app for durable browser-driven workflows. The first implementation includes:
 
@@ -39,7 +41,7 @@ For ChatGPT account-based workflows, install the companion extension into the Ch
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
-4. Select `C:\Work\Based.WorkflowAutomation\extension\chatgpt-controller`.
+4. Select this repo's `extension\chatgpt-controller` folder.
 5. Run the Electron app with `npm.cmd run dev`.
 6. Open `https://chatgpt.com/` in that Chrome profile and keep the tab open.
 7. In the app, choose **ChatGPT Extension Image Transform**.

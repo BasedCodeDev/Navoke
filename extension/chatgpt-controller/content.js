@@ -1,9 +1,9 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:39201";
 const CHATGPT_EXTENSION_PROTOCOL_VERSION = 6;
 const EXTENSION_VERSION = chrome.runtime?.getManifest?.().version || "unknown";
-const CLIENT_ID_STORAGE_KEY = "workflowAutomationClientId";
-const ROUTING_TOKEN_STORAGE_KEY = "workflowAutomationRoutingToken";
-const ROUTING_TOKEN_PARAM = "workflow-automation-tab";
+const CLIENT_ID_STORAGE_KEY = "basedBlinkClientId";
+const ROUTING_TOKEN_STORAGE_KEY = "basedBlinkRoutingToken";
+const ROUTING_TOKEN_PARAM = "based-blink-tab";
 
 let isRunningTask = false;
 let clientId = getOrCreateClientId();
@@ -323,7 +323,7 @@ function evaluateChatGptSubmitReadyState(state) {
 
 function protocolError(message) {
   return new Error(
-    `${message} Reload the unpacked Browser Workflow Automation Chrome extension and refresh every open ChatGPT tab.`
+    `${message} Reload the unpacked Based BLINK Chrome extension and refresh every open ChatGPT tab.`
   );
 }
 

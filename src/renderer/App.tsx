@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -35,6 +35,7 @@ import {
   listRuns,
   listWorkflows,
   openProject,
+  renameProject,
   resumeRun,
   runInputFileUrl,
   runLabAction,
@@ -60,6 +61,15 @@ import {
   type ThemeId
 } from "@/lib/themes";
 import {
+  FONT_STORAGE_KEY,
+  appFonts,
+  applyFontToRoot,
+  getFontById,
+  resolveFontId,
+  type FontDefinition,
+  type FontId
+} from "@/lib/fonts";
+import {
   buildChatGptArtifactPairing,
   fileName,
   getChatGptRunInput,
@@ -80,6 +90,10 @@ function getInitialThemeId(): ThemeId {
   return resolveThemeId(storedTheme, prefersDark);
 }
 
+function getInitialFontId(): FontId {
+  return resolveFontId(window.localStorage.getItem(FONT_STORAGE_KEY));
+}
+
 function usesMasterPrompt(workflowId: string): boolean {
   return ["chatgpt.extension-image-transform"].includes(workflowId);
 }
@@ -90,7 +104,7 @@ function usesBrowserProfile(workflowId: string): boolean {
 
 const NEW_CHATGPT_TAB_VALUE = "__new_chatgpt_tab__";
 const CHATGPT_NEW_TAB_URL = "https://chatgpt.com/";
-const CHATGPT_TAB_ROUTING_PARAM = "workflow-automation-tab";
+const CHATGPT_TAB_ROUTING_PARAM = "based-blink-tab";
 
 type ChatGptTabInput =
   | { mode: "existing"; clientId: string }
@@ -118,16 +132,10 @@ function chatGptTabOptionLabel(client: SystemInfo["extension"]["connectedClients
   return `${label} (${client.status || "ready"})`;
 }
 
-function projectDisplayName(projectDir: string | null | undefined): string {
-  if (!projectDir) return "Blink Projects";
-  const normalized = projectDir.replace(/[\\/]+$/g, "");
-  const parts = normalized.split(/[\\/]+/);
-  return parts[parts.length - 1] || normalized;
-}
-
 export default function App(): JSX.Element {
   const queryClient = useQueryClient();
   const [themeId, setThemeId] = useState<ThemeId>(getInitialThemeId);
+  const [fontId, setFontId] = useState<FontId>(getInitialFontId);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("chatgpt.extension-image-transform");
   const [workspaceView, setWorkspaceView] = useState<"runs" | "lab">("runs");
@@ -170,11 +178,17 @@ export default function App(): JSX.Element {
   });
 
   const selectedTheme = useMemo(() => getThemeById(themeId), [themeId]);
+  const selectedFont = useMemo(() => getFontById(fontId), [fontId]);
 
   useEffect(() => {
     applyThemeToRoot(selectedTheme);
     window.localStorage.setItem(THEME_STORAGE_KEY, themeId);
   }, [selectedTheme, themeId]);
+
+  useEffect(() => {
+    applyFontToRoot(selectedFont);
+    window.localStorage.setItem(FONT_STORAGE_KEY, fontId);
+  }, [selectedFont, fontId]);
 
   useEffect(() => {
     if (configQuery.data && !hasProject) {
@@ -213,7 +227,7 @@ export default function App(): JSX.Element {
       }
       const chatGptTab = selectedWorkflowId === "chatgpt.extension-image-transform" ? buildChatGptTabInput(chatGptTabSelection) : null;
       if (chatGptTab?.mode === "new") {
-        await window.workflowAutomation.openExternal(buildNewChatGptTabUrl(chatGptTab.routingToken));
+        await window.basedBlink.openExternal(buildNewChatGptTabUrl(chatGptTab.routingToken));
       }
       const workflowInput =
         selectedWorkflowId === "hunyuan.image-to-model"
@@ -268,7 +282,7 @@ export default function App(): JSX.Element {
   }, [compatibleExtensionClients, isChatGptExtensionWorkflow]);
 
   async function chooseImages(setFiles: (files: string[]) => void, title: string): Promise<void> {
-    const files = await window.workflowAutomation.selectFiles({
+    const files = await window.basedBlink.selectFiles({
       title,
       filters: [
         { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
@@ -278,7 +292,7 @@ export default function App(): JSX.Element {
     if (files.length > 0) setFiles(files);
   }
 
-  async function openProjectAndRefresh(projectPath?: string): Promise<WorkflowAutomationConfig> {
+  async function openProjectAndRefresh(projectPath?: string): Promise<BasedBlinkConfig> {
     const previousProjectDir = configQuery.data?.projectDir ?? null;
     const config = await openProject(projectPath);
     queryClient.setQueryData(["config"], config);
@@ -296,17 +310,23 @@ export default function App(): JSX.Element {
     return config;
   }
 
+  async function renameProjectAndRefresh(projectPath: string, nextName: string): Promise<void> {
+    const config = await renameProject(projectPath, nextName);
+    queryClient.setQueryData(["config"], config);
+    setFormError(null);
+  }
+
   const showLanding = showProjectLanding || !hasProject;
-  const projectName = projectDisplayName(configQuery.data?.projectDir);
+  const projectName = configQuery.data?.projectName ?? "Based BLINK";
 
   return (
     <main className="min-h-screen bg-background text-foreground transition-colors">
       <header className="border-b border-border bg-card">
         <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-6 py-4">
           <div>
-            <h1 className="text-xl font-semibold">{showLanding ? "Browser Workflow Automation" : projectName}</h1>
+            <h1 className="text-xl font-semibold">{showLanding ? "Based BLINK" : projectName}</h1>
             <p className="text-sm text-muted-foreground">
-              {showLanding ? "Choose a Blink project folder to continue." : configQuery.data?.projectDir}
+              {showLanding ? "Choose a Based BLINK project folder to continue." : configQuery.data?.projectDir}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -328,8 +348,8 @@ export default function App(): JSX.Element {
               type="button"
               variant="outline"
               size="icon"
-              aria-label="Choose theme"
-              title={`Theme: ${selectedTheme.name}`}
+              aria-label="Choose theme and font"
+              title={`${selectedTheme.name} / ${selectedFont.name}`}
               onClick={() => setThemePickerOpen(true)}
             >
               <Palette className="h-4 w-4" />
@@ -346,6 +366,9 @@ export default function App(): JSX.Element {
           onOpenProject={() => void openProjectAndRefresh().catch((error) => setFormError(error instanceof Error ? error.message : String(error)))}
           onSelectProject={(projectPath) =>
             void openProjectAndRefresh(projectPath).catch((error) => setFormError(error instanceof Error ? error.message : String(error)))
+          }
+          onRenameProject={(projectPath, nextName) =>
+            renameProjectAndRefresh(projectPath, nextName).catch((error) => setFormError(error instanceof Error ? error.message : String(error)))
           }
         />
       ) : (
@@ -576,7 +599,7 @@ export default function App(): JSX.Element {
           onClose={() => setSelectedRunId(null)}
           onResume={(runId) => void resumeRun(runId).then(() => queryClient.invalidateQueries())}
           onCancel={(runId) => void cancelRun(runId).then(() => queryClient.invalidateQueries())}
-          onOpenDataFolder={() => window.workflowAutomation.openPath(activeRun?.runDir ?? "")}
+          onOpenDataFolder={() => window.basedBlink.openPath(activeRun?.runDir ?? "")}
           onDelete={(runId) => void deleteRunMutation.mutate(runId)}
         />
       ) : null}
@@ -584,7 +607,10 @@ export default function App(): JSX.Element {
         <ThemePickerModal
           themes={appThemes}
           selectedTheme={selectedTheme}
+          fonts={appFonts}
+          selectedFont={selectedFont}
           onSelect={(nextThemeId) => setThemeId(nextThemeId)}
+          onSelectFont={(nextFontId) => setFontId(nextFontId)}
           onClose={() => setThemePickerOpen(false)}
         />
       ) : null}
@@ -595,12 +621,18 @@ export default function App(): JSX.Element {
 function ThemePickerModal({
   themes,
   selectedTheme,
+  fonts,
+  selectedFont,
   onSelect,
+  onSelectFont,
   onClose
 }: {
   themes: ThemeDefinition[];
   selectedTheme: ThemeDefinition;
+  fonts: FontDefinition[];
+  selectedFont: FontDefinition;
   onSelect(themeId: ThemeId): void;
+  onSelectFont(fontId: FontId): void;
   onClose(): void;
 }): JSX.Element {
   useEffect(() => {
@@ -629,51 +661,99 @@ function ThemePickerModal({
           <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
             <div className="min-w-0">
               <h2 id="theme-picker-title" className="text-lg font-semibold">
-                Theme Palette
+                Appearance
               </h2>
-              <div className="truncate text-sm text-muted-foreground">Selected: {selectedTheme.name}</div>
+              <div className="truncate text-sm text-muted-foreground">
+                Selected: {selectedTheme.name} / {selectedFont.name}
+              </div>
             </div>
             <Button type="button" variant="ghost" size="icon" aria-label="Close theme picker" onClick={onClose}>
               <X className="h-4 w-4" />
             </Button>
           </div>
 
-          <div className="grid max-h-[calc(100vh-9rem)] gap-3 overflow-y-auto p-5 sm:grid-cols-2 lg:grid-cols-3">
-            {themes.map((theme) => {
-              const selected = theme.id === selectedTheme.id;
-              return (
-                <button
-                  type="button"
-                  key={theme.id}
-                  onClick={() => {
-                    onSelect(theme.id);
-                    onClose();
-                  }}
-                  className={cn(
-                    "rounded-md border bg-card p-4 text-left text-card-foreground transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-                    selected ? "border-primary ring-1 ring-primary" : "border-border"
-                  )}
-                >
-                  <div className="mb-3 flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">{theme.name}</div>
-                      <div className="mt-1 text-xs leading-5 text-muted-foreground">{theme.description}</div>
-                    </div>
-                    {selected ? <CheckCircle2 className={cn("h-4 w-4 shrink-0", toneTextClassNames.success)} /> : null}
-                  </div>
-                  <div className="flex gap-1.5">
-                    {theme.swatches.map((swatch) => (
-                      <span
-                        key={`${theme.id}-${swatch}`}
-                        className="h-7 flex-1 rounded border border-border"
-                        style={{ backgroundColor: swatch }}
-                        aria-hidden="true"
-                      />
-                    ))}
-                  </div>
-                </button>
-              );
-            })}
+          <div className="max-h-[calc(100vh-9rem)] space-y-6 overflow-y-auto p-5">
+            <section className="space-y-3">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Font</h3>
+                </div>
+                <Badge className={cn("border", toneClassNames.neutral)}>{selectedFont.name}</Badge>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {fonts.map((font) => {
+                  const selected = font.id === selectedFont.id;
+                  return (
+                    <button
+                      type="button"
+                      key={font.id}
+                      onClick={() => onSelectFont(font.id)}
+                      className={cn(
+                        "rounded-md border bg-card p-4 text-left text-card-foreground transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                        selected ? "border-primary ring-1 ring-primary" : "border-border"
+                      )}
+                    >
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold">{font.name}</div>
+                          <div className="mt-1 text-xs leading-5 text-muted-foreground">{font.description}</div>
+                        </div>
+                        {selected ? <CheckCircle2 className={cn("h-4 w-4 shrink-0", toneTextClassNames.success)} /> : null}
+                      </div>
+                      <div
+                        className="truncate rounded border border-border bg-background px-3 py-2 text-sm"
+                        style={{ fontFamily: font.family }}
+                      >
+                        {font.preview}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold">Theme</h3>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {themes.map((theme) => {
+                  const selected = theme.id === selectedTheme.id;
+                  return (
+                    <button
+                      type="button"
+                      key={theme.id}
+                      onClick={() => {
+                        onSelect(theme.id);
+                        onClose();
+                      }}
+                      className={cn(
+                        "rounded-md border bg-card p-4 text-left text-card-foreground transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                        selected ? "border-primary ring-1 ring-primary" : "border-border"
+                      )}
+                    >
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold">{theme.name}</div>
+                          <div className="mt-1 text-xs leading-5 text-muted-foreground">{theme.description}</div>
+                        </div>
+                        {selected ? <CheckCircle2 className={cn("h-4 w-4 shrink-0", toneTextClassNames.success)} /> : null}
+                      </div>
+                      <div className="flex gap-1.5">
+                        {theme.swatches.map((swatch) => (
+                          <span
+                            key={`${theme.id}-${swatch}`}
+                            className="h-7 flex-1 rounded border border-border"
+                            style={{ backgroundColor: swatch }}
+                            aria-hidden="true"
+                          />
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           </div>
         </div>
       </div>
@@ -686,25 +766,46 @@ function ProjectLanding({
   isLoading,
   error,
   onOpenProject,
-  onSelectProject
+  onSelectProject,
+  onRenameProject
 }: {
-  config?: WorkflowAutomationConfig;
+  config?: BasedBlinkConfig;
   isLoading: boolean;
   error: string | null;
   onOpenProject(): void;
   onSelectProject(projectPath: string): void;
+  onRenameProject(projectPath: string, nextName: string): Promise<void>;
 }): JSX.Element {
   const recentProjects = config?.recentProjects ?? [];
   const activeProjectDir = config?.projectDir ?? null;
-  const title = projectDisplayName(activeProjectDir);
+  const [editingPath, setEditingPath] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+
+  function startRename(project: BasedBlinkConfig["recentProjects"][number]): void {
+    setEditingPath(project.path);
+    setEditingName(project.name);
+  }
+
+  async function submitRename(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!editingPath) return;
+    setRenamingPath(editingPath);
+    try {
+      await onRenameProject(editingPath, editingName);
+      setEditingPath(null);
+    } finally {
+      setRenamingPath(null);
+    }
+  }
 
   return (
     <div className="mx-auto flex min-h-[calc(100vh-5.25rem)] max-w-5xl flex-col px-6 py-12">
       <section className="flex flex-1 flex-col items-center justify-center gap-5 text-center">
-        <div className="space-y-2">
-          <h2 className="text-3xl font-semibold">{title}</h2>
+        <div className="space-y-4">
+          <h2 className="text-3xl font-semibold">{config?.projectName ?? "Based BLINK"}</h2>
           <p className="text-sm text-muted-foreground">
-            {activeProjectDir ?? "Open a project folder to load its runs and local workflow data."}
+            {activeProjectDir ? `Current project: ${activeProjectDir}` : "Open a project folder to load its runs and local workflow data."}
           </p>
         </div>
         <Button type="button" className="h-14 px-8 text-base" onClick={onOpenProject} disabled={isLoading}>
@@ -726,26 +827,59 @@ function ProjectLanding({
         </div>
         {recentProjects.length > 0 ? (
           <div className="grid gap-2">
-            {recentProjects.map((project) => (
-              <button
-                type="button"
-                key={project.path}
-                onClick={() => onSelectProject(project.path)}
-                disabled={!project.exists}
-                className={cn(
-                  "flex items-center justify-between gap-4 rounded-md border border-border bg-card px-4 py-3 text-left transition hover:border-primary disabled:cursor-not-allowed disabled:opacity-60",
-                  activeProjectDir === project.path && "border-primary ring-1 ring-primary"
-                )}
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium">{project.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{project.path}</span>
-                </span>
-                <Badge className={cn("shrink-0 border", project.exists ? toneClassNames.info : toneClassNames.danger)}>
-                  {project.exists ? "Open" : "Missing"}
-                </Badge>
-              </button>
-            ))}
+            {recentProjects.map((project) => {
+              const isEditing = editingPath === project.path;
+              return (
+                <div
+                  key={project.path}
+                  className={cn(
+                    "rounded-md border border-border bg-card px-4 py-3 transition",
+                    activeProjectDir === project.path && "border-primary ring-1 ring-primary",
+                    !project.exists && "opacity-60"
+                  )}
+                >
+                  {isEditing ? (
+                    <form className="grid gap-3 sm:grid-cols-[1fr_auto]" onSubmit={(event) => void submitRename(event)}>
+                      <Input
+                        value={editingName}
+                        onChange={(event) => setEditingName(event.target.value)}
+                        autoFocus
+                        aria-label="Project name"
+                      />
+                      <div className="flex gap-2">
+                        <Button type="submit" size="sm" disabled={renamingPath === project.path}>
+                          Save
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => setEditingPath(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground sm:col-span-2">{project.path}</div>
+                    </form>
+                  ) : (
+                    <div className="flex items-center justify-between gap-4">
+                      <button
+                        type="button"
+                        onClick={() => onSelectProject(project.path)}
+                        disabled={!project.exists}
+                        className="min-w-0 flex-1 text-left disabled:cursor-not-allowed"
+                      >
+                        <span className="block truncate text-sm font-medium">{project.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{project.path}</span>
+                      </button>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => startRename(project)} disabled={!project.exists}>
+                          Rename
+                        </Button>
+                        <Badge className={cn("border", project.exists ? toneClassNames.info : toneClassNames.danger)}>
+                          {project.exists ? "Open" : "Missing"}
+                        </Badge>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -1288,7 +1422,7 @@ function WorkflowLabPanel({
   }
 
   async function chooseActionFiles(): Promise<void> {
-    const files = await window.workflowAutomation.selectFiles({
+    const files = await window.basedBlink.selectFiles({
       title: "Choose files for Workflow Lab attach-file probe",
       filters: [
         { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] },
