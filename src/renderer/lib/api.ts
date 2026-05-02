@@ -27,6 +27,7 @@ export interface RunRecord {
   id: string;
   workflowId: string;
   name: string;
+  runDir: string | null;
   status: "queued" | "running" | "waiting_manual" | "completed" | "failed" | "cancelled";
   currentStep: string | null;
   progress: number;
@@ -87,6 +88,8 @@ export interface SystemInfo {
     }>;
   };
 }
+
+export type AppConfig = WorkflowAutomationConfig;
 
 export type WorkflowLabSessionMode = "playwright" | "extension";
 
@@ -188,15 +191,24 @@ export interface WorkflowLabWaitResult {
   diagnostics: Record<string, unknown>;
 }
 
-let configPromise: Promise<{ apiBaseUrl: string; dataDir: string; platform: string }> | null = null;
+let configPromise: Promise<AppConfig> | null = null;
 
-export function getConfig(): Promise<{ apiBaseUrl: string; dataDir: string; platform: string }> {
+export function getConfig(): Promise<AppConfig> {
   configPromise ??= window.workflowAutomation.getConfig();
   return configPromise;
 }
 
+export async function openProject(path?: string): Promise<AppConfig> {
+  const config = await window.workflowAutomation.openProject(path);
+  configPromise = Promise.resolve(config);
+  return config;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const config = await getConfig();
+  if (!config.apiBaseUrl) {
+    throw new Error("Open a project folder before using the local API.");
+  }
   const response = await fetch(`${config.apiBaseUrl}${path}`, {
     ...init,
     headers: {

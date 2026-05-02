@@ -35,6 +35,7 @@ import {
   listLabSessions,
   listRuns,
   listWorkflows,
+  openProject,
   resumeRun,
   runInputFileUrl,
   runLabAction,
@@ -121,6 +122,13 @@ function chatGptTabOptionLabel(client: SystemInfo["extension"]["connectedClients
   return `${label} (${client.status || "ready"})`;
 }
 
+function projectDisplayName(projectDir: string | null | undefined): string {
+  if (!projectDir) return "Blink Projects";
+  const normalized = projectDir.replace(/[\\/]+$/g, "");
+  const parts = normalized.split(/[\\/]+/);
+  return parts[parts.length - 1] || normalized;
+}
+
 export default function App(): JSX.Element {
   const queryClient = useQueryClient();
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialThemeMode);
@@ -139,16 +147,29 @@ export default function App(): JSX.Element {
   const [pauseForManualLogin, setPauseForManualLogin] = useState(true);
   const [chatGptTabSelection, setChatGptTabSelection] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [showProjectLanding, setShowProjectLanding] = useState(false);
 
-  const workflowsQuery = useQuery({ queryKey: ["workflows"], queryFn: listWorkflows });
-  const runsQuery = useQuery({ queryKey: ["runs"], queryFn: listRuns, refetchInterval: 2_000 });
-  const systemQuery = useQuery({ queryKey: ["system"], queryFn: getSystemInfo, refetchInterval: 5_000 });
   const configQuery = useQuery({ queryKey: ["config"], queryFn: getConfig });
+  const hasProject = Boolean(configQuery.data?.apiBaseUrl && configQuery.data.projectDir);
+  const apiBaseUrl = configQuery.data?.apiBaseUrl ?? "";
+  const workflowsQuery = useQuery({ queryKey: ["workflows", apiBaseUrl], queryFn: listWorkflows, enabled: hasProject });
+  const runsQuery = useQuery({
+    queryKey: ["runs", apiBaseUrl],
+    queryFn: listRuns,
+    enabled: hasProject,
+    refetchInterval: hasProject ? 2_000 : false
+  });
+  const systemQuery = useQuery({
+    queryKey: ["system", apiBaseUrl],
+    queryFn: getSystemInfo,
+    enabled: hasProject,
+    refetchInterval: hasProject ? 5_000 : false
+  });
   const selectedRunQuery = useQuery({
-    queryKey: ["run", selectedRunId],
+    queryKey: ["run", apiBaseUrl, selectedRunId],
     queryFn: () => getRun(selectedRunId!),
-    enabled: Boolean(selectedRunId),
-    refetchInterval: selectedRunId ? 2_000 : false
+    enabled: Boolean(selectedRunId && hasProject),
+    refetchInterval: selectedRunId && hasProject ? 2_000 : false
   });
 
   const isDarkMode = themeMode === "dark";
@@ -161,12 +182,25 @@ export default function App(): JSX.Element {
   }, [isDarkMode, themeMode]);
 
   useEffect(() => {
+    if (configQuery.data && !hasProject) {
+      setShowProjectLanding(true);
+    }
+  }, [configQuery.data, hasProject]);
+
+  useEffect(() => {
+    if (!hasProject) return;
+    let unsubscribe: (() => void) | undefined;
     void subscribeRuntimeEvents(() => {
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       void queryClient.invalidateQueries({ queryKey: ["system"] });
-      if (selectedRunId) void queryClient.invalidateQueries({ queryKey: ["run", selectedRunId] });
+      if (selectedRunId) void queryClient.invalidateQueries({ queryKey: ["run"] });
+    }).then((cleanup) => {
+      unsubscribe = cleanup;
     });
-  }, [queryClient, selectedRunId]);
+    return () => {
+      unsubscribe?.();
+    };
+  }, [apiBaseUrl, hasProject, queryClient, selectedRunId]);
 
   const workflows = workflowsQuery.data ?? [];
   const selectedWorkflow = useMemo(
@@ -177,6 +211,11 @@ export default function App(): JSX.Element {
   const createRunMutation = useMutation({
     mutationFn: async () => {
       setFormError(null);
+      let activeConfig = configQuery.data;
+      if (!activeConfig?.apiBaseUrl || !activeConfig.projectDir) {
+        setShowProjectLanding(true);
+        throw new Error("Open a project before starting a run.");
+      }
       const chatGptTab = selectedWorkflowId === "chatgpt.extension-image-transform" ? buildChatGptTabInput(chatGptTabSelection) : null;
       if (chatGptTab?.mode === "new") {
         await window.workflowAutomation.openExternal(buildNewChatGptTabUrl(chatGptTab.routingToken));
@@ -193,7 +232,7 @@ export default function App(): JSX.Element {
     onSuccess: (run) => {
       setSelectedRunId(run.id);
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
-      void queryClient.invalidateQueries({ queryKey: ["run", run.id] });
+      void queryClient.invalidateQueries({ queryKey: ["run"] });
     },
     onError: (error) => setFormError(error instanceof Error ? error.message : String(error))
   });
@@ -204,7 +243,7 @@ export default function App(): JSX.Element {
       if (selectedRunId === deletedRunId) {
         setSelectedRunId(null);
       }
-      queryClient.removeQueries({ queryKey: ["run", deletedRunId] });
+      queryClient.removeQueries({ queryKey: ["run"] });
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       void queryClient.invalidateQueries({ queryKey: ["system"] });
     },
@@ -244,21 +283,52 @@ export default function App(): JSX.Element {
     if (files.length > 0) setFiles(files);
   }
 
+  async function openProjectAndRefresh(projectPath?: string): Promise<WorkflowAutomationConfig> {
+    const previousProjectDir = configQuery.data?.projectDir ?? null;
+    const config = await openProject(projectPath);
+    queryClient.setQueryData(["config"], config);
+    if (config.projectDir !== previousProjectDir) {
+      setSelectedRunId(null);
+      queryClient.removeQueries({ queryKey: ["run"] });
+    }
+    void queryClient.invalidateQueries({ queryKey: ["workflows"] });
+    void queryClient.invalidateQueries({ queryKey: ["runs"] });
+    void queryClient.invalidateQueries({ queryKey: ["system"] });
+    if (config.projectDir && !config.projectDialogCancelled) {
+      setShowProjectLanding(false);
+      setFormError(null);
+    }
+    return config;
+  }
+
+  const showLanding = showProjectLanding || !hasProject;
+  const projectName = projectDisplayName(configQuery.data?.projectDir);
+
   return (
     <main className={cn("min-h-screen bg-background text-foreground transition-colors", isDarkMode && "dark")}>
       <header className="border-b border-border bg-card">
         <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-6 py-4">
           <div>
-            <h1 className="text-xl font-semibold">Browser Workflow Automation</h1>
-            <p className="text-sm text-muted-foreground">Local durable browser workflows for images, models, and chained artifacts.</p>
+            <h1 className="text-xl font-semibold">{showLanding ? "Browser Workflow Automation" : projectName}</h1>
+            <p className="text-sm text-muted-foreground">
+              {showLanding ? "Choose a Blink project folder to continue." : configQuery.data?.projectDir}
+            </p>
           </div>
           <div className="flex items-center gap-2">
+            {!showLanding ? (
+              <>
             <Badge className={cn("border", neutralBadgeTone)}>
               Queue: {systemQuery.data?.runner.queued ?? 0} · Running: {systemQuery.data?.runner.running ?? 0}
             </Badge>
             <Badge className={cn("border", infoBadgeTone)}>
               Extension: {systemQuery.data?.extension.connectedClients.length ?? 0}
             </Badge>
+                <Button type="button" variant="outline" size="sm" onClick={() => setShowProjectLanding(true)}>
+                  <FolderOpen className="h-4 w-4" />
+                  Open Project
+                </Button>
+              </>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -273,6 +343,17 @@ export default function App(): JSX.Element {
         </div>
       </header>
 
+      {showLanding ? (
+        <ProjectLanding
+          config={configQuery.data}
+          isLoading={configQuery.isLoading}
+          error={formError}
+          onOpenProject={() => void openProjectAndRefresh().catch((error) => setFormError(error instanceof Error ? error.message : String(error)))}
+          onSelectProject={(projectPath) =>
+            void openProjectAndRefresh(projectPath).catch((error) => setFormError(error instanceof Error ? error.message : String(error)))
+          }
+        />
+      ) : (
       <div className="mx-auto grid max-w-[1500px] grid-cols-[360px_minmax(0,1fr)] gap-5 px-6 py-5">
         <section className="space-y-5">
           <Card>
@@ -389,6 +470,13 @@ export default function App(): JSX.Element {
                 </>
               ) : null}
 
+              {!hasProject ? (
+                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", infoNoticeTone)}>
+                  <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                  Choose a project folder to create runs. Starting a run will prompt for one.
+                </div>
+              ) : null}
+
               {formError ? (
                 <div className={cn("flex gap-2 rounded-md border p-3 text-sm", dangerNoticeTone)}>
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -398,7 +486,7 @@ export default function App(): JSX.Element {
 
               <Button className="w-full" onClick={() => createRunMutation.mutate()} disabled={createRunMutation.isPending}>
                 <Play className="h-4 w-4" />
-                Start run
+                {hasProject ? "Start run" : "Choose project and start"}
               </Button>
             </CardContent>
           </Card>
@@ -408,8 +496,9 @@ export default function App(): JSX.Element {
               <CardTitle>Local Runtime</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm text-muted-foreground">
-              <div className="truncate">Data: {configQuery.data?.dataDir}</div>
-              <div className="truncate">API: {configQuery.data?.apiBaseUrl}</div>
+              <div className="truncate">Project: {configQuery.data?.projectDir ?? "No project selected"}</div>
+              <div className="truncate">Data: {configQuery.data?.dataDir || "Choose a project to create .blink data"}</div>
+              <div className="truncate">API: {configQuery.data?.apiBaseUrl || "Not running"}</div>
               <div>
                 Extension clients: {systemQuery.data?.extension.connectedClients.length ?? 0}; pending:{" "}
                 {systemQuery.data?.extension.pending ?? 0}
@@ -442,16 +531,18 @@ export default function App(): JSX.Element {
                 Workflow Lab
               </button>
             </div>
-            {workspaceView === "runs" ? (
-              <Button variant="outline" size="sm" onClick={() => void queryClient.invalidateQueries()}>
-                <RefreshCcw className="h-4 w-4" />
-                Refresh
-              </Button>
-            ) : null}
+            <div className="flex items-center gap-2">
+              {workspaceView === "runs" ? (
+                <Button variant="outline" size="sm" onClick={() => void queryClient.invalidateQueries()} disabled={!hasProject}>
+                  <RefreshCcw className="h-4 w-4" />
+                  Refresh
+                </Button>
+              ) : null}
+            </div>
           </div>
 
           <div className={workspaceView === "lab" ? "" : "hidden"}>
-            <WorkflowLabPanel extensionClients={extensionClients} />
+            <WorkflowLabPanel extensionClients={extensionClients} hasProject={hasProject} apiBaseUrl={apiBaseUrl} />
           </div>
 
           <div className={workspaceView === "runs" ? "space-y-5" : "hidden"}>
@@ -459,10 +550,15 @@ export default function App(): JSX.Element {
                 <h2 className="text-lg font-semibold">Runs</h2>
               </div>
               <div className="space-y-3">
+                {!hasProject ? (
+                  <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">
+                    Open a project folder to view and create runs.
+                  </div>
+                ) : null}
                 {(runsQuery.data ?? []).map((run) => (
                   <RunRow key={run.id} run={run} selected={selectedRunIds.has(run.id)} onSelect={() => setSelectedRunId(run.id)} />
                 ))}
-                {runsQuery.data?.length === 0 ? (
+                {hasProject && runsQuery.data?.length === 0 ? (
                   <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">No runs yet.</div>
                 ) : null}
               </div>
@@ -470,8 +566,9 @@ export default function App(): JSX.Element {
         </section>
 
       </div>
+      )}
 
-      {selectedRunId ? (
+      {!showLanding && selectedRunId ? (
         <RunDetailModal
           runId={selectedRunId}
           run={activeRun}
@@ -484,11 +581,87 @@ export default function App(): JSX.Element {
           onClose={() => setSelectedRunId(null)}
           onResume={(runId) => void resumeRun(runId).then(() => queryClient.invalidateQueries())}
           onCancel={(runId) => void cancelRun(runId).then(() => queryClient.invalidateQueries())}
-          onOpenDataFolder={() => window.workflowAutomation.openPath(configQuery.data?.dataDir ?? "")}
+          onOpenDataFolder={() => window.workflowAutomation.openPath(activeRun?.runDir ?? "")}
           onDelete={(runId) => void deleteRunMutation.mutate(runId)}
         />
       ) : null}
     </main>
+  );
+}
+
+function ProjectLanding({
+  config,
+  isLoading,
+  error,
+  onOpenProject,
+  onSelectProject
+}: {
+  config?: WorkflowAutomationConfig;
+  isLoading: boolean;
+  error: string | null;
+  onOpenProject(): void;
+  onSelectProject(projectPath: string): void;
+}): JSX.Element {
+  const recentProjects = config?.recentProjects ?? [];
+  const activeProjectDir = config?.projectDir ?? null;
+  const title = projectDisplayName(activeProjectDir);
+
+  return (
+    <div className="mx-auto flex min-h-[calc(100vh-5.25rem)] max-w-5xl flex-col px-6 py-12">
+      <section className="flex flex-1 flex-col items-center justify-center gap-5 text-center">
+        <div className="space-y-2">
+          <h2 className="text-3xl font-semibold">{title}</h2>
+          <p className="text-sm text-muted-foreground">
+            {activeProjectDir ?? "Open a project folder to load its runs and local workflow data."}
+          </p>
+        </div>
+        <Button type="button" className="h-14 px-8 text-base" onClick={onOpenProject} disabled={isLoading}>
+          <FolderOpen className="h-5 w-5" />
+          Open Project
+        </Button>
+        {error ? (
+          <div className={cn("flex max-w-xl gap-2 rounded-md border p-3 text-sm", dangerNoticeTone)}>
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            {error}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="space-y-3 pb-10">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold">Recent Projects</h3>
+          <Badge className={cn("border", neutralBadgeTone)}>{recentProjects.length}</Badge>
+        </div>
+        {recentProjects.length > 0 ? (
+          <div className="grid gap-2">
+            {recentProjects.map((project) => (
+              <button
+                type="button"
+                key={project.path}
+                onClick={() => onSelectProject(project.path)}
+                disabled={!project.exists}
+                className={cn(
+                  "flex items-center justify-between gap-4 rounded-md border border-border bg-card px-4 py-3 text-left transition hover:border-primary disabled:cursor-not-allowed disabled:opacity-60",
+                  activeProjectDir === project.path && "border-primary ring-1 ring-primary"
+                )}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{project.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{project.path}</span>
+                </span>
+                <Badge className={cn("shrink-0 border", project.exists ? infoBadgeTone : dangerNoticeTone)}>
+                  {project.exists ? "Open" : "Missing"}
+                </Badge>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
+            No projects have been opened yet.
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -606,7 +779,7 @@ function RunDetailModal({
                     Cancel
                   </Button>
                 ) : null}
-                <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()}>
+                <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run?.runDir}>
                   <FolderOpen className="h-4 w-4" />
                   Data folder
                 </Button>
@@ -844,9 +1017,13 @@ function OutputImagePreview({ artifact }: { artifact: ArtifactRecord }): JSX.Ele
 }
 
 function WorkflowLabPanel({
-  extensionClients
+  extensionClients,
+  hasProject,
+  apiBaseUrl
 }: {
   extensionClients: SystemInfo["extension"]["connectedClients"];
+  hasProject: boolean;
+  apiBaseUrl: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<"playwright" | "extension">("extension");
@@ -867,7 +1044,12 @@ function WorkflowLabPanel({
   const [waitMessage, setWaitMessage] = useState<string | null>(null);
 
   const compatibleClients = extensionClients.filter((client) => client.compatible);
-  const sessionsQuery = useQuery({ queryKey: ["labSessions"], queryFn: listLabSessions, refetchInterval: 5_000 });
+  const sessionsQuery = useQuery({
+    queryKey: ["labSessions", apiBaseUrl],
+    queryFn: listLabSessions,
+    enabled: hasProject,
+    refetchInterval: hasProject ? 5_000 : false
+  });
   const sessions = sessionsQuery.data ?? [];
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? sessions[0] ?? null;
 
@@ -1072,7 +1254,7 @@ function WorkflowLabPanel({
             <Button
               type="button"
               onClick={() => createSessionMutation.mutate()}
-              disabled={createSessionMutation.isPending || (mode === "extension" && !clientId)}
+              disabled={!hasProject || createSessionMutation.isPending || (mode === "extension" && !clientId)}
             >
               <FlaskConical className="h-4 w-4" />
               Start
@@ -1101,7 +1283,11 @@ function WorkflowLabPanel({
           </div>
         ) : null}
 
-        {selectedSession ? (
+        {!hasProject ? (
+          <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
+            Open a project folder to use Workflow Lab.
+          </div>
+        ) : selectedSession ? (
           <div className="rounded-md border border-border bg-background p-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -1307,25 +1493,25 @@ function ChatGptTabRoutingPanel({
   const incompatibleClients = clients.filter((client) => !client.compatible);
 
   return (
-    <div className={cn("rounded-md border p-3 text-sm", infoNoticeTone)}>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="font-medium">ChatGPT tab routing</div>
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Label htmlFor="chatgpt-tab-target">ChatGPT tab routing</Label>
           <div className="group relative">
             <button
               type="button"
               aria-label="ChatGPT tab routing details"
-              className="flex h-6 w-6 items-center justify-center rounded-full text-cyan-800 outline-none ring-offset-2 transition hover:bg-cyan-100 focus-visible:ring-2 focus-visible:ring-primary dark:text-cyan-200 dark:hover:bg-cyan-900/70"
+              className="flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground outline-none ring-offset-2 transition hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary"
             >
-              <Info className="h-4 w-4" />
+              <Info className="h-3.5 w-3.5" />
             </button>
-            <div className="invisible absolute left-0 top-7 z-30 w-80 max-w-[calc(100vw-3rem)] rounded-md border border-cyan-200 bg-white p-3 text-xs text-cyan-900 opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 dark:border-cyan-800 dark:bg-slate-950 dark:text-cyan-100">
+            <div className="invisible absolute left-0 top-6 z-30 w-80 max-w-[calc(100vw-3rem)] rounded-md border border-border bg-card p-3 text-xs text-foreground opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
               <div className="space-y-3">
-                <p className="leading-5">
+                <p className="leading-5 text-muted-foreground">
                   Choose an open compatible ChatGPT tab for this run, or open a new token-routed tab. Other ChatGPT tabs keep
                   polling but will not receive the task.
                 </p>
-                <p className="leading-5">
+                <p className="leading-5 text-muted-foreground">
                   New tabs open ChatGPT externally and are matched when the extension reports the run token.
                 </p>
                 {incompatibleClients.length > 0 ? (
@@ -1335,9 +1521,9 @@ function ChatGptTabRoutingPanel({
                   </p>
                 ) : null}
                 <div>
-                  <div className="mb-2 font-medium text-cyan-950 dark:text-cyan-100">Reporting ChatGPT tabs</div>
+                  <div className="mb-2 font-medium">Reporting ChatGPT tabs</div>
                   {clients.length === 0 ? (
-                    <div className="rounded border border-cyan-100 bg-cyan-50 p-2 dark:border-cyan-900/70 dark:bg-cyan-950/30">
+                    <div className="rounded border border-border bg-muted p-2 text-muted-foreground">
                       No ChatGPT extension tab has checked in yet.
                     </div>
                   ) : (
@@ -1345,10 +1531,10 @@ function ChatGptTabRoutingPanel({
                       {clients.map((client) => (
                         <div
                           key={client.id}
-                          className="space-y-1 rounded border border-cyan-100 bg-cyan-50 p-2 dark:border-cyan-900/70 dark:bg-background"
+                          className="space-y-1 rounded border border-border bg-background p-2"
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0 truncate font-medium text-cyan-950 dark:text-cyan-100">
+                            <div className="min-w-0 truncate font-medium">
                               {client.title || "ChatGPT tab"}
                             </div>
                             <Badge
@@ -1364,8 +1550,8 @@ function ChatGptTabRoutingPanel({
                               {client.compatible ? client.status : "reload required"}
                             </Badge>
                           </div>
-                          <div className="truncate text-cyan-800 dark:text-cyan-300">{client.url || "No URL reported"}</div>
-                          <div className="text-cyan-700 dark:text-cyan-300">
+                          <div className="truncate text-muted-foreground">{client.url || "No URL reported"}</div>
+                          <div className="text-muted-foreground">
                             Extension v{client.extensionVersion || "unknown"} | protocol {client.protocolVersion ?? "unknown"} /
                             required {requiredProtocolVersion}
                           </div>
@@ -1374,7 +1560,7 @@ function ChatGptTabRoutingPanel({
                               {client.incompatibilityReason ?? "Reload the unpacked extension and refresh this ChatGPT tab."}
                             </div>
                           ) : null}
-                          <div className="text-cyan-700 dark:text-cyan-300">Last seen {formatDate(client.lastSeenAt)}</div>
+                          <div className="text-muted-foreground">Last seen {formatDate(client.lastSeenAt)}</div>
                         </div>
                       ))}
                     </div>
@@ -1387,15 +1573,12 @@ function ChatGptTabRoutingPanel({
         {compatibleClients.length > 0 ? <Badge className={cn("border", neutralBadgeTone)}>{compatibleClients.length} ready</Badge> : null}
       </div>
 
-      <Label htmlFor="chatgpt-tab-target" className="sr-only">
-        Target tab
-      </Label>
       <div className="grid grid-cols-[1fr_auto] gap-2">
         <select
           id="chatgpt-tab-target"
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className="h-9 min-w-0 rounded-md border border-cyan-200 bg-white px-3 text-xs text-cyan-950 dark:border-cyan-800 dark:bg-background dark:text-cyan-100"
+          className="h-10 min-w-0 rounded-md border border-border bg-background px-3 text-sm"
         >
           <option value={NEW_CHATGPT_TAB_VALUE}>Open a new ChatGPT tab</option>
           {compatibleClients.map((client) => (

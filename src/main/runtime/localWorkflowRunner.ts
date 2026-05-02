@@ -4,12 +4,22 @@ import path from "node:path";
 import { RuntimeEventBus } from "./eventBus";
 import type { SqliteStore } from "../db/sqliteStore";
 import type { ArtifactRecord, RunRecord, RuntimePaths, WorkflowContext, WorkflowDefinition } from "./types";
+import { ensureRunDataDirs, getRunArtifactDir, getRunDir, getRunInputDir, getRunOutputArtifactDir } from "./paths";
+import { copyFileToDir, writeJson } from "../utils/files";
 
 function createId(): string {
   return randomUUID();
 }
 
 const DELETE_WAIT_TIMEOUT_MS = 30_000;
+
+interface FileInputMapping {
+  field: string;
+  index: number;
+  name: string;
+  originalPath: string;
+  copiedPath: string;
+}
 
 interface QueuedRun {
   runId: string;
@@ -43,14 +53,44 @@ export class LocalWorkflowRunner {
       throw new Error(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
     }
 
+    const runId = createId();
+    const runName = input.name?.trim() || workflow.manifest.title;
+    const runDir = getRunDir(this.paths, runName, runId);
+    const { inputDir, artifactDir } = ensureRunDataDirs(runDir);
+    const preparedInput = copyWorkflowInputFiles(workflow, parsed.data, inputDir);
+    const promptsPath = path.join(runDir, "prompts.json");
+    writeJson(
+      promptsPath,
+      buildPromptsDocument({
+        workflow,
+        runId,
+        runName,
+        runDir,
+        originalInput: parsed.data,
+        copiedInput: preparedInput.input,
+        fileMappings: preparedInput.fileMappings
+      })
+    );
+
     const run = this.store.createRun({
-      id: createId(),
+      id: runId,
       workflowId: workflow.manifest.id,
-      name: input.name?.trim() || workflow.manifest.title,
+      name: runName,
+      runDir,
       status: "queued",
-      input: parsed.data
+      input: preparedInput.input
     });
-    this.queue.push({ runId: run.id, workflowId: workflow.manifest.id, input: parsed.data });
+    const promptsArtifact = this.store.addArtifact({
+      id: createId(),
+      runId: run.id,
+      kind: "json",
+      name: "prompts.json",
+      path: promptsPath,
+      mimeType: "application/json",
+      metadata: { source: "run-inputs", artifactDir }
+    });
+    this.eventBus.publish({ kind: "artifact-added", runId: run.id, artifactId: promptsArtifact.id });
+    this.queue.push({ runId: run.id, workflowId: workflow.manifest.id, input: preparedInput.input });
     this.eventBus.publish({ kind: "run-updated", runId: run.id });
     void this.drain();
     return run;
@@ -103,9 +143,28 @@ export class LocalWorkflowRunner {
     }
 
     await this.waitUntilInactive(runId);
-    this.deleteRunArtifactDir(runId);
+    this.deleteRunData(existing);
     this.store.deleteRunCascade(runId);
     this.eventBus.publish({ kind: "run-updated", runId });
+  }
+
+  async shutdown(): Promise<void> {
+    const queued = this.queue.splice(0);
+    for (const entry of queued) {
+      this.store.updateRun(entry.runId, { status: "cancelled", error: "Project closed before this run started." });
+      this.eventBus.publish({ kind: "run-updated", runId: entry.runId });
+    }
+
+    const runningIds = [...this.running.keys()];
+    for (const runId of runningIds) {
+      const running = this.running.get(runId);
+      running?.controller.abort();
+      running?.resume?.();
+      this.store.updateRun(runId, { status: "cancelled", error: "Project closed while this run was active." });
+      this.eventBus.publish({ kind: "run-updated", runId });
+    }
+
+    await Promise.all(runningIds.map((runId) => this.waitUntilInactive(runId)));
   }
 
   stats(): { queued: number; running: number } {
@@ -122,7 +181,25 @@ export class LocalWorkflowRunner {
     }
   }
 
-  private deleteRunArtifactDir(runId: string): void {
+  private deleteRunData(run: RunRecord): void {
+    if (run.runDir) {
+      const projectRoot = path.resolve(this.paths.runRootDir);
+      const internalRoot = path.resolve(this.paths.internalDir);
+      const runDir = path.resolve(run.runDir);
+      if (runDir === projectRoot || !runDir.startsWith(`${projectRoot}${path.sep}`)) {
+        throw new Error(`Refusing to delete run path outside project directory: ${runDir}`);
+      }
+      if (runDir === internalRoot || runDir.startsWith(`${internalRoot}${path.sep}`)) {
+        throw new Error(`Refusing to delete internal project path as run data: ${runDir}`);
+      }
+      fs.rmSync(runDir, { recursive: true, force: true });
+      return;
+    }
+
+    this.deleteLegacyRunArtifactDir(run.id);
+  }
+
+  private deleteLegacyRunArtifactDir(runId: string): void {
     const artifactRoot = path.resolve(this.paths.artifactDir);
     const runArtifactDir = path.resolve(artifactRoot, runId);
     if (runArtifactDir === artifactRoot || !runArtifactDir.startsWith(`${artifactRoot}${path.sep}`)) {
@@ -194,10 +271,18 @@ export class LocalWorkflowRunner {
     const store = this.store;
     const eventBus = this.eventBus;
     const getRunning = () => this.running.get(runId);
+    const run = store.getRun(runId);
+    const runDir = run?.runDir ?? getRunArtifactDir(this.paths, runId);
+    const inputDir = run?.runDir ? getRunInputDir(run.runDir) : path.join(runDir, "inputs");
+    const artifactDir = run?.runDir ? getRunOutputArtifactDir(run.runDir) : runDir;
+    ensureRunDataDirs(runDir);
 
     return {
       runId,
       paths: this.paths,
+      runDir,
+      inputDir,
+      artifactDir,
       signal: controller.signal,
       async step(message, progress, data) {
         store.updateRun(runId, {
@@ -243,4 +328,91 @@ export class LocalWorkflowRunner {
       }
     };
   }
+}
+
+function copyWorkflowInputFiles(
+  workflow: WorkflowDefinition,
+  input: unknown,
+  inputDir: string
+): { input: unknown; fileMappings: FileInputMapping[] } {
+  if (!isRecord(input)) return { input, fileMappings: [] };
+
+  const copiedInput: Record<string, unknown> = { ...input };
+  const fileMappings: FileInputMapping[] = [];
+  const fileFields = workflow.manifest.inputFields.filter((field) => field.type === "fileList");
+
+  for (const field of fileFields) {
+    const value = input[field.name];
+    if (!Array.isArray(value)) continue;
+
+    const copiedPaths = value.map((filePath, index) => {
+      if (typeof filePath !== "string") return filePath;
+      const copiedPath = copyFileToDir(filePath, path.join(inputDir, field.name), `${String(index + 1).padStart(2, "0")}-`);
+      fileMappings.push({
+        field: field.name,
+        index,
+        name: path.basename(copiedPath),
+        originalPath: filePath,
+        copiedPath
+      });
+      return copiedPath;
+    });
+    copiedInput[field.name] = copiedPaths;
+  }
+
+  return { input: copiedInput, fileMappings };
+}
+
+function buildPromptsDocument(input: {
+  workflow: WorkflowDefinition;
+  runId: string;
+  runName: string;
+  runDir: string;
+  originalInput: unknown;
+  copiedInput: unknown;
+  fileMappings: FileInputMapping[];
+}): Record<string, unknown> {
+  const original = isRecord(input.originalInput) ? input.originalInput : {};
+  const copied = isRecord(input.copiedInput) ? input.copiedInput : {};
+
+  return {
+    runId: input.runId,
+    runName: input.runName,
+    workflowId: input.workflow.manifest.id,
+    workflowTitle: input.workflow.manifest.title,
+    runDir: input.runDir,
+    createdAt: new Date().toISOString(),
+    prompts: {
+      masterPrompt: original.masterPrompt ?? null,
+      prompt: original.prompt ?? null,
+      subjectInstruction: original.subjectInstruction ?? null,
+      perSubjectInstruction: original.subjectInstruction ?? null
+    },
+    imagePaths: {
+      images: mappedPathsForField(input.fileMappings, "images"),
+      referenceImages: mappedPathsForField(input.fileMappings, "referenceImages"),
+      subjectImages: mappedPathsForField(input.fileMappings, "subjectImages")
+    },
+    chatGptTab: original.chatGptTab ?? copied.chatGptTab ?? null,
+    selectors: original.selectors ?? copied.selectors ?? null,
+    modelName: original.modelName ?? copied.modelName ?? null,
+    profileName: original.profileName ?? copied.profileName ?? null,
+    pauseForManualLogin: original.pauseForManualLogin ?? copied.pauseForManualLogin ?? null,
+    input: {
+      original: input.originalInput,
+      copied: input.copiedInput,
+      fileMappings: input.fileMappings
+    }
+  };
+}
+
+function mappedPathsForField(fileMappings: FileInputMapping[], field: string): Array<{ originalPath: string; copiedPath: string }> {
+  return fileMappings
+    .filter((mapping) => mapping.field === field)
+    .sort((a, b) => a.index - b.index)
+    .map((mapping) => ({ originalPath: mapping.originalPath, copiedPath: mapping.copiedPath }));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

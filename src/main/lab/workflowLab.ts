@@ -475,7 +475,7 @@ export class WorkflowLab {
   }
 
   private getSessionDir(sessionId: string): string {
-    return path.join(this.paths.dataDir, "workflow-lab", sessionId);
+    return path.join(this.paths.workflowLabDir, sessionId);
   }
 }
 

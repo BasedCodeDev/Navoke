@@ -1,9 +1,19 @@
 export {};
 
 declare global {
+  interface WorkflowAutomationConfig {
+    apiBaseUrl: string;
+    dataDir: string;
+    projectDir: string | null;
+    recentProjects: Array<{ name: string; path: string; exists: boolean }>;
+    projectDialogCancelled?: boolean;
+    platform: string;
+  }
+
   interface Window {
     workflowAutomation: {
-      getConfig(): Promise<{ apiBaseUrl: string; dataDir: string; platform: string }>;
+      getConfig(): Promise<WorkflowAutomationConfig>;
+      openProject(path?: string): Promise<WorkflowAutomationConfig>;
       selectFiles(options?: {
         title?: string;
         filters?: Array<{ name: string; extensions: string[] }>;

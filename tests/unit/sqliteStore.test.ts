@@ -22,6 +22,7 @@ describe("SqliteStore", () => {
       id: "run-1",
       workflowId: "test.workflow",
       name: "Test run",
+      runDir: path.join(dir, "Test run - run-1"),
       status: "queued",
       input: { images: [] }
     });
@@ -34,6 +35,7 @@ describe("SqliteStore", () => {
 
     expect(event.id).toBeGreaterThan(0);
     expect(event.runId).toBe(run.id);
+    expect(run.runDir).toBe(path.join(dir, "Test run - run-1"));
     expect(store.listEvents(run.id)).toHaveLength(1);
 
     store.close();

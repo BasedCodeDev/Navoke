@@ -59,6 +59,9 @@ describe("LocalWorkflowRunner", () => {
       workflowInput: { message: "test" }
     });
 
+    expect(run.runDir).toContain("Runner test - ");
+    expect(fs.existsSync(path.join(run.runDir!, "prompts.json"))).toBe(true);
+
     await waitFor(() => store.getRun(run.id)?.status === "completed");
 
     expect(store.getRun(run.id)?.progress).toBe(100);
@@ -102,14 +105,14 @@ describe("LocalWorkflowRunner", () => {
     const runningRun = runner.enqueue({ workflowId: "test.blocking", name: "Running", workflowInput: { message: "run" } });
     await waitFor(() => store.getRun(runningRun.id)?.status === "running");
     const queuedRun = runner.enqueue({ workflowId: "test.blocking", name: "Queued", workflowInput: { message: "queue" } });
-    const artifactDir = path.join(paths.artifactDir, queuedRun.id);
+    const artifactDir = path.join(queuedRun.runDir!, "artifacts");
     fs.mkdirSync(artifactDir, { recursive: true });
     fs.writeFileSync(path.join(artifactDir, "artifact.json"), "{}");
 
     await runner.deleteRun(queuedRun.id);
 
     expect(store.getRun(queuedRun.id)).toBeNull();
-    expect(fs.existsSync(artifactDir)).toBe(false);
+    expect(fs.existsSync(queuedRun.runDir!)).toBe(false);
     releaseFirstRun?.();
     await waitFor(() => store.getRun(runningRun.id)?.status === "completed");
 
@@ -154,7 +157,86 @@ describe("LocalWorkflowRunner", () => {
     await runner.deleteRun(run.id);
 
     expect(store.getRun(run.id)).toBeNull();
+    expect(fs.existsSync(run.runDir!)).toBe(false);
     expect(runner.stats().running).toBe(0);
+
+    store.close();
+  });
+
+  it("copies file-list inputs into the run folder and records prompts metadata", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const sourceDir = path.join(dir, "source");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const imagePath = path.join(sourceDir, "subject.png");
+    fs.writeFileSync(imagePath, "image");
+    const paths = createRuntimePaths(path.join(dir, "project"));
+    const store = await SqliteStore.open(paths.dbPath);
+    const workflow: WorkflowDefinition<
+      { subjectImages: string[]; referenceImages: string[]; masterPrompt: string; subjectInstruction: string },
+      { ok: boolean }
+    > = {
+      manifest: {
+        id: "test.inputs",
+        title: "Input Workflow",
+        description: "Runtime input copy test workflow",
+        category: "utility",
+        version: "0.0.0",
+        concurrency: 1,
+        inputFields: [
+          { name: "referenceImages", label: "Reference images", type: "fileList" },
+          { name: "subjectImages", label: "Subject images", type: "fileList", required: true },
+          { name: "masterPrompt", label: "Master prompt", type: "textarea", required: true },
+          { name: "subjectInstruction", label: "Subject instruction", type: "textarea" }
+        ],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({
+        subjectImages: z.array(z.string()).min(1),
+        referenceImages: z.array(z.string()).default([]),
+        masterPrompt: z.string(),
+        subjectInstruction: z.string().default("")
+      }),
+      outputSchema: z.object({ ok: z.boolean() }),
+      async run(input, ctx) {
+        expect(input.subjectImages[0]).toBe(path.join(ctx.inputDir, "subjectImages", "01-subject.png"));
+        expect(fs.existsSync(input.subjectImages[0])).toBe(true);
+        expect(ctx.artifactDir).toBe(path.join(ctx.runDir, "artifacts"));
+        return { ok: true };
+      }
+    };
+    const runner = new LocalWorkflowRunner(new Map([[workflow.manifest.id, workflow]]), store, paths, new RuntimeEventBus());
+
+    const run = runner.enqueue({
+      workflowId: "test.inputs",
+      name: "Prompt: Copy Test",
+      workflowInput: {
+        referenceImages: [],
+        subjectImages: [imagePath],
+        masterPrompt: "Master prompt text",
+        subjectInstruction: "Per subject instruction"
+      }
+    });
+
+    await waitFor(() => store.getRun(run.id)?.status === "completed");
+
+    const storedInput = store.getRun(run.id)?.input as { subjectImages: string[] };
+    expect(storedInput.subjectImages[0]).toBe(path.join(run.runDir!, "inputs", "subjectImages", "01-subject.png"));
+    const promptsPath = path.join(run.runDir!, "prompts.json");
+    const prompts = JSON.parse(fs.readFileSync(promptsPath, "utf8")) as {
+      prompts: { masterPrompt: string; subjectInstruction: string };
+      imagePaths: { subjectImages: Array<{ originalPath: string; copiedPath: string }> };
+    };
+    expect(prompts.prompts.masterPrompt).toBe("Master prompt text");
+    expect(prompts.prompts.subjectInstruction).toBe("Per subject instruction");
+    expect(prompts.imagePaths.subjectImages).toEqual([
+      {
+        originalPath: imagePath,
+        copiedPath: path.join(run.runDir!, "inputs", "subjectImages", "01-subject.png")
+      }
+    ]);
+    expect(store.listArtifacts(run.id).some((artifact) => artifact.name === "prompts.json")).toBe(true);
 
     store.close();
   });

@@ -9,7 +9,6 @@ import {
   type ExtensionTaskOutput,
   type ExtensionTaskResult
 } from "../extension/extensionBridge";
-import { getRunArtifactDir } from "../runtime/paths";
 import type { WorkflowContext, WorkflowDefinition } from "../runtime/types";
 import { sleep } from "../utils/sleep";
 import { inferMimeType, writeJson } from "../utils/files";
@@ -82,7 +81,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
   outputSchema,
   async run(input, ctx) {
     const artifactIds: string[] = [];
-    const runDir = getRunArtifactDir(ctx.paths, ctx.runId);
+    const artifactDir = ctx.artifactDir;
 
     await ensureChatGptTargetAvailable(input.chatGptTab, ctx);
 
@@ -146,7 +145,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
       const pairId = `subject-${subjectIndex + 1}`;
       const mimeType = output.mimeType ?? "image/png";
       const extension = extensionForMimeType(mimeType);
-      const outputPath = path.join(runDir, outputFileNameForSubject(subjectImage, subjectIndex, extension, usedOutputNames));
+      const outputPath = path.join(artifactDir, outputFileNameForSubject(subjectImage, subjectIndex, extension, usedOutputNames));
       fs.writeFileSync(outputPath, Buffer.from(output.base64, "base64"));
       const artifact = await ctx.addArtifact({
         kind: "image",
@@ -209,7 +208,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
       unsubscribe();
     }
 
-    const manifestPath = path.join(runDir, "chatgpt-extension-manifest.json");
+    const manifestPath = path.join(artifactDir, "chatgpt-extension-manifest.json");
     writeJson(manifestPath, {
       masterPrompt: input.masterPrompt,
       referenceImages: input.referenceImages,

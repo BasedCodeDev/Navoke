@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { RuntimePaths } from "../runtime/types";
-import { ensureDir, getRunArtifactDir } from "../runtime/paths";
+import { ensureDir } from "../runtime/paths";
 
 export async function launchPersistentProfile(input: {
   paths: RuntimePaths;
@@ -20,8 +20,8 @@ export async function launchPersistentProfile(input: {
   });
 }
 
-export async function startTrace(context: BrowserContext, paths: RuntimePaths, runId: string): Promise<string> {
-  const tracePath = path.join(getRunArtifactDir(paths, runId), "trace.zip");
+export async function startTrace(context: BrowserContext, artifactDir: string): Promise<string> {
+  const tracePath = path.join(artifactDir, "trace.zip");
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
   return tracePath;
 }
@@ -30,8 +30,8 @@ export async function stopTrace(context: BrowserContext, tracePath: string): Pro
   await context.tracing.stop({ path: tracePath });
 }
 
-export async function saveScreenshot(page: Page, paths: RuntimePaths, runId: string, name: string): Promise<string> {
-  const screenshotPath = path.join(getRunArtifactDir(paths, runId), name);
+export async function saveScreenshot(page: Page, artifactDir: string, name: string): Promise<string> {
+  const screenshotPath = path.join(artifactDir, name);
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
   await page.screenshot({ path: screenshotPath, fullPage: true });
   return screenshotPath;

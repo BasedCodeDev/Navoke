@@ -11,9 +11,13 @@ export type RunStatus =
 export type ArtifactKind = "image" | "model" | "download" | "trace" | "screenshot" | "log" | "json";
 
 export interface RuntimePaths {
+  projectDir: string;
+  internalDir: string;
+  runRootDir: string;
   dataDir: string;
   artifactDir: string;
   browserProfilesDir: string;
+  workflowLabDir: string;
   logsDir: string;
   dbPath: string;
 }
@@ -22,6 +26,7 @@ export interface RunRecord {
   id: string;
   workflowId: string;
   name: string;
+  runDir: string | null;
   status: RunStatus;
   currentStep: string | null;
   progress: number;
@@ -80,6 +85,9 @@ export interface WorkflowManifest {
 export interface WorkflowContext {
   runId: string;
   paths: RuntimePaths;
+  runDir: string;
+  inputDir: string;
+  artifactDir: string;
   signal: AbortSignal;
   step(message: string, progress?: number, data?: unknown): Promise<void>;
   event(type: string, message: string, data?: unknown): Promise<void>;

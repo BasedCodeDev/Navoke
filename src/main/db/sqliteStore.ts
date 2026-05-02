@@ -18,6 +18,7 @@ function rowToRun(row: Record<string, unknown>): RunRecord {
     id: String(row.id),
     workflowId: String(row.workflow_id),
     name: String(row.name),
+    runDir: row.run_dir ? String(row.run_dir) : null,
     status: String(row.status) as RunStatus,
     currentStep: row.current_step ? String(row.current_step) : null,
     progress: Number(row.progress ?? 0),
@@ -81,15 +82,25 @@ export class SqliteStore {
     id: string;
     workflowId: string;
     name: string;
+    runDir?: string | null;
     status: RunStatus;
     input: unknown;
   }): RunRecord {
     const createdAt = nowIso();
     this.db.run(
       `insert into runs (
-        id, workflow_id, name, status, current_step, progress, input_json, output_json, error, created_at, updated_at
-      ) values (?, ?, ?, ?, null, 0, ?, null, null, ?, ?)`,
-      [input.id, input.workflowId, input.name, input.status, JSON.stringify(input.input), createdAt, createdAt]
+        id, workflow_id, name, run_dir, status, current_step, progress, input_json, output_json, error, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, null, 0, ?, null, null, ?, ?)`,
+      [
+        input.id,
+        input.workflowId,
+        input.name,
+        input.runDir ?? null,
+        input.status,
+        JSON.stringify(input.input),
+        createdAt,
+        createdAt
+      ]
     );
     this.persist();
     const run = this.getRun(input.id);
@@ -223,6 +234,7 @@ export class SqliteStore {
         id text primary key,
         workflow_id text not null,
         name text not null,
+        run_dir text,
         status text not null,
         current_step text,
         progress integer not null default 0,
@@ -260,6 +272,15 @@ export class SqliteStore {
       create index if not exists idx_events_run_id on events(run_id);
       create index if not exists idx_artifacts_run_id on artifacts(run_id);
     `);
+    this.addColumnIfMissing("runs", "run_dir text");
+  }
+
+  private addColumnIfMissing(table: string, columnDefinition: string): void {
+    try {
+      this.db.run(`alter table ${table} add column ${columnDefinition}`);
+    } catch {
+      // Existing databases already have this column.
+    }
   }
 
   private all<T extends Record<string, unknown>>(sql: string, params: unknown[] = []): T[] {

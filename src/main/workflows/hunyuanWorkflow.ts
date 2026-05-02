@@ -1,7 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
 import { launchPersistentProfile, saveScreenshot, startTrace, stopTrace, timeoutMinutes } from "../automation/browserHarness";
-import { getRunArtifactDir } from "../runtime/paths";
 import type { WorkflowDefinition } from "../runtime/types";
 import { WorkflowConfigurationError } from "../runtime/errors";
 import { inferMimeType } from "../utils/files";
@@ -65,7 +64,7 @@ export const hunyuanImageToModelWorkflow: WorkflowDefinition<z.infer<typeof inpu
       profileName: input.profileName,
       headless: input.headless
     });
-    const tracePath = await startTrace(context, ctx.paths, ctx.runId);
+    const tracePath = await startTrace(context, ctx.artifactDir);
 
     try {
       const page = context.pages()[0] ?? (await context.newPage());
@@ -79,7 +78,7 @@ export const hunyuanImageToModelWorkflow: WorkflowDefinition<z.infer<typeof inpu
       }
 
       if (!input.selectors.uploadInput || !input.selectors.generateButton || !input.selectors.downloadButton) {
-        const screenshot = await saveScreenshot(page, ctx.paths, ctx.runId, "hunyuan-selector-calibration.png");
+        const screenshot = await saveScreenshot(page, ctx.artifactDir, "hunyuan-selector-calibration.png");
         const screenshotArtifact = await ctx.addArtifact({
           kind: "screenshot",
           name: path.basename(screenshot),
@@ -116,7 +115,7 @@ export const hunyuanImageToModelWorkflow: WorkflowDefinition<z.infer<typeof inpu
       const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
       await page.locator(input.selectors.downloadButton).click();
       const download = await downloadPromise;
-      const targetPath = path.join(getRunArtifactDir(ctx.paths, ctx.runId), download.suggestedFilename());
+      const targetPath = path.join(ctx.artifactDir, download.suggestedFilename());
       await download.saveAs(targetPath);
       const artifact = await ctx.addArtifact({
         kind: inferMimeType(targetPath)?.startsWith("model/") ? "model" : "download",

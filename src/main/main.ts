@@ -1,42 +1,125 @@
+import fs from "node:fs";
 import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { ApiServer } from "./api/server";
 import { SqliteStore } from "./db/sqliteStore";
 import { extensionBridge } from "./extension/extensionBridge";
+import { WorkflowLab } from "./lab/workflowLab";
+import { AppSettingsStore } from "./projectSettings";
 import { RuntimeEventBus } from "./runtime/eventBus";
 import { LocalWorkflowRunner } from "./runtime/localWorkflowRunner";
 import { createRuntimePaths } from "./runtime/paths";
-import { WorkflowLab } from "./lab/workflowLab";
+import type { RuntimePaths, WorkflowDefinition } from "./runtime/types";
 import { createWorkflowRegistry } from "./workflows";
 
+interface RuntimeState {
+  apiServer: ApiServer;
+  eventBus: RuntimeEventBus;
+  paths: RuntimePaths;
+  runner: LocalWorkflowRunner;
+  store: SqliteStore;
+  workflowLab: WorkflowLab;
+}
+
+interface AppConfig {
+  apiBaseUrl: string;
+  dataDir: string;
+  projectDir: string | null;
+  recentProjects: Array<{ name: string; path: string; exists: boolean }>;
+  projectDialogCancelled?: boolean;
+  platform: NodeJS.Platform;
+}
+
 let mainWindow: BrowserWindow | null = null;
-let apiServer: ApiServer | null = null;
-let store: SqliteStore | null = null;
-let apiBaseUrl = "";
+let runtime: RuntimeState | null = null;
+let settingsStore: AppSettingsStore | null = null;
+let workflows: Map<string, WorkflowDefinition> = new Map();
 
 async function bootstrap(): Promise<void> {
   app.setName("Browser Workflow Automation");
-  const paths = createRuntimePaths(app.getPath("userData"));
-  const eventBus = new RuntimeEventBus();
-  const workflows = createWorkflowRegistry();
-  store = await SqliteStore.open(paths.dbPath);
+  settingsStore = new AppSettingsStore(app.getPath("userData"));
+  workflows = createWorkflowRegistry();
+  registerIpc();
 
-  const runner = new LocalWorkflowRunner(workflows, store, paths, eventBus);
-  const workflowLab = new WorkflowLab(paths, extensionBridge);
-  apiServer = new ApiServer({ store, runner, eventBus, workflows, paths, extensionBridge, workflowLab });
-  await apiServer.start();
-  apiBaseUrl = apiServer.baseUrl;
+  const lastProjectDir = settingsStore.lastProjectDir;
+  if (lastProjectDir && fs.existsSync(lastProjectDir)) {
+    try {
+      await openProject(lastProjectDir);
+    } catch (error) {
+      dialog.showErrorBox("Could not reopen project", error instanceof Error ? error.message : String(error));
+    }
+  }
 
-  registerIpc(paths.dataDir);
   createWindow();
 }
 
-function registerIpc(dataDir: string): void {
-  ipcMain.handle("app:get-config", () => ({
-    apiBaseUrl,
-    dataDir,
+function getConfig(): AppConfig {
+  return {
+    apiBaseUrl: runtime?.apiServer.baseUrl ?? "",
+    dataDir: runtime?.paths.dataDir ?? "",
+    projectDir: runtime?.paths.projectDir ?? null,
+    recentProjects: getRecentProjects(),
     platform: process.platform
+  };
+}
+
+function getRecentProjects(): Array<{ name: string; path: string; exists: boolean }> {
+  return (settingsStore?.recentProjectDirs ?? []).map((projectDir) => ({
+    name: path.basename(projectDir) || projectDir,
+    path: projectDir,
+    exists: fs.existsSync(projectDir)
   }));
+}
+
+async function openProject(projectDir: string): Promise<AppConfig> {
+  await closeRuntime();
+
+  const paths = createRuntimePaths(projectDir);
+  const eventBus = new RuntimeEventBus();
+  const store = await SqliteStore.open(paths.dbPath);
+  const runner = new LocalWorkflowRunner(workflows, store, paths, eventBus);
+  const workflowLab = new WorkflowLab(paths, extensionBridge);
+  const apiServer = new ApiServer({ store, runner, eventBus, workflows, paths, extensionBridge, workflowLab });
+  await apiServer.start();
+
+  runtime = { apiServer, eventBus, paths, runner, store, workflowLab };
+  settingsStore?.setLastProjectDir(paths.projectDir);
+  return getConfig();
+}
+
+async function closeRuntime(): Promise<void> {
+  const current = runtime;
+  runtime = null;
+  if (!current) return;
+
+  let shutdownError: unknown;
+  try {
+    await current.runner.shutdown();
+  } catch (error) {
+    shutdownError = error;
+  }
+  await current.apiServer.stop();
+  current.store.close();
+  if (shutdownError) throw shutdownError;
+}
+
+async function chooseProjectDirectory(title: string): Promise<string | null> {
+  const options: Electron.OpenDialogOptions = {
+    title,
+    properties: ["openDirectory", "createDirectory"]
+  };
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+  return result.canceled ? null : result.filePaths[0] ?? null;
+}
+
+function registerIpc(): void {
+  ipcMain.handle("app:get-config", () => getConfig());
+
+  ipcMain.handle("project:open", async (_event, targetPath?: string) => {
+    const projectDir = targetPath?.trim() || (await chooseProjectDirectory("Open Blink project folder"));
+    if (!projectDir) return { ...getConfig(), projectDialogCancelled: true };
+    return openProject(projectDir);
+  });
 
   ipcMain.handle("dialog:select-files", async (_event, options?: { title?: string; filters?: Electron.FileFilter[] }) => {
     const dialogOptions: Electron.OpenDialogOptions = {
@@ -108,6 +191,5 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  store?.close();
-  void apiServer?.stop();
+  void closeRuntime();
 });
