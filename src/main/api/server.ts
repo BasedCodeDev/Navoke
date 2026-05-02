@@ -134,6 +134,24 @@ export class ApiServer {
       });
     });
 
+    app.get("/api/runs/:id/input-files/:field/:index", (req, res, next) => {
+      try {
+        const run = this.options.store.getRun(req.params.id);
+        if (!run) {
+          res.status(404).json({ error: "Run not found" });
+          return;
+        }
+        const filePath = getRunInputFilePath(run.input, req.params.field, Number(req.params.index));
+        if (!filePath || !fs.existsSync(filePath)) {
+          res.status(404).json({ error: "Run input file not found" });
+          return;
+        }
+        res.sendFile(filePath);
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.post("/api/runs/:id/cancel", (req, res, next) => {
       try {
         res.json(this.options.runner.cancel(req.params.id));
@@ -354,4 +372,14 @@ export class ApiServer {
       server.listen(port, "127.0.0.1");
     });
   }
+}
+
+function getRunInputFilePath(input: unknown, field: string, index: number): string | undefined {
+  if (!Number.isInteger(index) || index < 0) return undefined;
+  if (!["images", "referenceImages", "subjectImages"].includes(field)) return undefined;
+  if (!input || typeof input !== "object") return undefined;
+  const value = (input as Record<string, unknown>)[field];
+  if (!Array.isArray(value)) return undefined;
+  const filePath = value[index];
+  return typeof filePath === "string" ? filePath : undefined;
 }

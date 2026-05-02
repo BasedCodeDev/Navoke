@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { z } from "zod";
-import { extensionBridge, type ChatGptExtensionTaskTarget, type ExtensionClientStatus } from "../extension/extensionBridge";
+import {
+  extensionBridge,
+  type ChatGptExtensionTaskTarget,
+  type ExtensionClientStatus,
+  type ExtensionTaskResult
+} from "../extension/extensionBridge";
 import { getRunArtifactDir } from "../runtime/paths";
 import type { WorkflowContext, WorkflowDefinition } from "../runtime/types";
 import { sleep } from "../utils/sleep";
@@ -105,6 +111,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
     const outputMappings: Array<{
       subjectIndex: number;
       subjectImage: string;
+      pairId: string;
       artifactId: string;
       outputPath: string;
     }> = [];
@@ -119,25 +126,13 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
         throw new Error("ChatGPT extension completed without returning any output images.");
       }
 
-      const totalsBySubject = countOutputsBySubject(result.outputs);
-      const seenBySubject = new Map<number, number>();
-      const completedSubjects = new Set<number>();
+      const normalizedOutputs = normalizeChatGptExtensionOutputs(result.outputs, input.subjectImages);
+      const usedOutputNames = new Set<string>();
 
-      for (const output of result.outputs) {
-        const subjectIndex = output.subjectIndex;
-        const subjectImage = input.subjectImages[subjectIndex];
-        if (!subjectImage) {
-          throw new Error(`ChatGPT extension returned output for unknown subject index ${subjectIndex}.`);
-        }
-
-        const count = (seenBySubject.get(subjectIndex) ?? 0) + 1;
-        seenBySubject.set(subjectIndex, count);
-        completedSubjects.add(subjectIndex);
-
+      for (const { output, subjectIndex, subjectImage, pairId } of normalizedOutputs) {
         const mimeType = output.mimeType ?? "image/png";
         const extension = extensionForMimeType(mimeType);
-        const suffix = (totalsBySubject.get(subjectIndex) ?? 0) > 1 ? `-${count}` : "";
-        const outputPath = path.join(runDir, `${safeStem(subjectImage)}-chatgpt${suffix}.${extension}`);
+        const outputPath = path.join(runDir, outputFileNameForSubject(subjectImage, subjectIndex, extension, usedOutputNames));
         fs.writeFileSync(outputPath, Buffer.from(output.base64, "base64"));
         const artifact = await ctx.addArtifact({
           kind: "image",
@@ -148,16 +143,16 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
             source: "chatgpt-extension",
             inputImage: subjectImage,
             subjectIndex,
+            pairId,
             taskId: task.id,
+            masterPrompt: input.masterPrompt,
+            subjectInstruction: input.subjectInstruction,
+            referenceImages: input.referenceImages,
             extensionMetadata: output.metadata ?? null
           }
         });
         artifactIds.push(artifact.id);
-        outputMappings.push({ subjectIndex, subjectImage, artifactId: artifact.id, outputPath });
-      }
-
-      if (completedSubjects.size < input.subjectImages.length) {
-        throw new Error("ChatGPT extension did not return an output image for every subject image.");
+        outputMappings.push({ subjectIndex, subjectImage, pairId, artifactId: artifact.id, outputPath });
       }
     } finally {
       unsubscribe();
@@ -165,6 +160,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
 
     const manifestPath = path.join(runDir, "chatgpt-extension-manifest.json");
     writeJson(manifestPath, {
+      masterPrompt: input.masterPrompt,
       referenceImages: input.referenceImages,
       subjectImages: input.subjectImages,
       subjectInstruction: input.subjectInstruction,
@@ -266,10 +262,73 @@ function safeStem(filePath: string): string {
   return path.parse(path.basename(filePath)).name.replace(/[^\w.-]+/g, "_") || "subject";
 }
 
-function countOutputsBySubject(outputs: Array<{ subjectIndex: number }>): Map<number, number> {
-  const counts = new Map<number, number>();
-  for (const output of outputs) {
-    counts.set(output.subjectIndex, (counts.get(output.subjectIndex) ?? 0) + 1);
+function outputFileNameForSubject(subjectImage: string, subjectIndex: number, extension: string, usedNames: Set<string>): string {
+  const baseName = `${safeStem(subjectImage)}-chatgpt`;
+  let candidate = `${baseName}.${extension}`;
+  if (!usedNames.has(candidate)) {
+    usedNames.add(candidate);
+    return candidate;
   }
-  return counts;
+
+  candidate = `${baseName}-${subjectIndex + 1}.${extension}`;
+  let duplicate = 2;
+  while (usedNames.has(candidate)) {
+    candidate = `${baseName}-${subjectIndex + 1}-${duplicate}.${extension}`;
+    duplicate += 1;
+  }
+  usedNames.add(candidate);
+  return candidate;
+}
+
+export function normalizeChatGptExtensionOutputs(
+  outputs: ExtensionTaskResult["outputs"],
+  subjectImages: string[]
+): Array<{
+  subjectIndex: number;
+  subjectImage: string;
+  pairId: string;
+  output: ExtensionTaskResult["outputs"][number];
+}> {
+  const outputsBySubject = new Map<number, Map<string, ExtensionTaskResult["outputs"][number]>>();
+
+  for (const output of outputs) {
+    const subjectIndex = output.subjectIndex;
+    if (!Number.isInteger(subjectIndex)) {
+      throw new Error("ChatGPT extension returned an output without a valid subject index.");
+    }
+    if (!subjectImages[subjectIndex]) {
+      throw new Error(`ChatGPT extension returned output for unknown subject index ${subjectIndex}.`);
+    }
+    if (typeof output.base64 !== "string" || output.base64.length === 0) {
+      throw new Error(`ChatGPT extension returned an empty output image for subject ${subjectIndex + 1}.`);
+    }
+
+    const subjectOutputs = outputsBySubject.get(subjectIndex) ?? new Map<string, ExtensionTaskResult["outputs"][number]>();
+    subjectOutputs.set(outputIdentityKey(output), subjectOutputs.get(outputIdentityKey(output)) ?? output);
+    outputsBySubject.set(subjectIndex, subjectOutputs);
+  }
+
+  return subjectImages.map((subjectImage, subjectIndex) => {
+    const subjectOutputs = [...(outputsBySubject.get(subjectIndex)?.values() ?? [])];
+    if (subjectOutputs.length === 0) {
+      throw new Error(`ChatGPT extension did not return an output image for subject ${subjectIndex + 1}.`);
+    }
+    if (subjectOutputs.length > 1) {
+      throw new Error(
+        `ChatGPT extension returned ${subjectOutputs.length} distinct output images for subject ${subjectIndex + 1}. ` +
+          "This workflow expects exactly one result per subject."
+      );
+    }
+    return {
+      subjectIndex,
+      subjectImage,
+      pairId: `subject-${subjectIndex + 1}`,
+      output: subjectOutputs[0]
+    };
+  });
+}
+
+function outputIdentityKey(output: ExtensionTaskResult["outputs"][number]): string {
+  const hash = createHash("sha256").update(output.base64).digest("hex");
+  return `${output.mimeType ?? "image/png"}:${hash}`;
 }

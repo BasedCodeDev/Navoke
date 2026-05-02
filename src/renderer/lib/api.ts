@@ -291,6 +291,11 @@ export async function artifactDownloadUrl(id: string): Promise<string> {
   return `${config.apiBaseUrl}/api/artifacts/${id}/download`;
 }
 
+export async function runInputFileUrl(runId: string, field: "images" | "referenceImages" | "subjectImages", index: number): Promise<string> {
+  const config = await getConfig();
+  return `${config.apiBaseUrl}/api/runs/${runId}/input-files/${field}/${index}`;
+}
+
 export async function subscribeRuntimeEvents(onMessage: (message: unknown) => void): Promise<() => void> {
   const config = await getConfig();
   const source = new EventSource(`${config.apiBaseUrl}/api/events`);

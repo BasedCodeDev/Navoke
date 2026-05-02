@@ -479,10 +479,11 @@ function imageFingerprint(image) {
   return `${image.currentSrc || image.src}|${image.naturalWidth}x${image.naturalHeight}`;
 }
 
-function collectImages(selector) {
-  const configured = selector ? Array.from(document.querySelectorAll(selector)) : [];
-  const fallback = Array.from(document.querySelectorAll("main img, article img"));
-  return [...configured, ...fallback].filter(
+function collectImagesFromRoot(root, selector) {
+  const configured = selector ? Array.from(root.querySelectorAll(selector)) : [];
+  const fallbackSelector = root === document ? "main img, article img" : "img";
+  const fallback = Array.from(root.querySelectorAll(fallbackSelector));
+  return dedupeImagesByFingerprint([...configured, ...fallback]).filter(
     (image, index, all) =>
       image instanceof HTMLImageElement &&
       all.indexOf(image) === index &&
@@ -490,6 +491,76 @@ function collectImages(selector) {
       image.naturalHeight >= 64 &&
       (image.currentSrc || image.src)
   );
+}
+
+function collectImages(selector) {
+  return collectImagesFromRoot(document, selector);
+}
+
+function dedupeImagesByFingerprint(images) {
+  const seen = new Set();
+  const deduped = [];
+  for (const image of images) {
+    if (!(image instanceof HTMLImageElement)) continue;
+    const fingerprint = imageFingerprint(image);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    deduped.push(image);
+  }
+  return deduped;
+}
+
+function collectResponseElements(selector) {
+  return Array.from(document.querySelectorAll(selector));
+}
+
+function collectNewImagesFromScopes(scopes, beforeState, selectors) {
+  return filterOutputImageCandidates(
+    dedupeImagesByFingerprint(scopes.flatMap((scope) => collectImagesFromRoot(scope, selectors.outputImage))).filter(
+      (image) => !beforeState.imageFingerprints.has(imageFingerprint(image))
+    )
+  );
+}
+
+function collectNewOutputImageCandidates(beforeState, selectors) {
+  const assistantElements = collectResponseElements("[data-message-author-role='assistant']");
+  const newAssistantScopes = assistantElements.slice(beforeState.assistantCount);
+  const assistantScopes = newAssistantScopes.length > 0 ? newAssistantScopes : assistantElements.slice(-1);
+  const assistantImages = collectNewImagesFromScopes(assistantScopes, beforeState, selectors);
+  if (assistantImages.length > 0) return assistantImages;
+
+  const articleElements = collectResponseElements("main article");
+  const newArticleScopes = articleElements.slice(beforeState.articleCount);
+  const articleScopes = newArticleScopes.length > 0 ? newArticleScopes : articleElements.slice(-1);
+  const articleImages = collectNewImagesFromScopes(articleScopes, beforeState, selectors);
+  if (articleImages.length > 0) return articleImages;
+
+  return filterOutputImageCandidates(
+    collectImages(selectors.outputImage).filter((image) => !beforeState.imageFingerprints.has(imageFingerprint(image)))
+  );
+}
+
+function normalizedImageLabel(image) {
+  return String(image.alt || image.getAttribute?.("aria-label") || image.getAttribute?.("title") || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function isUploadedInputImage(image) {
+  const label = normalizedImageLabel(image);
+  return label === "uploaded image" || label.includes("uploaded image");
+}
+
+function isGeneratedOutputImage(image) {
+  const label = normalizedImageLabel(image);
+  return label === "generated image" || label.includes("generated image");
+}
+
+function filterOutputImageCandidates(images) {
+  const candidates = dedupeImagesByFingerprint(images).filter((image) => !isUploadedInputImage(image));
+  const generatedCandidates = candidates.filter(isGeneratedOutputImage);
+  return generatedCandidates.length > 0 ? generatedCandidates : candidates;
 }
 
 function collectResponseState(selectors) {
@@ -568,7 +639,7 @@ async function waitForCompletedOutputImages(task, beforeState, selectors, subjec
   while (Date.now() - started < timeoutMs) {
     assertNotHumanVerification();
     const stopVisible = Boolean(findStopButton(selectors));
-    const newImages = collectImages(selectors.outputImage).filter((image) => !beforeState.imageFingerprints.has(imageFingerprint(image)));
+    const newImages = collectNewOutputImageCandidates(beforeState, selectors);
 
     if (newImages.length > 0) {
       const fingerprintKey = newImages.map(imageFingerprint).sort().join("\n");
@@ -585,6 +656,28 @@ async function waitForCompletedOutputImages(task, beforeState, selectors, subjec
     await delay(stopVisible ? 750 : 1250);
   }
   throw new Error(`Timed out waiting for a new ChatGPT output image for ${subject.name}.`);
+}
+
+function describeOutputImageCandidate(image) {
+  return {
+    url: image.currentSrc || image.src,
+    naturalWidth: image.naturalWidth,
+    naturalHeight: image.naturalHeight,
+    alt: image.alt || ""
+  };
+}
+
+function selectSingleOutputImage(images, subject) {
+  const candidates = filterOutputImageCandidates(images);
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length === 0) {
+    throw new Error(`ChatGPT completed without a captured output image for ${subject.name}.`);
+  }
+  const details = candidates.map(describeOutputImageCandidate);
+  throw new Error(
+    `ChatGPT returned ${candidates.length} distinct output image candidates for ${subject.name}. ` +
+      `This workflow expects exactly one result per subject. Candidate images: ${JSON.stringify(details)}`
+  );
 }
 
 function blobToBase64(blob) {
@@ -953,24 +1046,25 @@ async function runChatGptImageTask(task) {
     });
 
     const images = await waitForCompletedOutputImages(task, subjectBefore, selectors, subject);
-    for (const [outputIndex, image] of images.entries()) {
-      const output = await imageToOutput(image);
-      outputs.push({
-        subjectIndex: subject.index,
-        subjectName: subject.name,
-        name: `${subject.name.replace(/\.[^.]+$/, "")}-chatgpt-${outputIndex + 1}.png`,
-        mimeType: output.mimeType,
-        base64: output.base64,
-        metadata: {
-          url: image.currentSrc || image.src,
-          naturalWidth: image.naturalWidth,
-          naturalHeight: image.naturalHeight
-        }
-      });
-    }
-    await postTaskEvent(task.id, "extension.subject.completed", `Captured ${images.length} output image(s) for ${subject.name}`, {
+    const image = selectSingleOutputImage(images, subject);
+    const output = await imageToOutput(image);
+    outputs.push({
       subjectIndex: subject.index,
-      outputCount: images.length
+      subjectName: subject.name,
+      name: `${subject.name.replace(/\.[^.]+$/, "")}-chatgpt.png`,
+      mimeType: output.mimeType,
+      base64: output.base64,
+      metadata: {
+        url: image.currentSrc || image.src,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        fingerprint: imageFingerprint(image),
+        alt: image.alt || ""
+      }
+    });
+    await postTaskEvent(task.id, "extension.subject.completed", `Captured 1 output image for ${subject.name}`, {
+      subjectIndex: subject.index,
+      outputCount: 1
     });
   }
 

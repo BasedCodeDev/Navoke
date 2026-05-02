@@ -5,19 +5,24 @@ import {
   Bot,
   Camera,
   CheckCircle2,
+  Download,
   FlaskConical,
   FolderOpen,
   Info,
+  Moon,
   MousePointerClick,
   PauseCircle,
   Play,
   RefreshCcw,
   Square,
+  Sun,
   Trash2,
   X,
   Upload
 } from "lucide-react";
 import {
+  artifactDownloadUrl,
+  artifactUrl,
   cancelRun,
   closeLabSession,
   createLabSession,
@@ -31,15 +36,24 @@ import {
   listRuns,
   listWorkflows,
   resumeRun,
+  runInputFileUrl,
   runLabAction,
   subscribeRuntimeEvents,
   waitForLabCondition,
+  type ArtifactRecord,
   type LabWaitCondition,
   type RunRecord,
+  type RuntimeEvent,
   type SystemInfo,
   type WorkflowLabInspectionResult
 } from "@/lib/api";
 import { cn, formatDate, statusTone } from "@/lib/utils";
+import {
+  buildChatGptArtifactPairing,
+  fileName,
+  getChatGptRunInput,
+  type ChatGptRunInputModel
+} from "@/lib/chatGptArtifactPairing";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,21 +63,28 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 
-function parseJsonObject(value: string): Record<string, unknown> {
-  if (!value.trim()) return {};
-  const parsed = JSON.parse(value);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Selector config must be a JSON object.");
-  }
-  return parsed as Record<string, unknown>;
+type ThemeMode = "light" | "dark";
+
+const THEME_STORAGE_KEY = "workflowAutomationTheme";
+const neutralBadgeTone =
+  "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200";
+const infoBadgeTone =
+  "border-cyan-200 bg-cyan-100 text-cyan-800 dark:border-cyan-800 dark:bg-cyan-950 dark:text-cyan-200";
+const labBadgeTone =
+  "border-violet-200 bg-violet-100 text-violet-800 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-200";
+const dangerNoticeTone =
+  "border-red-200 bg-red-50 text-red-800 dark:border-red-900/70 dark:bg-red-950/50 dark:text-red-200";
+const infoNoticeTone =
+  "border-cyan-200 bg-cyan-50 text-cyan-950 dark:border-cyan-800/70 dark:bg-cyan-950/45 dark:text-cyan-100";
+
+function getInitialThemeMode(): ThemeMode {
+  const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (storedTheme === "light" || storedTheme === "dark") return storedTheme;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 function usesMasterPrompt(workflowId: string): boolean {
   return ["chatgpt.extension-image-transform"].includes(workflowId);
-}
-
-function usesSelectorConfig(workflowId: string): boolean {
-  return ["hunyuan.image-to-model", "chatgpt.extension-image-transform"].includes(workflowId);
 }
 
 function usesBrowserProfile(workflowId: string): boolean {
@@ -102,6 +123,7 @@ function chatGptTabOptionLabel(client: SystemInfo["extension"]["connectedClients
 
 export default function App(): JSX.Element {
   const queryClient = useQueryClient();
+  const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialThemeMode);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("chatgpt.extension-image-transform");
   const [workspaceView, setWorkspaceView] = useState<"runs" | "lab">("runs");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -115,7 +137,6 @@ export default function App(): JSX.Element {
   const [modelName, setModelName] = useState("Demo model");
   const [profileName, setProfileName] = useState("default");
   const [pauseForManualLogin, setPauseForManualLogin] = useState(true);
-  const [selectorsJson, setSelectorsJson] = useState("");
   const [chatGptTabSelection, setChatGptTabSelection] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -129,6 +150,15 @@ export default function App(): JSX.Element {
     enabled: Boolean(selectedRunId),
     refetchInterval: selectedRunId ? 2_000 : false
   });
+
+  const isDarkMode = themeMode === "dark";
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("dark", isDarkMode);
+    root.style.colorScheme = themeMode;
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+  }, [isDarkMode, themeMode]);
 
   useEffect(() => {
     void subscribeRuntimeEvents(() => {
@@ -147,16 +177,15 @@ export default function App(): JSX.Element {
   const createRunMutation = useMutation({
     mutationFn: async () => {
       setFormError(null);
-      const selectors = parseJsonObject(selectorsJson);
       const chatGptTab = selectedWorkflowId === "chatgpt.extension-image-transform" ? buildChatGptTabInput(chatGptTabSelection) : null;
       if (chatGptTab?.mode === "new") {
         await window.workflowAutomation.openExternal(buildNewChatGptTabUrl(chatGptTab.routingToken));
       }
       const workflowInput =
         selectedWorkflowId === "hunyuan.image-to-model"
-          ? { images: selectedFiles, prompt, profileName, pauseForManualLogin, selectors }
+          ? { images: selectedFiles, prompt, profileName, pauseForManualLogin }
           : selectedWorkflowId === "chatgpt.extension-image-transform"
-              ? { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, chatGptTab, selectors }
+              ? { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, chatGptTab }
               : { images: selectedFiles, prompt, modelName, delayMs: 1_200 };
 
       return createRun({ workflowId: selectedWorkflowId, name, input: workflowInput });
@@ -182,7 +211,13 @@ export default function App(): JSX.Element {
     onError: (error) => setFormError(error instanceof Error ? error.message : String(error))
   });
 
-  const activeRun = selectedRunQuery.data?.run;
+  const selectedRunSummary = (runsQuery.data ?? []).find((run) => run.id === selectedRunId);
+  const activeRun = selectedRunQuery.data?.run ?? selectedRunSummary;
+  const selectedRunDetailError = selectedRunQuery.error
+    ? selectedRunQuery.error instanceof Error
+      ? selectedRunQuery.error.message
+      : String(selectedRunQuery.error)
+    : null;
   const selectedRunIds = new Set([selectedRunId]);
   const extensionClients = systemQuery.data?.extension.connectedClients ?? [];
   const compatibleExtensionClients = useMemo(() => extensionClients.filter((client) => client.compatible), [extensionClients]);
@@ -210,7 +245,7 @@ export default function App(): JSX.Element {
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <main className={cn("min-h-screen bg-background text-foreground transition-colors", isDarkMode && "dark")}>
       <header className="border-b border-border bg-card">
         <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-6 py-4">
           <div>
@@ -218,17 +253,27 @@ export default function App(): JSX.Element {
             <p className="text-sm text-muted-foreground">Local durable browser workflows for images, models, and chained artifacts.</p>
           </div>
           <div className="flex items-center gap-2">
-            <Badge className="border bg-slate-100 text-slate-700">
+            <Badge className={cn("border", neutralBadgeTone)}>
               Queue: {systemQuery.data?.runner.queued ?? 0} · Running: {systemQuery.data?.runner.running ?? 0}
             </Badge>
-            <Badge className="border bg-cyan-100 text-cyan-800">
+            <Badge className={cn("border", infoBadgeTone)}>
               Extension: {systemQuery.data?.extension.connectedClients.length ?? 0}
             </Badge>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label={isDarkMode ? "Use light mode" : "Use dark mode"}
+              title={isDarkMode ? "Use light mode" : "Use dark mode"}
+              onClick={() => setThemeMode(isDarkMode ? "light" : "dark")}
+            >
+              {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </Button>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-[1500px] grid-cols-[360px_1fr_420px] gap-5 px-6 py-5">
+      <div className="mx-auto grid max-w-[1500px] grid-cols-[360px_minmax(0,1fr)] gap-5 px-6 py-5">
         <section className="space-y-5">
           <Card>
             <CardHeader>
@@ -276,6 +321,14 @@ export default function App(): JSX.Element {
                     onChoose={() => void chooseImages(setReferenceFiles, "Choose optional reference images")}
                     onClear={() => setReferenceFiles([])}
                   />
+                  <div className="space-y-2">
+                    <Label>Master prompt</Label>
+                    <Textarea
+                      value={masterPrompt}
+                      onChange={(event) => setMasterPrompt(event.target.value)}
+                      placeholder='Initial instruction. Example: "After the first response, respond with images only. When ready, respond READY."'
+                    />
+                  </div>
                   <ImagePicker
                     label="Subject images"
                     chooseLabel="Choose subjects"
@@ -284,6 +337,14 @@ export default function App(): JSX.Element {
                     onChoose={() => void chooseImages(setSubjectFiles, "Choose subject images")}
                     onClear={() => setSubjectFiles([])}
                   />
+                  <div className="space-y-2">
+                    <Label>Per-subject instruction</Label>
+                    <Textarea
+                      value={subjectInstruction}
+                      onChange={(event) => setSubjectInstruction(event.target.value)}
+                      placeholder="Optional. Leave blank to send each subject image without text."
+                    />
+                  </div>
                 </>
               ) : (
                 <ImagePicker
@@ -307,26 +368,7 @@ export default function App(): JSX.Element {
                     <Input value={modelName} onChange={(event) => setModelName(event.target.value)} />
                   </div>
                 </>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <Label>Master prompt</Label>
-                    <Textarea
-                      value={masterPrompt}
-                      onChange={(event) => setMasterPrompt(event.target.value)}
-                      placeholder='Initial instruction. Example: "After the first response, respond with images only. When ready, respond READY."'
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Per-subject instruction</Label>
-                    <Textarea
-                      value={subjectInstruction}
-                      onChange={(event) => setSubjectInstruction(event.target.value)}
-                      placeholder="Optional. Leave blank to send each subject image without text."
-                    />
-                  </div>
-                </>
-              )}
+              ) : null}
 
               {usesBrowserProfile(selectedWorkflowId) ? (
                 <>
@@ -347,20 +389,8 @@ export default function App(): JSX.Element {
                 </>
               ) : null}
 
-              {usesSelectorConfig(selectedWorkflowId) ? (
-                <div className="space-y-2">
-                  <Label>Selector config JSON</Label>
-                  <Textarea
-                    className="font-mono text-xs"
-                    value={selectorsJson}
-                    onChange={(event) => setSelectorsJson(event.target.value)}
-                    placeholder='{"fileInput":"input[type=file]","composer":"#prompt-textarea","submitButton":"button[data-testid=send-button]","stopButton":"button[data-testid=stop-button]"}'
-                  />
-                </div>
-              ) : null}
-
               {formError ? (
-                <div className="flex gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", dangerNoticeTone)}>
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                   {formError}
                 </div>
@@ -388,7 +418,7 @@ export default function App(): JSX.Element {
           </Card>
         </section>
 
-        <section className={cn("space-y-5", workspaceView === "lab" ? "col-span-2" : "")}>
+        <section className="space-y-5">
           <div className="flex items-center justify-between gap-3">
             <div className="inline-flex rounded-md border border-border bg-card p-1">
               <button
@@ -439,84 +469,377 @@ export default function App(): JSX.Element {
           </div>
         </section>
 
-        {workspaceView === "runs" ? (
-          <aside className="space-y-5">
-            <Card>
-            <CardHeader>
-              <CardTitle>Run Detail</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {!activeRun ? <div className="text-sm text-muted-foreground">Select a run to inspect events and artifacts.</div> : null}
-              {activeRun ? (
+      </div>
+
+      {selectedRunId ? (
+        <RunDetailModal
+          runId={selectedRunId}
+          run={activeRun}
+          artifacts={selectedRunQuery.data?.artifacts ?? []}
+          events={selectedRunQuery.data?.events ?? []}
+          hasDetails={Boolean(selectedRunQuery.data)}
+          isLoading={selectedRunQuery.isLoading}
+          detailError={selectedRunDetailError}
+          isDeleting={deleteRunMutation.isPending}
+          onClose={() => setSelectedRunId(null)}
+          onResume={(runId) => void resumeRun(runId).then(() => queryClient.invalidateQueries())}
+          onCancel={(runId) => void cancelRun(runId).then(() => queryClient.invalidateQueries())}
+          onOpenDataFolder={() => window.workflowAutomation.openPath(configQuery.data?.dataDir ?? "")}
+          onDelete={(runId) => void deleteRunMutation.mutate(runId)}
+        />
+      ) : null}
+    </main>
+  );
+}
+
+function RunDetailModal({
+  runId,
+  run,
+  artifacts,
+  events,
+  hasDetails,
+  isLoading,
+  detailError,
+  isDeleting,
+  onClose,
+  onResume,
+  onCancel,
+  onOpenDataFolder,
+  onDelete
+}: {
+  runId: string;
+  run?: RunRecord;
+  artifacts: ArtifactRecord[];
+  events: RuntimeEvent[];
+  hasDetails: boolean;
+  isLoading: boolean;
+  detailError: string | null;
+  isDeleting: boolean;
+  onClose(): void;
+  onResume(runId: string): void;
+  onCancel(runId: string): void;
+  onOpenDataFolder(): void | Promise<unknown>;
+  onDelete(runId: string): void;
+}): JSX.Element {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
+      <div className="mx-auto flex min-h-full max-w-5xl items-start justify-center">
+        <div
+          className="w-full overflow-hidden rounded-lg border border-border bg-background shadow-xl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="run-detail-title"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+            <div className="min-w-0">
+              <h2 id="run-detail-title" className="text-lg font-semibold">
+                Run Detail
+              </h2>
+              <div className="truncate text-sm text-muted-foreground">
+                {run ? `${run.name} | ${run.workflowId}` : `Run ${runId}`}
+              </div>
+            </div>
+            <Button type="button" variant="ghost" size="icon" aria-label="Close run detail" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="max-h-[calc(100vh-9rem)] space-y-5 overflow-y-auto p-5">
+            {isLoading ? (
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                Loading artifacts and events. Run actions are available now.
+              </div>
+            ) : null}
+            {detailError ? (
+              <div className={cn("rounded-md border p-4 text-sm", dangerNoticeTone)}>
+                Could not load full run details: {detailError}. You can still delete this run.
+              </div>
+            ) : null}
+
+            <section className="space-y-4 rounded-md border border-border bg-card p-4">
+              {run ? (
                 <>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate font-medium">{activeRun.name}</div>
-                        <div className="text-xs text-muted-foreground">{activeRun.workflowId}</div>
+                        <div className="truncate font-medium">{run.name}</div>
+                        <div className="text-xs text-muted-foreground">{run.workflowId}</div>
                       </div>
-                      <Badge className={cn("border", statusTone(activeRun.status))}>{activeRun.status}</Badge>
+                      <Badge className={cn("border", statusTone(run.status))}>{run.status}</Badge>
                     </div>
-                    <Progress value={activeRun.progress} />
-                    <div className="text-sm text-muted-foreground">{activeRun.currentStep ?? "No step yet"}</div>
+                    <Progress value={run.progress} />
+                    <div className="text-sm text-muted-foreground">{run.currentStep ?? "No step yet"}</div>
                   </div>
-                  <div className="flex gap-2">
-                    {activeRun.status === "waiting_manual" ? (
-                      <Button size="sm" onClick={() => void resumeRun(activeRun.id).then(() => queryClient.invalidateQueries())}>
-                        <PauseCircle className="h-4 w-4" />
-                        Resume
-                      </Button>
-                    ) : null}
-                    {["queued", "running", "waiting_manual"].includes(activeRun.status) ? (
-                      <Button variant="destructive" size="sm" onClick={() => void cancelRun(activeRun.id).then(() => queryClient.invalidateQueries())}>
-                        <Square className="h-4 w-4" />
-                        Cancel
-                      </Button>
-                    ) : null}
-                    <Button variant="outline" size="sm" onClick={() => window.workflowAutomation.openPath(configQuery.data?.dataDir ?? "")}>
-                      <FolderOpen className="h-4 w-4" />
-                      Data folder
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => void deleteRunMutation.mutate(activeRun.id)}
-                      disabled={deleteRunMutation.isPending}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      Delete
-                    </Button>
-                  </div>
-                  {activeRun.error ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{activeRun.error}</div> : null}
+
+                  {run.error ? <div className={cn("rounded-md border p-3 text-sm", dangerNoticeTone)}>{run.error}</div> : null}
                 </>
-              ) : null}
-            </CardContent>
-          </Card>
+              ) : (
+                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                  Run metadata is unavailable. Delete remains available for this selected run id.
+                </div>
+              )}
 
-          {selectedRunQuery.data?.artifacts.map((artifact) => <ArtifactPreview key={artifact.id} artifact={artifact} />)}
+              <div className="flex flex-wrap gap-2">
+                {run?.status === "waiting_manual" ? (
+                  <Button size="sm" onClick={() => onResume(run.id)}>
+                    <PauseCircle className="h-4 w-4" />
+                    Resume
+                  </Button>
+                ) : null}
+                {run && ["queued", "running", "waiting_manual"].includes(run.status) ? (
+                  <Button variant="destructive" size="sm" onClick={() => onCancel(run.id)}>
+                    <Square className="h-4 w-4" />
+                    Cancel
+                  </Button>
+                ) : null}
+                <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()}>
+                  <FolderOpen className="h-4 w-4" />
+                  Data folder
+                </Button>
+                <Button variant="destructive" size="sm" onClick={() => onDelete(runId)} disabled={isDeleting}>
+                  <Trash2 className="h-4 w-4" />
+                  Delete
+                </Button>
+              </div>
+            </section>
 
-          {selectedRunQuery.data ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Events</CardTitle>
-              </CardHeader>
-              <CardContent className="max-h-96 space-y-3 overflow-auto">
-                {selectedRunQuery.data.events.map((event) => (
-                  <div key={event.id} className="border-l-2 border-border pl-3 text-sm">
-                    <div className="flex items-center gap-2">
-                      {event.type === "run.completed" ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <Bot className="h-4 w-4 text-muted-foreground" />}
-                      <span className="font-medium">{event.message}</span>
+            {hasDetails ? (
+              <>
+                <section className="space-y-3">
+                  <h3 className="text-sm font-semibold">Artifacts</h3>
+                  {artifacts.length === 0 ? (
+                    <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No artifacts yet.</div>
+                  ) : run?.workflowId === "chatgpt.extension-image-transform" && getChatGptRunInput(run.input) ? (
+                    <ChatGptArtifactPairs run={run} artifacts={artifacts} input={getChatGptRunInput(run.input)!} />
+                  ) : (
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      {artifacts.map((artifact) => (
+                        <ArtifactPreview key={artifact.id} artifact={artifact} />
+                      ))}
                     </div>
-                    <div className="text-xs text-muted-foreground">{formatDate(event.createdAt)} · {event.type}</div>
+                  )}
+                </section>
+
+                <section className="rounded-md border border-border bg-card">
+                  <div className="border-b border-border px-4 py-3">
+                    <h3 className="text-sm font-semibold">Events</h3>
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-          ) : null}
-          </aside>
-        ) : null}
+                  <div className="max-h-96 space-y-3 overflow-auto p-4">
+                    {events.length === 0 ? <div className="text-sm text-muted-foreground">No events yet.</div> : null}
+                    {events.map((event) => (
+                      <div key={event.id} className="border-l-2 border-border pl-3 text-sm">
+                        <div className="flex items-center gap-2">
+                          {event.type === "run.completed" ? (
+                            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                          ) : (
+                            <Bot className="h-4 w-4 text-muted-foreground" />
+                          )}
+                          <span className="font-medium">{event.message}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatDate(event.createdAt)} | {event.type}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </>
+            ) : null}
+          </div>
+        </div>
       </div>
-    </main>
+    </div>
+  );
+}
+
+function ChatGptArtifactPairs({
+  run,
+  artifacts,
+  input
+}: {
+  run: RunRecord;
+  artifacts: ArtifactRecord[];
+  input: ChatGptRunInputModel;
+}): JSX.Element {
+  const pairing = buildChatGptArtifactPairing(input, artifacts);
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-border bg-background p-4">
+        <h4 className="text-sm font-semibold">GPT setup context</h4>
+        <div className="mt-3 space-y-3">
+          <div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">Master prompt sent first</div>
+            <div className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">
+              {input.masterPrompt || "No master prompt recorded."}
+            </div>
+          </div>
+          <div>
+            <div className="mb-2 text-xs font-medium text-muted-foreground">Reference images sent with setup</div>
+            {input.referenceImages.length === 0 ? (
+              <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No reference images were sent.</div>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2">
+                {input.referenceImages.map((referenceImage, index) => (
+                  <InputImagePreview
+                    key={`${referenceImage}-${index}`}
+                    runId={run.id}
+                    field="referenceImages"
+                    index={index}
+                    filePath={referenceImage}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <h4 className="text-sm font-semibold">Subject input and generated result pairs</h4>
+        {pairing.pairs.map((pair) => (
+          <article key={`${pair.subjectImage}-${pair.index}`} className="rounded-md border border-border bg-background p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-medium">Subject {pair.index + 1}</div>
+                <div className="text-xs text-muted-foreground">{fileName(pair.subjectImage)}</div>
+              </div>
+              <Badge className={cn("border", neutralBadgeTone)}>
+                {pair.primaryOutput ? "1 result" : "Missing result"}
+              </Badge>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="space-y-3">
+                <div className="text-xs font-medium text-muted-foreground">Input to GPT</div>
+                <InputImagePreview runId={run.id} field="subjectImages" index={pair.index} filePath={pair.subjectImage} />
+                <div>
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">Prompt paired with this input</div>
+                  <div className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">
+                    {input.subjectInstruction.trim() || "No per-subject text; this step sent the subject image after the setup prompt."}
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div className="text-xs font-medium text-muted-foreground">GPT result</div>
+                {pair.primaryOutput ? (
+                  <OutputImagePreview artifact={pair.primaryOutput} />
+                ) : (
+                  <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
+                    No output artifact is paired with this input yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      {pairing.otherArtifacts.length > 0 ? (
+        <div className="space-y-3">
+          <h4 className="text-sm font-semibold">Other artifacts</h4>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {pairing.otherArtifacts.map((artifact) => (
+              <ArtifactPreview key={artifact.id} artifact={artifact} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function InputImagePreview({
+  runId,
+  field,
+  index,
+  filePath
+}: {
+  runId: string;
+  field: "images" | "referenceImages" | "subjectImages";
+  index: number;
+  filePath: string;
+}): JSX.Element {
+  const [fileUrl, setFileUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+    void runInputFileUrl(runId, field, index).then(setFileUrl);
+  }, [field, index, runId]);
+
+  return (
+    <div className="rounded-md border border-border bg-card p-3">
+      <div className="mb-2 min-w-0">
+        <div className="truncate text-xs font-medium">{fileName(filePath)}</div>
+        <div className="truncate text-xs text-muted-foreground" title={filePath}>
+          {filePath}
+        </div>
+      </div>
+      {!fileUrl ? (
+        <div className="flex h-44 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
+          Loading input preview...
+        </div>
+      ) : failed ? (
+        <div className="flex h-44 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
+          Input image preview unavailable.
+        </div>
+      ) : (
+        <img
+          src={fileUrl}
+          alt={fileName(filePath)}
+          className="h-44 w-full rounded-md bg-muted object-contain"
+          onError={() => setFailed(true)}
+        />
+      )}
+    </div>
+  );
+}
+
+function OutputImagePreview({ artifact }: { artifact: ArtifactRecord }): JSX.Element {
+  const [fileUrl, setFileUrl] = useState("");
+  const [downloadUrl, setDownloadUrl] = useState("");
+
+  useEffect(() => {
+    void artifactUrl(artifact.id).then(setFileUrl);
+    void artifactDownloadUrl(artifact.id).then(setDownloadUrl);
+  }, [artifact.id]);
+
+  return (
+    <div className="rounded-md border border-border bg-card p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-xs font-medium">{artifact.name}</div>
+          <div className="text-xs text-muted-foreground">{Math.round(artifact.size / 1024)} KB</div>
+        </div>
+        <Button asChild variant="outline" size="sm">
+          <a href={downloadUrl}>
+            <Download className="h-4 w-4" />
+            Download
+          </a>
+        </Button>
+      </div>
+      {fileUrl ? (
+        <img src={fileUrl} alt={artifact.name} className="h-64 w-full rounded-md bg-muted object-contain" />
+      ) : (
+        <div className="flex h-64 items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
+          Loading output preview...
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -706,7 +1029,7 @@ function WorkflowLabPanel({
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <CardTitle>Workflow Lab</CardTitle>
-          <Badge className="border bg-violet-100 text-violet-800">{sessions.length} session{sessions.length === 1 ? "" : "s"}</Badge>
+          <Badge className={cn("border", labBadgeTone)}>{sessions.length} session{sessions.length === 1 ? "" : "s"}</Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -766,7 +1089,9 @@ function WorkflowLabPanel({
                 onClick={() => setSelectedSessionId(session.id)}
                 className={cn(
                   "rounded-md border px-3 py-2 text-left text-xs",
-                  selectedSession?.id === session.id ? "border-primary bg-cyan-50 text-cyan-950" : "border-border bg-background"
+                  selectedSession?.id === session.id
+                    ? "border-primary bg-cyan-50 text-cyan-950 dark:bg-cyan-950/40 dark:text-cyan-100"
+                    : "border-border bg-background"
                 )}
               >
                 <div className="font-medium">{session.title || session.mode}</div>
@@ -897,12 +1222,12 @@ function WorkflowLabPanel({
         )}
 
         {labError ? (
-          <div className="flex gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          <div className={cn("flex gap-2 rounded-md border p-3 text-sm", dangerNoticeTone)}>
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             {labError}
           </div>
         ) : null}
-        {waitMessage ? <div className="rounded-md border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-950">{waitMessage}</div> : null}
+        {waitMessage ? <div className={cn("rounded-md border p-3 text-sm", infoNoticeTone)}>{waitMessage}</div> : null}
 
         {inspection ? (
           <div className="grid grid-cols-[280px_1fr] gap-4">
@@ -982,90 +1307,107 @@ function ChatGptTabRoutingPanel({
   const incompatibleClients = clients.filter((client) => !client.compatible);
 
   return (
-    <div className="rounded-md border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-950">
-      <div className="flex gap-2">
-        <Info className="mt-0.5 h-4 w-4 shrink-0" />
-        <div className="space-y-1">
+    <div className={cn("rounded-md border p-3 text-sm", infoNoticeTone)}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <div className="font-medium">ChatGPT tab routing</div>
-          <p className="text-xs leading-5 text-cyan-900">
-            Choose the exact compatible ChatGPT tab for this run, or open a new token-routed tab. Other ChatGPT tabs keep
-            polling but will not receive the task.
-          </p>
-          {incompatibleClients.length > 0 ? (
-            <p className="text-xs font-medium leading-5 text-red-700">
-              {incompatibleClients.length} tab{incompatibleClients.length === 1 ? "" : "s"} need the unpacked extension reloaded and
-              ChatGPT refreshed before they can run protocol {requiredProtocolVersion} workflows.
-            </p>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="mt-3 space-y-2">
-        <Label htmlFor="chatgpt-tab-target" className="text-xs font-medium text-cyan-950">
-          Target tab
-        </Label>
-        <div className="grid grid-cols-[1fr_auto] gap-2">
-          <select
-            id="chatgpt-tab-target"
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            className="h-9 min-w-0 rounded-md border border-cyan-200 bg-white px-3 text-xs text-cyan-950"
-          >
-            <option value={NEW_CHATGPT_TAB_VALUE}>Open a new ChatGPT tab</option>
-            {compatibleClients.map((client) => (
-              <option key={client.id} value={client.id}>
-                {chatGptTabOptionLabel(client)}
-              </option>
-            ))}
-          </select>
-          <Button type="button" variant="outline" size="sm" onClick={onRefresh}>
-            <RefreshCcw className="h-4 w-4" />
-            Refresh
-          </Button>
-        </div>
-        <p className="text-xs leading-5 text-cyan-900">
-          New tabs open ChatGPT externally and are matched when the extension reports the run token.
-        </p>
-      </div>
-
-      <div className="mt-3 rounded-md border border-cyan-200 bg-white/70 p-2">
-        <div className="mb-2 text-xs font-medium text-cyan-950">Reporting ChatGPT tabs</div>
-        {clients.length === 0 ? (
-          <div className="text-xs text-cyan-900">No ChatGPT extension tab has checked in yet.</div>
-        ) : (
-          <div className="max-h-28 space-y-2 overflow-auto">
-            {clients.map((client) => (
-              <div key={client.id} className="space-y-1 rounded border border-cyan-100 bg-white p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0 truncate text-xs font-medium text-cyan-950">{client.title || "ChatGPT tab"}</div>
-                  <Badge
-                    className={cn(
-                      "shrink-0 border",
-                      !client.compatible
-                        ? "bg-red-100 text-red-800"
-                        : client.status === "busy"
-                          ? "bg-amber-100 text-amber-800"
-                          : "bg-emerald-100 text-emerald-800"
-                    )}
-                  >
-                    {client.compatible ? client.status : "reload required"}
-                  </Badge>
-                </div>
-                <div className="truncate text-xs text-cyan-800">{client.url || "No URL reported"}</div>
-                <div className="text-xs text-cyan-700">
-                  Extension v{client.extensionVersion || "unknown"} | protocol {client.protocolVersion ?? "unknown"} / required{" "}
-                  {requiredProtocolVersion}
-                </div>
-                {!client.compatible ? (
-                  <div className="text-xs text-red-700">
-                    {client.incompatibilityReason ?? "Reload the unpacked extension and refresh this ChatGPT tab."}
-                  </div>
+          <div className="group relative">
+            <button
+              type="button"
+              aria-label="ChatGPT tab routing details"
+              className="flex h-6 w-6 items-center justify-center rounded-full text-cyan-800 outline-none ring-offset-2 transition hover:bg-cyan-100 focus-visible:ring-2 focus-visible:ring-primary dark:text-cyan-200 dark:hover:bg-cyan-900/70"
+            >
+              <Info className="h-4 w-4" />
+            </button>
+            <div className="invisible absolute left-0 top-7 z-30 w-80 max-w-[calc(100vw-3rem)] rounded-md border border-cyan-200 bg-white p-3 text-xs text-cyan-900 opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 dark:border-cyan-800 dark:bg-slate-950 dark:text-cyan-100">
+              <div className="space-y-3">
+                <p className="leading-5">
+                  Choose an open compatible ChatGPT tab for this run, or open a new token-routed tab. Other ChatGPT tabs keep
+                  polling but will not receive the task.
+                </p>
+                <p className="leading-5">
+                  New tabs open ChatGPT externally and are matched when the extension reports the run token.
+                </p>
+                {incompatibleClients.length > 0 ? (
+                  <p className="font-medium leading-5 text-red-700 dark:text-red-300">
+                    {incompatibleClients.length} tab{incompatibleClients.length === 1 ? "" : "s"} need the unpacked extension
+                    reloaded and ChatGPT refreshed before they can run protocol {requiredProtocolVersion} workflows.
+                  </p>
                 ) : null}
-                <div className="text-xs text-cyan-700">Last seen {formatDate(client.lastSeenAt)}</div>
+                <div>
+                  <div className="mb-2 font-medium text-cyan-950 dark:text-cyan-100">Reporting ChatGPT tabs</div>
+                  {clients.length === 0 ? (
+                    <div className="rounded border border-cyan-100 bg-cyan-50 p-2 dark:border-cyan-900/70 dark:bg-cyan-950/30">
+                      No ChatGPT extension tab has checked in yet.
+                    </div>
+                  ) : (
+                    <div className="max-h-40 space-y-2 overflow-auto">
+                      {clients.map((client) => (
+                        <div
+                          key={client.id}
+                          className="space-y-1 rounded border border-cyan-100 bg-cyan-50 p-2 dark:border-cyan-900/70 dark:bg-background"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 truncate font-medium text-cyan-950 dark:text-cyan-100">
+                              {client.title || "ChatGPT tab"}
+                            </div>
+                            <Badge
+                              className={cn(
+                                "shrink-0 border",
+                                !client.compatible
+                                  ? "border-red-200 bg-red-100 text-red-800 dark:border-red-900/70 dark:bg-red-950/50 dark:text-red-200"
+                                  : client.status === "busy"
+                                    ? "border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/50 dark:text-amber-200"
+                                    : "border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-800/70 dark:bg-emerald-950/50 dark:text-emerald-200"
+                              )}
+                            >
+                              {client.compatible ? client.status : "reload required"}
+                            </Badge>
+                          </div>
+                          <div className="truncate text-cyan-800 dark:text-cyan-300">{client.url || "No URL reported"}</div>
+                          <div className="text-cyan-700 dark:text-cyan-300">
+                            Extension v{client.extensionVersion || "unknown"} | protocol {client.protocolVersion ?? "unknown"} /
+                            required {requiredProtocolVersion}
+                          </div>
+                          {!client.compatible ? (
+                            <div className="text-red-700 dark:text-red-300">
+                              {client.incompatibilityReason ?? "Reload the unpacked extension and refresh this ChatGPT tab."}
+                            </div>
+                          ) : null}
+                          <div className="text-cyan-700 dark:text-cyan-300">Last seen {formatDate(client.lastSeenAt)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            ))}
+            </div>
           </div>
-        )}
+        </div>
+        {compatibleClients.length > 0 ? <Badge className={cn("border", neutralBadgeTone)}>{compatibleClients.length} ready</Badge> : null}
+      </div>
+
+      <Label htmlFor="chatgpt-tab-target" className="sr-only">
+        Target tab
+      </Label>
+      <div className="grid grid-cols-[1fr_auto] gap-2">
+        <select
+          id="chatgpt-tab-target"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-9 min-w-0 rounded-md border border-cyan-200 bg-white px-3 text-xs text-cyan-950 dark:border-cyan-800 dark:bg-background dark:text-cyan-100"
+        >
+          <option value={NEW_CHATGPT_TAB_VALUE}>Open a new ChatGPT tab</option>
+          {compatibleClients.map((client) => (
+            <option key={client.id} value={client.id}>
+              {chatGptTabOptionLabel(client)}
+            </option>
+          ))}
+        </select>
+        <Button type="button" variant="outline" size="sm" onClick={onRefresh}>
+          <RefreshCcw className="h-4 w-4" />
+          Refresh
+        </Button>
       </div>
     </div>
   );

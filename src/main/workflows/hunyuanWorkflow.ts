@@ -88,7 +88,7 @@ export const hunyuanImageToModelWorkflow: WorkflowDefinition<z.infer<typeof inpu
         });
         artifactIds.push(screenshotArtifact.id);
         throw new WorkflowConfigurationError(
-          "Hunyuan selectors are not configured. Capture selectors with Playwright codegen and paste them into Selector config."
+          "Hunyuan selectors are not configured. Use Workflow Lab to inspect the page controls and calibrate selector support."
         );
       }
 

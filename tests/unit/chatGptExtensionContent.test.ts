@@ -4,40 +4,97 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-interface MockElement {
+class MockElement {
   tagName: string;
   textContent: string;
   disabled?: boolean;
   visible: boolean;
   attrs: Record<string, string>;
-  getAttribute(name: string): string | null;
-  getBoundingClientRect(): { width: number; height: number };
+  children: MockElement[];
+  parent: MockElement | null = null;
+
+  constructor(
+    tagName: string,
+    attrs: Record<string, string> = {},
+    options: { text?: string; disabled?: boolean; visible?: boolean; children?: MockElement[] } = {}
+  ) {
+    this.tagName = tagName.toUpperCase();
+    this.textContent = options.text ?? "";
+    this.disabled = options.disabled;
+    this.visible = options.visible ?? true;
+    this.attrs = attrs;
+    this.children = options.children ?? [];
+    for (const child of this.children) child.parent = this;
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attrs[name] ?? null;
+  }
+
+  getBoundingClientRect(): { width: number; height: number } {
+    return this.visible ? { width: 36, height: 36 } : { width: 0, height: 0 };
+  }
+
+  querySelectorAll(selector: string): MockElement[] {
+    return queryElements(flattenDescendants(this), selector);
+  }
+}
+
+class MockImageElement extends MockElement {
+  currentSrc: string;
+  src: string;
+  naturalWidth: number;
+  naturalHeight: number;
+  alt: string;
+
+  constructor(src: string, options: { width?: number; height?: number; alt?: string } = {}) {
+    super("img", {});
+    this.currentSrc = src;
+    this.src = src;
+    this.naturalWidth = options.width ?? 1024;
+    this.naturalHeight = options.height ?? 1024;
+    this.alt = options.alt ?? "";
+  }
 }
 
 function mockElement(
   tagName: string,
   attrs: Record<string, string> = {},
-  options: { text?: string; disabled?: boolean; visible?: boolean } = {}
+  options: { text?: string; disabled?: boolean; visible?: boolean; children?: MockElement[] } = {}
 ): MockElement {
-  return {
-    tagName: tagName.toUpperCase(),
-    textContent: options.text ?? "",
-    disabled: options.disabled,
-    visible: options.visible ?? true,
-    attrs,
-    getAttribute(name: string) {
-      return this.attrs[name] ?? null;
-    },
-    getBoundingClientRect() {
-      return this.visible ? { width: 36, height: 36 } : { width: 0, height: 0 };
-    }
-  };
+  return new MockElement(tagName, attrs, options);
+}
+
+function mockImage(src: string, options: { width?: number; height?: number; alt?: string } = {}): MockImageElement {
+  return new MockImageElement(src, options);
+}
+
+function flattenElements(elements: MockElement[]): MockElement[] {
+  return elements.flatMap((element) => [element, ...flattenDescendants(element)]);
+}
+
+function flattenDescendants(element: MockElement): MockElement[] {
+  return element.children.flatMap((child) => [child, ...flattenDescendants(child)]);
+}
+
+function queryElements(elements: MockElement[], selector: string): MockElement[] {
+  const selectors = selector.split(",").map((part) => part.trim()).filter(Boolean);
+  const matches = selectors.flatMap((part) => elements.filter((element) => matchesSelector(element, part)));
+  return matches.filter((element, index, all) => all.indexOf(element) === index);
 }
 
 function matchesSelector(element: MockElement, selector: string): boolean {
+  if (selector.includes(" ")) {
+    const [ancestorSelector, childSelector] = selector.split(/\s+/, 2);
+    return matchesSelector(element, childSelector) && hasAncestor(element, ancestorSelector);
+  }
   if (selector === "button") return element.tagName === "BUTTON";
   if (selector === "textarea") return element.tagName === "TEXTAREA";
+  if (selector === "img") return element.tagName === "IMG";
+  if (selector === "article") return element.tagName === "ARTICLE";
+  if (selector === "main") return element.tagName === "MAIN";
   if (selector === "[contenteditable='true']") return element.attrs.contenteditable === "true";
+  if (selector === "[data-message-author-role='assistant']") return element.attrs["data-message-author-role"] === "assistant";
   if (selector === "#prompt-textarea") return element.attrs.id === "prompt-textarea";
   if (selector === "input[type='file']") return element.tagName === "INPUT" && element.attrs.type === "file";
   if (selector === "form button[type='submit']") return element.tagName === "BUTTON" && element.attrs.type === "submit";
@@ -50,18 +107,28 @@ function matchesSelector(element: MockElement, selector: string): boolean {
   return false;
 }
 
+function hasAncestor(element: MockElement, selector: string): boolean {
+  let current = element.parent;
+  while (current) {
+    if (matchesSelector(current, selector)) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
 function loadContentScript(elements: MockElement[]) {
   const testDir = path.dirname(fileURLToPath(import.meta.url));
   const contentPath = path.resolve(testDir, "../../extension/chatgpt-controller/content.js");
   const source = readFileSync(contentPath, "utf8").replace(/\nvoid pollLoop\(\);\s*$/, "\n");
+  const allElements = flattenElements(elements);
   const document = {
     body: { innerText: "" },
-    images: [],
+    images: allElements.filter((element) => element instanceof MockImageElement),
     querySelector(selector: string) {
       return this.querySelectorAll(selector)[0] ?? null;
     },
     querySelectorAll(selector: string) {
-      return elements.filter((element) => matchesSelector(element, selector));
+      return queryElements(allElements, selector);
     }
   };
   const context = {
@@ -78,6 +145,7 @@ function loadContentScript(elements: MockElement[]) {
     history: { replaceState: () => undefined, state: null },
     URL,
     URLSearchParams,
+    HTMLImageElement: MockImageElement,
     document,
     getComputedStyle: (element: MockElement) => ({
       visibility: element.visible ? "visible" : "hidden",
@@ -92,6 +160,11 @@ function loadContentScript(elements: MockElement[]) {
     findStopButton: (selectors: Record<string, string>) => MockElement | null;
     collectChatGptSubmitReadyState: (selectors: Record<string, string>) => { stopButtonVisible: boolean; stopButtonLabel: string | null };
     evaluateChatGptSubmitReadyState: (state: unknown) => { satisfied: boolean; reason: string };
+    collectNewOutputImageCandidates: (
+      beforeState: { assistantCount: number; articleCount: number; imageFingerprints: Set<string> },
+      selectors: Record<string, string>
+    ) => MockImageElement[];
+    selectSingleOutputImage: (images: MockImageElement[], subject: { name: string }) => MockImageElement;
   };
 }
 
@@ -119,5 +192,74 @@ describe("ChatGPT extension content predicates", () => {
     const content = loadContentScript([stop]);
 
     expect(content.findStopButton({})).toBe(stop);
+  });
+
+  it("deduplicates repeated image elements by fingerprint", () => {
+    const first = mockImage("https://chatgpt.test/output.png", { width: 512, height: 512 });
+    const duplicate = mockImage("https://chatgpt.test/output.png", { width: 512, height: 512 });
+    const assistant = mockElement("article", { "data-message-author-role": "assistant" }, { children: [first, duplicate] });
+    const content = loadContentScript([assistant]);
+
+    const candidates = content.collectNewOutputImageCandidates(
+      { assistantCount: 0, articleCount: 0, imageFingerprints: new Set() },
+      {}
+    );
+
+    expect(candidates).toEqual([first]);
+  });
+
+  it("ignores earlier assistant images when a newer assistant response exists", () => {
+    const oldImage = mockImage("https://chatgpt.test/old.png");
+    const newImage = mockImage("https://chatgpt.test/new.png");
+    const oldAssistant = mockElement("article", { "data-message-author-role": "assistant" }, { children: [oldImage] });
+    const newAssistant = mockElement("article", { "data-message-author-role": "assistant" }, { children: [newImage] });
+    const content = loadContentScript([oldAssistant, newAssistant]);
+
+    const candidates = content.collectNewOutputImageCandidates(
+      { assistantCount: 1, articleCount: 0, imageFingerprints: new Set() },
+      {}
+    );
+
+    expect(candidates).toEqual([newImage]);
+  });
+
+  it("excludes uploaded prompt images from output candidates", () => {
+    const uploadedImage = mockImage("https://chatgpt.test/uploaded.png", { alt: "Uploaded image" });
+    const generatedImage = mockImage("https://chatgpt.test/generated.png", { alt: "Generated image" });
+    const mixedArticle = mockElement("article", {}, { children: [uploadedImage, generatedImage] });
+    const content = loadContentScript([mixedArticle]);
+
+    const candidates = content.collectNewOutputImageCandidates(
+      { assistantCount: 0, articleCount: 0, imageFingerprints: new Set() },
+      {}
+    );
+
+    expect(candidates).toEqual([generatedImage]);
+  });
+
+  it("accepts exactly one output image candidate", () => {
+    const output = mockImage("https://chatgpt.test/output.png");
+    const content = loadContentScript([]);
+
+    expect(content.selectSingleOutputImage([output], { name: "subject.png" })).toBe(output);
+  });
+
+  it("accepts one generated output when an uploaded image is also present", () => {
+    const uploadedImage = mockImage("https://chatgpt.test/uploaded.png", { alt: "Uploaded image" });
+    const generatedImage = mockImage("https://chatgpt.test/generated.png", { alt: "Generated image" });
+    const content = loadContentScript([]);
+
+    expect(content.selectSingleOutputImage([uploadedImage, generatedImage], { name: "subject.png" })).toBe(generatedImage);
+  });
+
+  it("rejects multiple distinct output image candidates", () => {
+    const content = loadContentScript([]);
+
+    expect(() =>
+      content.selectSingleOutputImage(
+        [mockImage("https://chatgpt.test/first.png"), mockImage("https://chatgpt.test/second.png")],
+        { name: "subject.png" }
+      )
+    ).toThrow("exactly one result per subject");
   });
 });
