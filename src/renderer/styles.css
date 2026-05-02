@@ -15,6 +15,24 @@
   --primary-foreground: 0 0% 100%;
   --destructive: 0 73% 48%;
   --destructive-foreground: 0 0% 100%;
+  --tone-neutral-bg: 210 40% 96.1%;
+  --tone-neutral-fg: 215 25% 26.7%;
+  --tone-neutral-border: 213 26.8% 83.9%;
+  --tone-info-bg: 204 93.8% 93.7%;
+  --tone-info-fg: 200 98% 27.6%;
+  --tone-info-border: 200.6 94.4% 86.1%;
+  --tone-success-bg: 141 84.2% 92.5%;
+  --tone-success-fg: 142.8 64.2% 24.1%;
+  --tone-success-border: 141 78.9% 85.1%;
+  --tone-warning-bg: 48 96.5% 88.8%;
+  --tone-warning-fg: 28.4 72.5% 25.7%;
+  --tone-warning-border: 48 96.6% 76.7%;
+  --tone-danger-bg: 0 93.3% 94.1%;
+  --tone-danger-fg: 0 73.7% 41.8%;
+  --tone-danger-border: 0 96.3% 89.4%;
+  --tone-lab-bg: 275.9 100% 94.7%;
+  --tone-lab-fg: 271.5 81.3% 35.7%;
+  --tone-lab-border: 269.2 97.4% 85.1%;
 }
 
 .dark {
@@ -30,6 +48,24 @@
   --primary-foreground: 222 47% 7%;
   --destructive: 0 63% 42%;
   --destructive-foreground: 0 0% 100%;
+  --tone-neutral-bg: 217.2 32.6% 17.5%;
+  --tone-neutral-fg: 214.3 31.8% 91.4%;
+  --tone-neutral-border: 215.3 25% 26.7%;
+  --tone-info-bg: 201.3 96.3% 10.6%;
+  --tone-info-fg: 198.6 94.4% 86.1%;
+  --tone-info-border: 187.9 85.7% 32.9%;
+  --tone-success-bg: 144.9 80.4% 10%;
+  --tone-success-fg: 141 78.9% 85.1%;
+  --tone-success-border: 142.1 70.6% 45.3%;
+  --tone-warning-bg: 28.4 72.5% 12.7%;
+  --tone-warning-fg: 48 96.6% 76.7%;
+  --tone-warning-border: 32.1 94.6% 43.7%;
+  --tone-danger-bg: 0 74.7% 15.5%;
+  --tone-danger-fg: 0 96.3% 89.4%;
+  --tone-danger-border: 0 72.2% 50.6%;
+  --tone-lab-bg: 273.5 86.9% 21%;
+  --tone-lab-fg: 268.6 100% 91.8%;
+  --tone-lab-border: 271.5 81.3% 55.9%;
 }
 
 * {

@@ -9,13 +9,12 @@ import {
   FlaskConical,
   FolderOpen,
   Info,
-  Moon,
   MousePointerClick,
+  Palette,
   PauseCircle,
   Play,
   RefreshCcw,
   Square,
-  Sun,
   Trash2,
   X,
   Upload
@@ -50,6 +49,17 @@ import {
 } from "@/lib/api";
 import { cn, formatDate, statusTone } from "@/lib/utils";
 import {
+  THEME_STORAGE_KEY,
+  appThemes,
+  applyThemeToRoot,
+  getThemeById,
+  resolveThemeId,
+  toneClassNames,
+  toneTextClassNames,
+  type ThemeDefinition,
+  type ThemeId
+} from "@/lib/themes";
+import {
   buildChatGptArtifactPairing,
   fileName,
   getChatGptRunInput,
@@ -64,24 +74,10 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 
-type ThemeMode = "light" | "dark";
-
-const THEME_STORAGE_KEY = "workflowAutomationTheme";
-const neutralBadgeTone =
-  "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200";
-const infoBadgeTone =
-  "border-cyan-200 bg-cyan-100 text-cyan-800 dark:border-cyan-800 dark:bg-cyan-950 dark:text-cyan-200";
-const labBadgeTone =
-  "border-violet-200 bg-violet-100 text-violet-800 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-200";
-const dangerNoticeTone =
-  "border-red-200 bg-red-50 text-red-800 dark:border-red-900/70 dark:bg-red-950/50 dark:text-red-200";
-const infoNoticeTone =
-  "border-cyan-200 bg-cyan-50 text-cyan-950 dark:border-cyan-800/70 dark:bg-cyan-950/45 dark:text-cyan-100";
-
-function getInitialThemeMode(): ThemeMode {
+function getInitialThemeId(): ThemeId {
   const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-  if (storedTheme === "light" || storedTheme === "dark") return storedTheme;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  return resolveThemeId(storedTheme, prefersDark);
 }
 
 function usesMasterPrompt(workflowId: string): boolean {
@@ -131,7 +127,8 @@ function projectDisplayName(projectDir: string | null | undefined): string {
 
 export default function App(): JSX.Element {
   const queryClient = useQueryClient();
-  const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialThemeMode);
+  const [themeId, setThemeId] = useState<ThemeId>(getInitialThemeId);
+  const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("chatgpt.extension-image-transform");
   const [workspaceView, setWorkspaceView] = useState<"runs" | "lab">("runs");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -172,14 +169,12 @@ export default function App(): JSX.Element {
     refetchInterval: selectedRunId && hasProject ? 2_000 : false
   });
 
-  const isDarkMode = themeMode === "dark";
+  const selectedTheme = useMemo(() => getThemeById(themeId), [themeId]);
 
   useEffect(() => {
-    const root = document.documentElement;
-    root.classList.toggle("dark", isDarkMode);
-    root.style.colorScheme = themeMode;
-    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
-  }, [isDarkMode, themeMode]);
+    applyThemeToRoot(selectedTheme);
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeId);
+  }, [selectedTheme, themeId]);
 
   useEffect(() => {
     if (configQuery.data && !hasProject) {
@@ -305,7 +300,7 @@ export default function App(): JSX.Element {
   const projectName = projectDisplayName(configQuery.data?.projectDir);
 
   return (
-    <main className={cn("min-h-screen bg-background text-foreground transition-colors", isDarkMode && "dark")}>
+    <main className="min-h-screen bg-background text-foreground transition-colors">
       <header className="border-b border-border bg-card">
         <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-6 py-4">
           <div>
@@ -317,10 +312,10 @@ export default function App(): JSX.Element {
           <div className="flex items-center gap-2">
             {!showLanding ? (
               <>
-            <Badge className={cn("border", neutralBadgeTone)}>
+            <Badge className={cn("border", toneClassNames.neutral)}>
               Queue: {systemQuery.data?.runner.queued ?? 0} · Running: {systemQuery.data?.runner.running ?? 0}
             </Badge>
-            <Badge className={cn("border", infoBadgeTone)}>
+            <Badge className={cn("border", toneClassNames.info)}>
               Extension: {systemQuery.data?.extension.connectedClients.length ?? 0}
             </Badge>
                 <Button type="button" variant="outline" size="sm" onClick={() => setShowProjectLanding(true)}>
@@ -333,11 +328,11 @@ export default function App(): JSX.Element {
               type="button"
               variant="outline"
               size="icon"
-              aria-label={isDarkMode ? "Use light mode" : "Use dark mode"}
-              title={isDarkMode ? "Use light mode" : "Use dark mode"}
-              onClick={() => setThemeMode(isDarkMode ? "light" : "dark")}
+              aria-label="Choose theme"
+              title={`Theme: ${selectedTheme.name}`}
+              onClick={() => setThemePickerOpen(true)}
             >
-              {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              <Palette className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -471,14 +466,14 @@ export default function App(): JSX.Element {
               ) : null}
 
               {!hasProject ? (
-                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", infoNoticeTone)}>
+                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.info)}>
                   <Info className="mt-0.5 h-4 w-4 shrink-0" />
                   Choose a project folder to create runs. Starting a run will prompt for one.
                 </div>
               ) : null}
 
               {formError ? (
-                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", dangerNoticeTone)}>
+                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.danger)}>
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                   {formError}
                 </div>
@@ -585,7 +580,104 @@ export default function App(): JSX.Element {
           onDelete={(runId) => void deleteRunMutation.mutate(runId)}
         />
       ) : null}
+      {themePickerOpen ? (
+        <ThemePickerModal
+          themes={appThemes}
+          selectedTheme={selectedTheme}
+          onSelect={(nextThemeId) => setThemeId(nextThemeId)}
+          onClose={() => setThemePickerOpen(false)}
+        />
+      ) : null}
     </main>
+  );
+}
+
+function ThemePickerModal({
+  themes,
+  selectedTheme,
+  onSelect,
+  onClose
+}: {
+  themes: ThemeDefinition[];
+  selectedTheme: ThemeDefinition;
+  onSelect(themeId: ThemeId): void;
+  onClose(): void;
+}): JSX.Element {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
+      <div className="mx-auto flex min-h-full max-w-5xl items-start justify-center">
+        <div
+          className="w-full overflow-hidden rounded-lg border border-border bg-background shadow-xl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="theme-picker-title"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+            <div className="min-w-0">
+              <h2 id="theme-picker-title" className="text-lg font-semibold">
+                Theme Palette
+              </h2>
+              <div className="truncate text-sm text-muted-foreground">Selected: {selectedTheme.name}</div>
+            </div>
+            <Button type="button" variant="ghost" size="icon" aria-label="Close theme picker" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="grid max-h-[calc(100vh-9rem)] gap-3 overflow-y-auto p-5 sm:grid-cols-2 lg:grid-cols-3">
+            {themes.map((theme) => {
+              const selected = theme.id === selectedTheme.id;
+              return (
+                <button
+                  type="button"
+                  key={theme.id}
+                  onClick={() => {
+                    onSelect(theme.id);
+                    onClose();
+                  }}
+                  className={cn(
+                    "rounded-md border bg-card p-4 text-left text-card-foreground transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                    selected ? "border-primary ring-1 ring-primary" : "border-border"
+                  )}
+                >
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">{theme.name}</div>
+                      <div className="mt-1 text-xs leading-5 text-muted-foreground">{theme.description}</div>
+                    </div>
+                    {selected ? <CheckCircle2 className={cn("h-4 w-4 shrink-0", toneTextClassNames.success)} /> : null}
+                  </div>
+                  <div className="flex gap-1.5">
+                    {theme.swatches.map((swatch) => (
+                      <span
+                        key={`${theme.id}-${swatch}`}
+                        className="h-7 flex-1 rounded border border-border"
+                        style={{ backgroundColor: swatch }}
+                        aria-hidden="true"
+                      />
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -620,7 +712,7 @@ function ProjectLanding({
           Open Project
         </Button>
         {error ? (
-          <div className={cn("flex max-w-xl gap-2 rounded-md border p-3 text-sm", dangerNoticeTone)}>
+          <div className={cn("flex max-w-xl gap-2 rounded-md border p-3 text-sm", toneClassNames.danger)}>
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             {error}
           </div>
@@ -630,7 +722,7 @@ function ProjectLanding({
       <section className="space-y-3 pb-10">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-semibold">Recent Projects</h3>
-          <Badge className={cn("border", neutralBadgeTone)}>{recentProjects.length}</Badge>
+          <Badge className={cn("border", toneClassNames.neutral)}>{recentProjects.length}</Badge>
         </div>
         {recentProjects.length > 0 ? (
           <div className="grid gap-2">
@@ -649,7 +741,7 @@ function ProjectLanding({
                   <span className="block truncate text-sm font-medium">{project.name}</span>
                   <span className="block truncate text-xs text-muted-foreground">{project.path}</span>
                 </span>
-                <Badge className={cn("shrink-0 border", project.exists ? infoBadgeTone : dangerNoticeTone)}>
+                <Badge className={cn("shrink-0 border", project.exists ? toneClassNames.info : toneClassNames.danger)}>
                   {project.exists ? "Open" : "Missing"}
                 </Badge>
               </button>
@@ -738,7 +830,7 @@ function RunDetailModal({
               </div>
             ) : null}
             {detailError ? (
-              <div className={cn("rounded-md border p-4 text-sm", dangerNoticeTone)}>
+              <div className={cn("rounded-md border p-4 text-sm", toneClassNames.danger)}>
                 Could not load full run details: {detailError}. You can still delete this run.
               </div>
             ) : null}
@@ -758,7 +850,7 @@ function RunDetailModal({
                     <div className="text-sm text-muted-foreground">{run.currentStep ?? "No step yet"}</div>
                   </div>
 
-                  {run.error ? <div className={cn("rounded-md border p-3 text-sm", dangerNoticeTone)}>{run.error}</div> : null}
+                  {run.error ? <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>{run.error}</div> : null}
                 </>
               ) : (
                 <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
@@ -817,7 +909,7 @@ function RunDetailModal({
                       <div key={event.id} className="border-l-2 border-border pl-3 text-sm">
                         <div className="flex items-center gap-2">
                           {event.type === "run.completed" ? (
-                            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                            <CheckCircle2 className={cn("h-4 w-4", toneTextClassNames.success)} />
                           ) : (
                             <Bot className="h-4 w-4 text-muted-foreground" />
                           )}
@@ -891,7 +983,7 @@ function ChatGptArtifactPairs({
                 <div className="text-sm font-medium">Subject {pair.index + 1}</div>
                 <div className="text-xs text-muted-foreground">{fileName(pair.subjectImage)}</div>
               </div>
-              <Badge className={cn("border", neutralBadgeTone)}>
+              <Badge className={cn("border", toneClassNames.neutral)}>
                 {pair.primaryOutput ? "1 result" : "Missing result"}
               </Badge>
             </div>
@@ -1211,7 +1303,7 @@ function WorkflowLabPanel({
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <CardTitle>Workflow Lab</CardTitle>
-          <Badge className={cn("border", labBadgeTone)}>{sessions.length} session{sessions.length === 1 ? "" : "s"}</Badge>
+          <Badge className={cn("border", toneClassNames.lab)}>{sessions.length} session{sessions.length === 1 ? "" : "s"}</Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1272,7 +1364,7 @@ function WorkflowLabPanel({
                 className={cn(
                   "rounded-md border px-3 py-2 text-left text-xs",
                   selectedSession?.id === session.id
-                    ? "border-primary bg-cyan-50 text-cyan-950 dark:bg-cyan-950/40 dark:text-cyan-100"
+                    ? "border-primary bg-[hsl(var(--tone-info-bg))] text-[hsl(var(--tone-info-fg))]"
                     : "border-border bg-background"
                 )}
               >
@@ -1408,12 +1500,12 @@ function WorkflowLabPanel({
         )}
 
         {labError ? (
-          <div className={cn("flex gap-2 rounded-md border p-3 text-sm", dangerNoticeTone)}>
+          <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.danger)}>
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             {labError}
           </div>
         ) : null}
-        {waitMessage ? <div className={cn("rounded-md border p-3 text-sm", infoNoticeTone)}>{waitMessage}</div> : null}
+        {waitMessage ? <div className={cn("rounded-md border p-3 text-sm", toneClassNames.info)}>{waitMessage}</div> : null}
 
         {inspection ? (
           <div className="grid grid-cols-[280px_1fr] gap-4">
@@ -1515,7 +1607,7 @@ function ChatGptTabRoutingPanel({
                   New tabs open ChatGPT externally and are matched when the extension reports the run token.
                 </p>
                 {incompatibleClients.length > 0 ? (
-                  <p className="font-medium leading-5 text-red-700 dark:text-red-300">
+                  <p className={cn("font-medium leading-5", toneTextClassNames.danger)}>
                     {incompatibleClients.length} tab{incompatibleClients.length === 1 ? "" : "s"} need the unpacked extension
                     reloaded and ChatGPT refreshed before they can run protocol {requiredProtocolVersion} workflows.
                   </p>
@@ -1541,10 +1633,10 @@ function ChatGptTabRoutingPanel({
                               className={cn(
                                 "shrink-0 border",
                                 !client.compatible
-                                  ? "border-red-200 bg-red-100 text-red-800 dark:border-red-900/70 dark:bg-red-950/50 dark:text-red-200"
+                                  ? toneClassNames.danger
                                   : client.status === "busy"
-                                    ? "border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/50 dark:text-amber-200"
-                                    : "border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-800/70 dark:bg-emerald-950/50 dark:text-emerald-200"
+                                    ? toneClassNames.warning
+                                    : toneClassNames.success
                               )}
                             >
                               {client.compatible ? client.status : "reload required"}
@@ -1556,7 +1648,7 @@ function ChatGptTabRoutingPanel({
                             required {requiredProtocolVersion}
                           </div>
                           {!client.compatible ? (
-                            <div className="text-red-700 dark:text-red-300">
+                            <div className={toneTextClassNames.danger}>
                               {client.incompatibilityReason ?? "Reload the unpacked extension and refresh this ChatGPT tab."}
                             </div>
                           ) : null}
@@ -1570,7 +1662,7 @@ function ChatGptTabRoutingPanel({
             </div>
           </div>
         </div>
-        {compatibleClients.length > 0 ? <Badge className={cn("border", neutralBadgeTone)}>{compatibleClients.length} ready</Badge> : null}
+        {compatibleClients.length > 0 ? <Badge className={cn("border", toneClassNames.neutral)}>{compatibleClients.length} ready</Badge> : null}
       </div>
 
       <div className="grid grid-cols-[1fr_auto] gap-2">
