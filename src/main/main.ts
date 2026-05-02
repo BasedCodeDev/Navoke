@@ -6,6 +6,7 @@ import { extensionBridge } from "./extension/extensionBridge";
 import { RuntimeEventBus } from "./runtime/eventBus";
 import { LocalWorkflowRunner } from "./runtime/localWorkflowRunner";
 import { createRuntimePaths } from "./runtime/paths";
+import { WorkflowLab } from "./lab/workflowLab";
 import { createWorkflowRegistry } from "./workflows";
 
 let mainWindow: BrowserWindow | null = null;
@@ -21,7 +22,8 @@ async function bootstrap(): Promise<void> {
   store = await SqliteStore.open(paths.dbPath);
 
   const runner = new LocalWorkflowRunner(workflows, store, paths, eventBus);
-  apiServer = new ApiServer({ store, runner, eventBus, workflows, paths, extensionBridge });
+  const workflowLab = new WorkflowLab(paths, extensionBridge);
+  apiServer = new ApiServer({ store, runner, eventBus, workflows, paths, extensionBridge, workflowLab });
   await apiServer.start();
   apiBaseUrl = apiServer.baseUrl;
 

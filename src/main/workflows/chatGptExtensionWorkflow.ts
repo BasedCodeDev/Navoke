@@ -12,6 +12,7 @@ const selectorsSchema = z
     fileInput: z.string().optional(),
     composer: z.string().optional(),
     submitButton: z.string().optional(),
+    stopButton: z.string().optional(),
     outputImage: z.string().optional()
   })
   .default({});
@@ -66,7 +67,7 @@ export const chatGptExtensionImageTransformWorkflow: WorkflowDefinition<
         name: "selectors",
         label: "Selector config",
         type: "json",
-        help: "Optional CSS selectors for file input, composer, submit button, and output image."
+        help: "Optional CSS selectors for file input, composer, submit button, stop button, and output image."
       }
     ]
   },

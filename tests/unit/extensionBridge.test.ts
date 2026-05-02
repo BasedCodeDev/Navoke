@@ -154,4 +154,32 @@ describe("ExtensionBridge", () => {
     expect(bridge.status().pending).toBe(1);
     expect(bridge.nextTask("new-tab")?.id).toBe(task.id);
   });
+
+  it("queues Workflow Lab commands for a selected compatible extension tab", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      id: "lab-tab",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.4.0"
+    });
+
+    const wait = bridge.executeLabCommand({
+      clientId: "lab-tab",
+      command: { kind: "inspect" },
+      timeoutMs: 1_000
+    });
+
+    expect(bridge.status().labPending).toBe(1);
+    const command = bridge.nextLabCommand("lab-tab");
+    expect(command).toMatchObject({
+      kind: "workflow-lab",
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      command: { kind: "inspect" }
+    });
+    expect(bridge.status().labRunning).toBe(1);
+
+    bridge.completeLabCommand(command!.id, { url: "https://chatgpt.com/", interactiveElements: [] });
+
+    await expect(wait).resolves.toMatchObject({ url: "https://chatgpt.com/" });
+  });
 });

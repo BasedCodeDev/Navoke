@@ -6,8 +6,9 @@ import { inferMimeType } from "../utils/files";
 export type ExtensionTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ExtensionImageGroup = "reference" | "subject";
 
-export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 3;
+export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 4;
 const CLIENT_TTL_MS = 30_000;
+const LAB_COMMAND_LEASE_MS = 60_000;
 
 export type ChatGptExtensionTaskTarget =
   | { mode: "any" }
@@ -77,6 +78,19 @@ export interface ExtensionTaskEvent {
   createdAt: string;
 }
 
+export type ExtensionLabCommandInput =
+  | { kind: "inspect" }
+  | { kind: "action"; action: unknown }
+  | { kind: "wait"; condition: unknown };
+
+export interface ExtensionLabCommandPayload {
+  id: string;
+  kind: "workflow-lab";
+  protocolVersion: number;
+  command: ExtensionLabCommandInput;
+  createdAt: string;
+}
+
 interface ExtensionTask {
   id: string;
   kind: "chatgpt-image-transform";
@@ -105,9 +119,29 @@ interface Waiter {
   reject(error: Error): void;
 }
 
+type ExtensionLabCommandStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+interface ExtensionLabCommand {
+  id: string;
+  clientId: string;
+  command: ExtensionLabCommandInput;
+  status: ExtensionLabCommandStatus;
+  result?: unknown;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface LabWaiter {
+  resolve(result: unknown): void;
+  reject(error: Error): void;
+}
+
 export class ExtensionBridge {
   private readonly tasks = new Map<string, ExtensionTask>();
   private readonly waiters = new Map<string, Waiter>();
+  private readonly labCommands = new Map<string, ExtensionLabCommand>();
+  private readonly labWaiters = new Map<string, LabWaiter>();
   private readonly clients = new Map<string, ExtensionClientStatus>();
   private readonly events = new EventEmitter();
 
@@ -155,6 +189,88 @@ export class ExtensionBridge {
       }
     }
     return null;
+  }
+
+  executeLabCommand(input: {
+    clientId: string;
+    command: ExtensionLabCommandInput;
+    timeoutMs: number;
+  }): Promise<unknown> {
+    const client = this.assertCompatibleClient(input.clientId);
+    const now = new Date().toISOString();
+    const command: ExtensionLabCommand = {
+      id: randomUUID(),
+      clientId: client.id,
+      command: input.command,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now
+    };
+    this.labCommands.set(command.id, command);
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const current = this.labCommands.get(command.id);
+        if (current && ["pending", "running"].includes(current.status)) {
+          current.status = "cancelled";
+          current.updatedAt = new Date().toISOString();
+        }
+        this.labWaiters.delete(command.id);
+        reject(new Error("Timed out waiting for the Chrome extension Workflow Lab command."));
+      }, input.timeoutMs);
+
+      this.labWaiters.set(command.id, {
+        resolve: (result) => {
+          clearTimeout(timeout);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        }
+      });
+    });
+  }
+
+  nextLabCommand(clientId: string): ExtensionLabCommandPayload | null {
+    const client = this.assertCompatibleClient(clientId);
+    const now = Date.now();
+    for (const command of this.labCommands.values()) {
+      if (command.status === "running" && now - Date.parse(command.updatedAt) > LAB_COMMAND_LEASE_MS) {
+        command.status = "pending";
+        command.updatedAt = new Date().toISOString();
+      }
+      if (command.status === "pending" && command.clientId === client.id) {
+        command.status = "running";
+        command.updatedAt = new Date().toISOString();
+        return {
+          id: command.id,
+          kind: "workflow-lab",
+          protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+          command: command.command,
+          createdAt: command.createdAt
+        };
+      }
+    }
+    return null;
+  }
+
+  completeLabCommand(commandId: string, result: unknown): void {
+    const command = this.getLabCommand(commandId);
+    command.status = "completed";
+    command.result = result;
+    command.updatedAt = new Date().toISOString();
+    this.labWaiters.get(commandId)?.resolve(result);
+    this.labWaiters.delete(commandId);
+  }
+
+  failLabCommand(commandId: string, message: string): void {
+    const command = this.getLabCommand(commandId);
+    command.status = "failed";
+    command.error = message;
+    command.updatedAt = new Date().toISOString();
+    this.labWaiters.get(commandId)?.reject(new Error(message));
+    this.labWaiters.delete(commandId);
   }
 
   getTaskImagePath(taskId: string, group: ExtensionImageGroup, imageIndex: number): string {
@@ -205,6 +321,8 @@ export class ExtensionBridge {
     connectedClients: ExtensionClientStatus[];
     pending: number;
     running: number;
+    labPending: number;
+    labRunning: number;
     requiredProtocolVersion: number;
   } {
     const counts = [...this.tasks.values()].reduce(
@@ -215,10 +333,19 @@ export class ExtensionBridge {
       },
       { pending: 0, running: 0 }
     );
+    const labCounts = [...this.labCommands.values()].reduce(
+      (acc, command) => {
+        if (command.status === "pending") acc.labPending += 1;
+        if (command.status === "running") acc.labRunning += 1;
+        return acc;
+      },
+      { labPending: 0, labRunning: 0 }
+    );
     return {
       connectedClients: this.listClients(),
       requiredProtocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      ...counts
+      ...counts,
+      ...labCounts
     };
   }
 
@@ -307,6 +434,12 @@ export class ExtensionBridge {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Extension task not found: ${taskId}`);
     return task;
+  }
+
+  private getLabCommand(commandId: string): ExtensionLabCommand {
+    const command = this.labCommands.get(commandId);
+    if (!command) throw new Error(`Extension Workflow Lab command not found: ${commandId}`);
+    return command;
   }
 
   private assertCompatibleClient(clientId: string): ExtensionClientStatus {

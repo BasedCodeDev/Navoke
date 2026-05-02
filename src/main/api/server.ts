@@ -8,6 +8,8 @@ import type { SqliteStore } from "../db/sqliteStore";
 import type { LocalWorkflowRunner } from "../runtime/localWorkflowRunner";
 import type { RuntimeEventBus } from "../runtime/eventBus";
 import type { RuntimePaths, WorkflowDefinition } from "../runtime/types";
+import type { WorkflowLab, WorkflowLabAction } from "../lab/workflowLab";
+import type { LabWaitCondition } from "../lab/waitConditions";
 
 interface ApiServerOptions {
   store: SqliteStore;
@@ -16,6 +18,7 @@ interface ApiServerOptions {
   workflows: Map<string, WorkflowDefinition>;
   paths: RuntimePaths;
   extensionBridge: ExtensionBridge;
+  workflowLab: WorkflowLab;
 }
 
 export class ApiServer {
@@ -39,6 +42,52 @@ export class ApiServer {
         runner: this.options.runner.stats(),
         extension: this.options.extensionBridge.status()
       });
+    });
+
+    app.get("/api/lab/sessions", (_req, res) => {
+      res.json(this.options.workflowLab.listSessions());
+    });
+
+    app.post("/api/lab/sessions", (req, res, next) => {
+      void this.options.workflowLab
+        .createSession({
+          mode: req.body?.mode,
+          targetUrl: req.body?.targetUrl,
+          profileName: req.body?.profileName,
+          clientId: req.body?.clientId
+        })
+        .then((session) => res.status(201).json(session))
+        .catch(next);
+    });
+
+    app.get("/api/lab/sessions/:id", (req, res, next) => {
+      try {
+        res.json(this.options.workflowLab.getSession(req.params.id));
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.delete("/api/lab/sessions/:id", (req, res, next) => {
+      void this.options.workflowLab.closeSession(req.params.id).then((session) => res.json(session)).catch(next);
+    });
+
+    app.post("/api/lab/sessions/:id/inspect", (req, res, next) => {
+      void this.options.workflowLab.inspect(req.params.id).then((result) => res.json(result)).catch(next);
+    });
+
+    app.post("/api/lab/sessions/:id/actions", (req, res, next) => {
+      void this.options.workflowLab
+        .runAction(req.params.id, req.body?.action as WorkflowLabAction)
+        .then((result) => res.json(result))
+        .catch(next);
+    });
+
+    app.post("/api/lab/sessions/:id/wait", (req, res, next) => {
+      void this.options.workflowLab
+        .waitFor(req.params.id, req.body?.condition as LabWaitCondition)
+        .then((result) => res.json(result))
+        .catch(next);
     });
 
     app.get("/api/workflows", (_req, res) => {
@@ -144,6 +193,41 @@ export class ApiServer {
 
     app.get("/api/extension/status", (_req, res) => {
       res.json(this.options.extensionBridge.status());
+    });
+
+    app.get("/api/extension/lab/commands/next", (req, res, next) => {
+      try {
+        const clientId = String(req.query.clientId ?? "");
+        const command = this.options.extensionBridge.nextLabCommand(clientId);
+        if (!command) {
+          res.status(204).send();
+          return;
+        }
+        res.json(command);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/extension/lab/commands/:id/complete", (req, res, next) => {
+      try {
+        this.options.extensionBridge.completeLabCommand(req.params.id, req.body?.result);
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/extension/lab/commands/:id/fail", (req, res, next) => {
+      try {
+        this.options.extensionBridge.failLabCommand(
+          req.params.id,
+          String(req.body?.message ?? "Extension Workflow Lab command failed")
+        );
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
     });
 
     app.get("/api/extension/tasks/next", (req, res, next) => {

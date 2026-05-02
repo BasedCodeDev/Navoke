@@ -70,6 +70,8 @@ export interface SystemInfo {
   extension: {
     pending: number;
     running: number;
+    labPending: number;
+    labRunning: number;
     requiredProtocolVersion: number;
     connectedClients: Array<{
       id: string;
@@ -84,6 +86,101 @@ export interface SystemInfo {
       lastSeenAt: string;
     }>;
   };
+}
+
+export type WorkflowLabSessionMode = "playwright" | "extension";
+
+export interface LabSelectorCandidate {
+  selector: string;
+  engine: "css" | "text" | "role";
+  source: string;
+  confidence: number;
+}
+
+export interface LabInteractiveElement {
+  index: number;
+  tagName: string;
+  label: string;
+  text: string;
+  role?: string;
+  ariaLabel?: string;
+  type?: string;
+  disabled: boolean;
+  visible: boolean;
+  attributes: Record<string, string>;
+  selectors: LabSelectorCandidate[];
+}
+
+export interface LabInspectionModel {
+  url: string;
+  title: string;
+  capturedAt: string;
+  viewport: { width: number; height: number };
+  bodyTextSample: string;
+  bodyTextLength: number;
+  fingerprint: string;
+  imageFingerprints: string[];
+  interactiveElements: LabInteractiveElement[];
+}
+
+export interface WorkflowLabArtifactRef {
+  name: string;
+  path: string;
+  mimeType: string;
+  size: number;
+}
+
+export interface WorkflowLabActionLogEntry {
+  id: string;
+  type: string;
+  message: string;
+  data?: unknown;
+  createdAt: string;
+}
+
+export interface WorkflowLabSessionSummary {
+  id: string;
+  mode: WorkflowLabSessionMode;
+  targetUrl: string;
+  profileName?: string;
+  clientId?: string;
+  status: "ready" | "closed";
+  title?: string;
+  url?: string;
+  createdAt: string;
+  updatedAt: string;
+  artifacts: WorkflowLabArtifactRef[];
+  actionLog: WorkflowLabActionLogEntry[];
+}
+
+export type WorkflowLabAction =
+  | { kind: "click"; selector: string }
+  | { kind: "fill"; selector: string; value: string }
+  | { kind: "submit"; selector: string }
+  | { kind: "attach-file"; selector: string; filePaths: string[] };
+
+export type LabWaitCondition =
+  | { kind: "element"; selector: string; state: "visible" | "hidden" | "enabled" | "disabled"; timeoutMs?: number }
+  | { kind: "text"; text: string; state: "present" | "absent"; timeoutMs?: number }
+  | { kind: "image-count"; selector?: string; minCount: number; previousFingerprints?: string[]; timeoutMs?: number }
+  | { kind: "stop-button"; selector?: string; state: "visible" | "hidden"; timeoutMs?: number }
+  | { kind: "network-idle"; timeoutMs?: number };
+
+export interface WorkflowLabInspectionResult {
+  session: WorkflowLabSessionSummary;
+  inspection: LabInspectionModel;
+  screenshotBase64?: string;
+  screenshotMimeType?: string;
+  artifacts: WorkflowLabArtifactRef[];
+}
+
+export interface WorkflowLabWaitResult {
+  session: WorkflowLabSessionSummary;
+  condition: LabWaitCondition;
+  satisfied: boolean;
+  reason: string;
+  elapsedMs: number;
+  diagnostics: Record<string, unknown>;
 }
 
 let configPromise: Promise<{ apiBaseUrl: string; dataDir: string; platform: string }> | null = null;
@@ -123,6 +220,44 @@ export async function getRun(id: string): Promise<RunDetail> {
 
 export async function getSystemInfo(): Promise<SystemInfo> {
   return apiFetch("/api/system");
+}
+
+export async function listLabSessions(): Promise<WorkflowLabSessionSummary[]> {
+  return apiFetch("/api/lab/sessions");
+}
+
+export async function createLabSession(input: {
+  mode: WorkflowLabSessionMode;
+  targetUrl?: string;
+  profileName?: string;
+  clientId?: string;
+}): Promise<WorkflowLabSessionSummary> {
+  return apiFetch("/api/lab/sessions", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function closeLabSession(id: string): Promise<WorkflowLabSessionSummary> {
+  return apiFetch(`/api/lab/sessions/${id}`, { method: "DELETE" });
+}
+
+export async function inspectLabSession(id: string): Promise<WorkflowLabInspectionResult> {
+  return apiFetch(`/api/lab/sessions/${id}/inspect`, { method: "POST", body: "{}" });
+}
+
+export async function runLabAction(input: { sessionId: string; action: WorkflowLabAction }): Promise<{ session: WorkflowLabSessionSummary }> {
+  return apiFetch(`/api/lab/sessions/${input.sessionId}/actions`, {
+    method: "POST",
+    body: JSON.stringify({ action: input.action })
+  });
+}
+
+export async function waitForLabCondition(input: {
+  sessionId: string;
+  condition: LabWaitCondition;
+}): Promise<WorkflowLabWaitResult> {
+  return apiFetch(`/api/lab/sessions/${input.sessionId}/wait`, {
+    method: "POST",
+    body: JSON.stringify({ condition: input.condition })
+  });
 }
 
 export async function createRun(input: { workflowId: string; name?: string; input: unknown }): Promise<RunRecord> {

@@ -3,29 +3,41 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Bot,
+  Camera,
   CheckCircle2,
+  FlaskConical,
   FolderOpen,
   Info,
+  MousePointerClick,
   PauseCircle,
   Play,
   RefreshCcw,
   Square,
   Trash2,
+  X,
   Upload
 } from "lucide-react";
 import {
   cancelRun,
+  closeLabSession,
+  createLabSession,
   createRun,
   deleteRun,
   getConfig,
   getRun,
   getSystemInfo,
+  inspectLabSession,
+  listLabSessions,
   listRuns,
   listWorkflows,
   resumeRun,
+  runLabAction,
   subscribeRuntimeEvents,
+  waitForLabCondition,
+  type LabWaitCondition,
   type RunRecord,
-  type SystemInfo
+  type SystemInfo,
+  type WorkflowLabInspectionResult
 } from "@/lib/api";
 import { cn, formatDate, statusTone } from "@/lib/utils";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
@@ -341,7 +353,7 @@ export default function App(): JSX.Element {
                     className="font-mono text-xs"
                     value={selectorsJson}
                     onChange={(event) => setSelectorsJson(event.target.value)}
-                    placeholder='{"fileInput":"input[type=file]","composer":"#prompt-textarea","submitButton":"button[data-testid=send-button]"}'
+                    placeholder='{"fileInput":"input[type=file]","composer":"#prompt-textarea","submitButton":"button[data-testid=send-button]","stopButton":"button[data-testid=stop-button]"}'
                   />
                 </div>
               ) : null}
@@ -376,6 +388,8 @@ export default function App(): JSX.Element {
         </section>
 
         <section className="space-y-5">
+          <WorkflowLabPanel extensionClients={extensionClients} />
+
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Runs</h2>
             <Button variant="outline" size="sm" onClick={() => void queryClient.invalidateQueries()}>
@@ -467,6 +481,411 @@ export default function App(): JSX.Element {
         </aside>
       </div>
     </main>
+  );
+}
+
+function WorkflowLabPanel({
+  extensionClients
+}: {
+  extensionClients: SystemInfo["extension"]["connectedClients"];
+}): JSX.Element {
+  const queryClient = useQueryClient();
+  const [mode, setMode] = useState<"playwright" | "extension">("extension");
+  const [targetUrl, setTargetUrl] = useState("https://chatgpt.com/");
+  const [profileName, setProfileName] = useState("lab");
+  const [clientId, setClientId] = useState("");
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [inspection, setInspection] = useState<WorkflowLabInspectionResult | null>(null);
+  const [selector, setSelector] = useState("");
+  const [actionKind, setActionKind] = useState<"click" | "fill" | "submit">("click");
+  const [fillValue, setFillValue] = useState("");
+  const [waitKind, setWaitKind] = useState<"element" | "text" | "image-count" | "stop-button" | "network-idle">("element");
+  const [waitState, setWaitState] = useState("visible");
+  const [waitText, setWaitText] = useState("");
+  const [waitMinImages, setWaitMinImages] = useState(1);
+  const [labError, setLabError] = useState<string | null>(null);
+  const [waitMessage, setWaitMessage] = useState<string | null>(null);
+
+  const compatibleClients = extensionClients.filter((client) => client.compatible);
+  const sessionsQuery = useQuery({ queryKey: ["labSessions"], queryFn: listLabSessions, refetchInterval: 5_000 });
+  const sessions = sessionsQuery.data ?? [];
+  const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? sessions[0] ?? null;
+
+  useEffect(() => {
+    if (selectedSessionId || !sessions[0]) return;
+    setSelectedSessionId(sessions[0].id);
+  }, [selectedSessionId, sessions]);
+
+  useEffect(() => {
+    if (clientId && compatibleClients.some((client) => client.id === clientId)) return;
+    setClientId(compatibleClients[0]?.id ?? "");
+  }, [clientId, compatibleClients]);
+
+  const createSessionMutation = useMutation({
+    mutationFn: () =>
+      createLabSession({
+        mode,
+        targetUrl: targetUrl.trim(),
+        profileName,
+        clientId: mode === "extension" ? clientId : undefined
+      }),
+    onSuccess: (session) => {
+      setLabError(null);
+      setSelectedSessionId(session.id);
+      setInspection(null);
+      void queryClient.invalidateQueries({ queryKey: ["labSessions"] });
+    },
+    onError: (error) => setLabError(error instanceof Error ? error.message : String(error))
+  });
+
+  const inspectMutation = useMutation({
+    mutationFn: inspectLabSession,
+    onSuccess: (result) => {
+      setLabError(null);
+      setInspection(result);
+      setSelectedSessionId(result.session.id);
+      void queryClient.invalidateQueries({ queryKey: ["labSessions"] });
+    },
+    onError: (error) => setLabError(error instanceof Error ? error.message : String(error))
+  });
+
+  const actionMutation = useMutation({
+    mutationFn: runLabAction,
+    onSuccess: (result) => {
+      setLabError(null);
+      void queryClient.invalidateQueries({ queryKey: ["labSessions"] });
+      void inspectMutation.mutate(result.session.id);
+    },
+    onError: (error) => setLabError(error instanceof Error ? error.message : String(error))
+  });
+
+  const waitMutation = useMutation({
+    mutationFn: waitForLabCondition,
+    onSuccess: (result) => {
+      setLabError(null);
+      setWaitMessage(result.reason);
+      void queryClient.invalidateQueries({ queryKey: ["labSessions"] });
+      if (result.satisfied) void inspectMutation.mutate(result.session.id);
+    },
+    onError: (error) => setLabError(error instanceof Error ? error.message : String(error))
+  });
+
+  const closeMutation = useMutation({
+    mutationFn: closeLabSession,
+    onSuccess: (session) => {
+      setLabError(null);
+      if (selectedSessionId === session.id) {
+        setSelectedSessionId(null);
+        setInspection(null);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["labSessions"] });
+    },
+    onError: (error) => setLabError(error instanceof Error ? error.message : String(error))
+  });
+
+  function buildAction() {
+    const trimmedSelector = selector.trim();
+    if (!trimmedSelector) throw new Error("Choose a selector for the action probe.");
+    if (actionKind === "fill") return { kind: "fill" as const, selector: trimmedSelector, value: fillValue };
+    if (actionKind === "submit") return { kind: "submit" as const, selector: trimmedSelector };
+    return { kind: "click" as const, selector: trimmedSelector };
+  }
+
+  function buildWaitCondition(): LabWaitCondition {
+    const trimmedSelector = selector.trim();
+    if (waitKind === "network-idle") return { kind: "network-idle", timeoutMs: 15_000 };
+    if (waitKind === "text") return { kind: "text", text: waitText, state: waitState === "absent" ? "absent" : "present", timeoutMs: 30_000 };
+    if (waitKind === "image-count") {
+      return {
+        kind: "image-count",
+        selector: trimmedSelector || undefined,
+        minCount: waitMinImages,
+        previousFingerprints: inspection?.inspection.imageFingerprints ?? [],
+        timeoutMs: 45_000
+      };
+    }
+    if (waitKind === "stop-button") {
+      return {
+        kind: "stop-button",
+        selector: trimmedSelector || undefined,
+        state: waitState === "hidden" ? "hidden" : "visible",
+        timeoutMs: 45_000
+      };
+    }
+    if (!trimmedSelector) throw new Error("Choose a selector for the element wait.");
+    return {
+      kind: "element",
+      selector: trimmedSelector,
+      state: ["visible", "hidden", "enabled", "disabled"].includes(waitState)
+        ? (waitState as "visible" | "hidden" | "enabled" | "disabled")
+        : "visible",
+      timeoutMs: 30_000
+    };
+  }
+
+  function runSelectedAction(): void {
+    try {
+      if (!selectedSession) throw new Error("Start or select a Workflow Lab session first.");
+      actionMutation.mutate({ sessionId: selectedSession.id, action: buildAction() });
+    } catch (error) {
+      setLabError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function runSelectedWait(): void {
+    try {
+      if (!selectedSession) throw new Error("Start or select a Workflow Lab session first.");
+      setWaitMessage(null);
+      waitMutation.mutate({ sessionId: selectedSession.id, condition: buildWaitCondition() });
+    } catch (error) {
+      setLabError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle>Workflow Lab</CardTitle>
+          <Badge className="border bg-violet-100 text-violet-800">{sessions.length} session{sessions.length === 1 ? "" : "s"}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-[150px_1fr_120px_auto] gap-3">
+          <div className="space-y-2">
+            <Label>Bridge</Label>
+            <select
+              value={mode}
+              onChange={(event) => setMode(event.target.value as "playwright" | "extension")}
+              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+            >
+              <option value="extension">Extension tab</option>
+              <option value="playwright">Playwright</option>
+            </select>
+          </div>
+          <div className="space-y-2">
+            <Label>{mode === "extension" ? "Connected tab" : "Target URL"}</Label>
+            {mode === "extension" ? (
+              <select
+                value={clientId}
+                onChange={(event) => setClientId(event.target.value)}
+                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+              >
+                {compatibleClients.length === 0 ? <option value="">No compatible tabs</option> : null}
+                {compatibleClients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {chatGptTabOptionLabel(client)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Input value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://example.com" />
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label>Profile</Label>
+            <Input value={profileName} onChange={(event) => setProfileName(event.target.value)} disabled={mode === "extension"} />
+          </div>
+          <div className="flex items-end">
+            <Button
+              type="button"
+              onClick={() => createSessionMutation.mutate()}
+              disabled={createSessionMutation.isPending || (mode === "extension" && !clientId)}
+            >
+              <FlaskConical className="h-4 w-4" />
+              Start
+            </Button>
+          </div>
+        </div>
+
+        {sessions.length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {sessions.map((session) => (
+              <button
+                type="button"
+                key={session.id}
+                onClick={() => setSelectedSessionId(session.id)}
+                className={cn(
+                  "rounded-md border px-3 py-2 text-left text-xs",
+                  selectedSession?.id === session.id ? "border-primary bg-cyan-50 text-cyan-950" : "border-border bg-background"
+                )}
+              >
+                <div className="font-medium">{session.title || session.mode}</div>
+                <div className="max-w-56 truncate text-muted-foreground">{session.url || session.targetUrl}</div>
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {selectedSession ? (
+          <div className="rounded-md border border-border bg-background p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{selectedSession.title || "Workflow Lab session"}</div>
+                <div className="truncate text-xs text-muted-foreground">{selectedSession.url || selectedSession.targetUrl}</div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => inspectMutation.mutate(selectedSession.id)}
+                  disabled={inspectMutation.isPending}
+                >
+                  <Camera className="h-4 w-4" />
+                  Inspect
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => closeMutation.mutate(selectedSession.id)}
+                  disabled={closeMutation.isPending}
+                >
+                  <X className="h-4 w-4" />
+                  Close
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-[1fr_190px] gap-3">
+              <div className="space-y-2">
+                <Label>Probe selector</Label>
+                <Input value={selector} onChange={(event) => setSelector(event.target.value)} placeholder="button[data-testid='send-button']" />
+              </div>
+              <div className="space-y-2">
+                <Label>Action</Label>
+                <select
+                  value={actionKind}
+                  onChange={(event) => setActionKind(event.target.value as "click" | "fill" | "submit")}
+                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                >
+                  <option value="click">Click</option>
+                  <option value="fill">Fill</option>
+                  <option value="submit">Submit</option>
+                </select>
+              </div>
+            </div>
+            {actionKind === "fill" ? (
+              <div className="mt-3 space-y-2">
+                <Label>Fill value</Label>
+                <Textarea value={fillValue} onChange={(event) => setFillValue(event.target.value)} />
+              </div>
+            ) : null}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={runSelectedAction} disabled={actionMutation.isPending}>
+                <MousePointerClick className="h-4 w-4" />
+                Run probe
+              </Button>
+              <select
+                value={waitKind}
+                onChange={(event) => setWaitKind(event.target.value as typeof waitKind)}
+                className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+              >
+                <option value="element">Element state</option>
+                <option value="text">Text state</option>
+                <option value="image-count">New images</option>
+                <option value="stop-button">Stop button</option>
+                <option value="network-idle">Network idle</option>
+              </select>
+              {waitKind === "image-count" ? (
+                <Input
+                  className="h-9 w-24"
+                  type="number"
+                  min={1}
+                  value={waitMinImages}
+                  onChange={(event) => setWaitMinImages(Number(event.target.value) || 1)}
+                />
+              ) : waitKind === "text" ? (
+                <Input className="h-9 w-60" value={waitText} onChange={(event) => setWaitText(event.target.value)} placeholder="Text to wait for" />
+              ) : waitKind !== "network-idle" ? (
+                <select
+                  value={waitState}
+                  onChange={(event) => setWaitState(event.target.value)}
+                  className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+                >
+                  {(waitKind === "element" ? ["visible", "hidden", "enabled", "disabled"] : ["visible", "hidden"]).map((state) => (
+                    <option key={state} value={state}>
+                      {state}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <Button type="button" variant="outline" size="sm" onClick={runSelectedWait} disabled={waitMutation.isPending}>
+                Wait
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">Start a lab session to inspect and probe a page.</div>
+        )}
+
+        {labError ? (
+          <div className="flex gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            {labError}
+          </div>
+        ) : null}
+        {waitMessage ? <div className="rounded-md border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-950">{waitMessage}</div> : null}
+
+        {inspection ? (
+          <div className="grid grid-cols-[280px_1fr] gap-4">
+            <div className="space-y-2">
+              {inspection.screenshotBase64 ? (
+                <img
+                  src={`data:${inspection.screenshotMimeType ?? "image/png"};base64,${inspection.screenshotBase64}`}
+                  alt="Workflow Lab screenshot"
+                  className="max-h-64 w-full rounded-md border border-border object-contain"
+                />
+              ) : (
+                <div className="flex h-40 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">
+                  Extension DOM capture
+                </div>
+              )}
+              <div className="rounded-md border border-border p-2 text-xs text-muted-foreground">
+                <div>Fingerprint: {inspection.inspection.fingerprint}</div>
+                <div>
+                  Elements: {inspection.inspection.interactiveElements.length}; images: {inspection.inspection.imageFingerprints.length}
+                </div>
+                <div className="truncate">Artifact: {inspection.artifacts[0]?.path}</div>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="max-h-40 overflow-auto rounded-md border border-border p-3 text-xs leading-5 text-muted-foreground">
+                {inspection.inspection.bodyTextSample || "No visible body text captured."}
+              </div>
+              <div className="max-h-64 space-y-2 overflow-auto">
+                {inspection.inspection.interactiveElements.slice(0, 12).map((element) => (
+                  <button
+                    type="button"
+                    key={`${element.index}-${element.label}`}
+                    onClick={() => setSelector(element.selectors[0]?.selector ?? "")}
+                    className="w-full rounded-md border border-border bg-background p-2 text-left text-xs hover:border-primary"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">{element.label}</span>
+                      <span className="text-muted-foreground">{element.tagName}</span>
+                    </div>
+                    <div className="mt-1 truncate text-muted-foreground">{element.selectors[0]?.selector ?? "No selector candidate"}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {selectedSession?.actionLog.length ? (
+          <div className="max-h-28 space-y-2 overflow-auto border-t border-border pt-3">
+            {selectedSession.actionLog.slice(0, 6).map((entry) => (
+              <div key={entry.id} className="text-xs">
+                <span className="font-medium">{entry.message}</span>
+                <span className="text-muted-foreground"> | {formatDate(entry.createdAt)} | {entry.type}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 

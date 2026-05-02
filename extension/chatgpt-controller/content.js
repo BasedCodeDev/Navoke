@@ -1,5 +1,5 @@
 const DEFAULT_API_BASE = "http://127.0.0.1:39201";
-const CHATGPT_EXTENSION_PROTOCOL_VERSION = 3;
+const CHATGPT_EXTENSION_PROTOCOL_VERSION = 4;
 const EXTENSION_VERSION = chrome.runtime?.getManifest?.().version || "unknown";
 const CLIENT_ID_STORAGE_KEY = "workflowAutomationClientId";
 const ROUTING_TOKEN_STORAGE_KEY = "workflowAutomationRoutingToken";
@@ -162,6 +162,18 @@ function findSubmitButton(selectors) {
   ]);
 }
 
+function findStopButton(selectors) {
+  const configured = findElement(selectors.stopButton, []);
+  if (configured && isElementVisible(configured)) return configured;
+  const buttons = Array.from(document.querySelectorAll("button"));
+  return (
+    buttons.find((button) => {
+      const label = `${button.getAttribute("aria-label") || ""} ${button.getAttribute("title") || ""} ${button.textContent || ""}`;
+      return /stop|cancel/i.test(label) && isElementVisible(button);
+    }) || null
+  );
+}
+
 function findFileInput(selectors) {
   return findElement(selectors.fileInput, ["input[type='file']"]);
 }
@@ -169,6 +181,13 @@ function findFileInput(selectors) {
 function dispatchInputEvents(element) {
   element.dispatchEvent(new Event("input", { bubbles: true }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function isElementVisible(element) {
+  if (!element) return false;
+  const rect = element.getBoundingClientRect();
+  const style = getComputedStyle(element);
+  return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
 }
 
 function setComposerText(composer, text) {
@@ -333,27 +352,67 @@ async function waitForAnyResponse(task, beforeState, selectors) {
   throw new Error("Timed out waiting for ChatGPT to respond to the setup prompt.");
 }
 
-async function waitForNewOutputImages(task, beforeFingerprints, selectors, subject) {
+function hasResponseChanged(beforeState, state) {
+  const hasNewImage = [...state.imageFingerprints].some((fingerprint) => !beforeState.imageFingerprints.has(fingerprint));
+  const hasAssistantChange =
+    state.assistantCount > beforeState.assistantCount ||
+    (state.assistantText.length > 0 && state.assistantText !== beforeState.assistantText);
+  const hasArticleChange = state.articleCount > beforeState.articleCount;
+  return { hasNewImage, hasAssistantChange, hasArticleChange };
+}
+
+async function waitForGenerationStarted(task, beforeState, selectors, subject) {
+  const started = Date.now();
+  const timeoutMs = 60 * 1000;
+
+  while (Date.now() - started < timeoutMs) {
+    assertNotHumanVerification();
+    if (findStopButton(selectors)) {
+      return { reason: "stop-button-visible" };
+    }
+
+    const state = collectResponseState(selectors);
+    const changed = hasResponseChanged(beforeState, state);
+    if (changed.hasNewImage) return { reason: "new-image-detected" };
+    if (changed.hasAssistantChange) return { reason: "assistant-response-changed" };
+    if (changed.hasArticleChange && Date.now() - started > 1500) return { reason: "article-count-changed" };
+
+    const submit = findSubmitButton(selectors);
+    if (Date.now() - started > 1500 && submit && !isSubmitEnabled(submit)) {
+      return { reason: "submit-button-disabled" };
+    }
+
+    await delay(300);
+  }
+
+  throw new Error(`Timed out waiting for ChatGPT generation to start for ${subject.name}.`);
+}
+
+async function waitForCompletedOutputImages(task, beforeState, selectors, subject) {
   const started = Date.now();
   const timeoutMs = 45 * 60 * 1000;
   let lastCount = 0;
+  let lastFingerprintKey = "";
   let lastChangeAt = Date.now();
 
   while (Date.now() - started < timeoutMs) {
     assertNotHumanVerification();
-    const newImages = collectImages(selectors.outputImage).filter((image) => !beforeFingerprints.has(imageFingerprint(image)));
+    const stopVisible = Boolean(findStopButton(selectors));
+    const newImages = collectImages(selectors.outputImage).filter((image) => !beforeState.imageFingerprints.has(imageFingerprint(image)));
 
     if (newImages.length > 0) {
-      if (newImages.length !== lastCount) {
+      const fingerprintKey = newImages.map(imageFingerprint).sort().join("\n");
+      if (newImages.length !== lastCount || fingerprintKey !== lastFingerprintKey) {
         lastCount = newImages.length;
+        lastFingerprintKey = fingerprintKey;
         lastChangeAt = Date.now();
       }
-      if (Date.now() - lastChangeAt > 3_000) {
+      if (!stopVisible && Date.now() - lastChangeAt > 3_000) {
         return newImages;
       }
     }
 
-    await delay(1500);
+    await delay(stopVisible ? 750 : 1250);
   }
   throw new Error(`Timed out waiting for a new ChatGPT output image for ${subject.name}.`);
 }
@@ -394,6 +453,265 @@ async function imageToOutput(image) {
     if (!blob) throw error;
     return { mimeType: "image/png", base64: await blobToBase64(blob) };
   }
+}
+
+function collectWorkflowLabPageState() {
+  const maxNodes = 900;
+  let nodeCount = 0;
+
+  function usefulAttributes(element) {
+    const attributes = {};
+    for (const attribute of Array.from(element.attributes || [])) {
+      if (
+        attribute.name === "id" ||
+        attribute.name === "class" ||
+        attribute.name === "role" ||
+        attribute.name === "name" ||
+        attribute.name === "type" ||
+        attribute.name === "placeholder" ||
+        attribute.name === "href" ||
+        attribute.name === "src" ||
+        attribute.name === "aria-label" ||
+        attribute.name.startsWith("data-")
+      ) {
+        attributes[attribute.name] = attribute.value;
+      }
+    }
+    return attributes;
+  }
+
+  function elementText(element) {
+    return (element.textContent || "").replace(/\s+/g, " ").trim().slice(0, 240);
+  }
+
+  function toDomNode(element, depth) {
+    if (!element || nodeCount >= maxNodes || depth > 7) return null;
+    const tagName = element.tagName.toLowerCase();
+    if (["script", "style", "noscript", "template", "svg"].includes(tagName)) return null;
+    nodeCount += 1;
+    const attrs = usefulAttributes(element);
+    const children = Array.from(element.children || [])
+      .slice(0, 40)
+      .map((child) => toDomNode(child, depth + 1))
+      .filter(Boolean);
+
+    return {
+      tagName,
+      text: children.length === 0 ? elementText(element) : "",
+      id: element.id || attrs.id || "",
+      className: element.className ? String(element.className) : attrs.class || "",
+      role: element.getAttribute("role") || "",
+      ariaLabel: element.getAttribute("aria-label") || "",
+      name: element.getAttribute("name") || "",
+      type: element.getAttribute("type") || "",
+      placeholder: element.getAttribute("placeholder") || "",
+      testId: element.getAttribute("data-testid") || element.getAttribute("data-test") || "",
+      href: element instanceof HTMLAnchorElement ? element.href : "",
+      src: element instanceof HTMLImageElement ? element.currentSrc || element.src : "",
+      children
+    };
+  }
+
+  function isInteractive(element) {
+    const tagName = element.tagName.toLowerCase();
+    return (
+      ["button", "input", "textarea", "select", "a", "summary"].includes(tagName) ||
+      element.hasAttribute("role") ||
+      element.hasAttribute("contenteditable") ||
+      element.hasAttribute("onclick")
+    );
+  }
+
+  function toInteractiveElement(element) {
+    const rect = element.getBoundingClientRect();
+    return {
+      tagName: element.tagName.toLowerCase(),
+      text: elementText(element),
+      id: element.id || "",
+      className: element.className ? String(element.className) : "",
+      role: element.getAttribute("role") || "",
+      ariaLabel: element.getAttribute("aria-label") || "",
+      name: element.getAttribute("name") || "",
+      type: element.getAttribute("type") || "",
+      placeholder: element.getAttribute("placeholder") || "",
+      disabled: Boolean("disabled" in element && element.disabled) || element.getAttribute("aria-disabled") === "true",
+      visible: isElementVisible(element),
+      attributes: usefulAttributes(element),
+      bounds: {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }
+    };
+  }
+
+  return {
+    url: location.href,
+    title: document.title,
+    capturedAt: new Date().toISOString(),
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    bodyText: document.body?.innerText || "",
+    imageFingerprints: Array.from(document.images)
+      .filter((image) => image.naturalWidth > 0 && image.naturalHeight > 0 && (image.currentSrc || image.src))
+      .map(imageFingerprint),
+    dom: document.body ? toDomNode(document.body, 0) : null,
+    interactiveElements: Array.from(document.querySelectorAll("a, button, input, textarea, select, summary, [role], [contenteditable], [onclick]"))
+      .filter(isInteractive)
+      .slice(0, 250)
+      .map(toInteractiveElement)
+  };
+}
+
+function collectWorkflowLabWaitState(condition) {
+  function isDisabled(element) {
+    return Boolean(element && "disabled" in element && element.disabled) || element?.getAttribute("aria-disabled") === "true";
+  }
+
+  const selector = condition.kind === "element" ? condition.selector : "";
+  const element = selector ? document.querySelector(selector) : null;
+  const imageSelector = condition.kind === "image-count" && condition.selector ? condition.selector : "img";
+  const images = Array.from(document.querySelectorAll(imageSelector)).filter(
+    (image) =>
+      image instanceof HTMLImageElement &&
+      image.naturalWidth > 0 &&
+      image.naturalHeight > 0 &&
+      Boolean(image.currentSrc || image.src)
+  );
+  const stopButton = findStopButton({ stopButton: condition.kind === "stop-button" ? condition.selector : undefined });
+
+  return {
+    bodyText: document.body?.innerText || "",
+    ...(selector
+      ? {
+          element: {
+            selector,
+            count: document.querySelectorAll(selector).length,
+            visible: isElementVisible(element),
+            disabled: isDisabled(element)
+          }
+        }
+      : {}),
+    imageFingerprints: images.map(imageFingerprint),
+    stopButtonVisible: Boolean(stopButton),
+    networkIdle: document.readyState === "complete"
+  };
+}
+
+function evaluateWorkflowLabWaitCondition(condition, state) {
+  if (condition.kind === "element") {
+    const element = state.element || { count: 0, visible: false, disabled: false };
+    const satisfied =
+      condition.state === "hidden"
+        ? element.count === 0 || !element.visible
+        : condition.state === "visible"
+          ? element.count > 0 && element.visible
+          : condition.state === "enabled"
+            ? element.count > 0 && element.visible && !element.disabled
+            : element.count > 0 && element.disabled;
+    return {
+      satisfied,
+      reason: satisfied ? `Element ${condition.selector} is ${condition.state}.` : `Element ${condition.selector} is not ${condition.state}.`,
+      diagnostics: element
+    };
+  }
+
+  if (condition.kind === "text") {
+    const present = (state.bodyText || "").toLowerCase().includes(String(condition.text || "").toLowerCase());
+    const satisfied = condition.state === "present" ? present : !present;
+    return {
+      satisfied,
+      reason: satisfied ? `Text is ${condition.state}.` : `Text is not ${condition.state} yet.`,
+      diagnostics: { bodyTextLength: state.bodyText.length, text: condition.text }
+    };
+  }
+
+  if (condition.kind === "image-count") {
+    const previous = new Set(condition.previousFingerprints || []);
+    const newFingerprints = state.imageFingerprints.filter((fingerprint) => !previous.has(fingerprint));
+    const satisfied = newFingerprints.length >= Number(condition.minCount || 1);
+    return {
+      satisfied,
+      reason: satisfied
+        ? `Found ${newFingerprints.length} new image fingerprint(s).`
+        : `Found ${newFingerprints.length} new image fingerprint(s); waiting for ${condition.minCount || 1}.`,
+      diagnostics: { currentCount: state.imageFingerprints.length, newCount: newFingerprints.length }
+    };
+  }
+
+  if (condition.kind === "stop-button") {
+    const satisfied = condition.state === "visible" ? state.stopButtonVisible : !state.stopButtonVisible;
+    return {
+      satisfied,
+      reason: satisfied
+        ? `Stop button is ${condition.state}.`
+        : `Stop button is not ${condition.state} yet.`,
+      diagnostics: { stopButtonVisible: state.stopButtonVisible }
+    };
+  }
+
+  return {
+    satisfied: state.networkIdle === true,
+    reason: state.networkIdle === true ? "Document is ready." : "Document is not ready yet.",
+    diagnostics: { readyState: document.readyState }
+  };
+}
+
+function workflowLabWaitTimeout(condition) {
+  return Number(condition.timeoutMs || (condition.kind === "network-idle" ? 15000 : 30000));
+}
+
+async function waitForWorkflowLabCondition(condition) {
+  const started = Date.now();
+  const timeoutMs = workflowLabWaitTimeout(condition);
+  let lastEvaluation = { satisfied: false, reason: "Wait has not evaluated yet.", diagnostics: {} };
+
+  while (Date.now() - started < timeoutMs) {
+    const state = collectWorkflowLabWaitState(condition);
+    lastEvaluation = evaluateWorkflowLabWaitCondition(condition, state);
+    if (lastEvaluation.satisfied) return lastEvaluation;
+    await delay(350);
+  }
+
+  return {
+    satisfied: false,
+    reason: `Timed out: ${lastEvaluation.reason}`,
+    diagnostics: { ...lastEvaluation.diagnostics, timeoutMs }
+  };
+}
+
+async function runWorkflowLabAction(action) {
+  if (!action || typeof action !== "object") throw new Error("Invalid Workflow Lab action.");
+  if (action.kind === "attach-file") {
+    throw new Error("Extension Workflow Lab cannot attach arbitrary local files. Use a Playwright lab session for file probes.");
+  }
+  const selector = String(action.selector || "");
+  const element = document.querySelector(selector);
+  if (!element) throw new Error(`Workflow Lab could not find selector: ${selector}`);
+
+  if (action.kind === "fill") {
+    setComposerText(element, String(action.value || ""));
+    return { ok: true };
+  }
+
+  if (action.kind === "submit" && element instanceof HTMLFormElement) {
+    element.requestSubmit();
+    return { ok: true };
+  }
+
+  element.click();
+  return { ok: true };
+}
+
+async function runWorkflowLabCommand(payload) {
+  if (!payload || payload.protocolVersion !== CHATGPT_EXTENSION_PROTOCOL_VERSION) {
+    throw protocolError("Workflow Lab extension protocol mismatch.");
+  }
+  const command = payload.command || {};
+  if (command.kind === "inspect") return collectWorkflowLabPageState();
+  if (command.kind === "action") return runWorkflowLabAction(command.action);
+  if (command.kind === "wait") return waitForWorkflowLabCondition(command.condition || {});
+  throw new Error(`Unsupported Workflow Lab command: ${command.kind || "unknown"}`);
 }
 
 async function submitComposer(task, selectors, imageOnly) {
@@ -437,7 +755,7 @@ async function runChatGptImageTask(task) {
     if (!composer) throw new Error("Could not find ChatGPT composer for subject submission.");
     await attachImages(task, [subject], selectors, "subject");
     await delay(1200);
-    const beforeFingerprints = new Set(collectImages(selectors.outputImage).map(imageFingerprint));
+    const subjectBefore = collectResponseState(selectors);
 
     if (subjectInstruction) {
       setComposerText(composer, subjectInstruction);
@@ -451,7 +769,14 @@ async function runChatGptImageTask(task) {
       subjectName: subject.name
     });
 
-    const images = await waitForNewOutputImages(task, beforeFingerprints, selectors, subject);
+    const generationStart = await waitForGenerationStarted(task, subjectBefore, selectors, subject);
+    await postTaskEvent(task.id, "extension.subject.generation_started", `Generation started for ${subject.name}`, {
+      subjectIndex: subject.index,
+      subjectName: subject.name,
+      reason: generationStart.reason
+    });
+
+    const images = await waitForCompletedOutputImages(task, subjectBefore, selectors, subject);
     for (const [outputIndex, image] of images.entries()) {
       const output = await imageToOutput(image);
       outputs.push({
@@ -501,7 +826,29 @@ async function pollOnce() {
 
   if (isRunningTask) return;
   const task = await apiFetch(`/api/extension/tasks/next?clientId=${encodeURIComponent(clientId)}`);
-  if (!task) return;
+  if (!task) {
+    const labCommand = await apiFetch(`/api/extension/lab/commands/next?clientId=${encodeURIComponent(clientId)}`);
+    if (!labCommand) return;
+
+    isRunningTask = true;
+    try {
+      const result = await runWorkflowLabCommand(labCommand);
+      await apiFetch(`/api/extension/lab/commands/${labCommand.id}/complete`, {
+        method: "POST",
+        body: JSON.stringify({ result })
+      });
+    } catch (error) {
+      await apiFetch(`/api/extension/lab/commands/${labCommand.id}/fail`, {
+        method: "POST",
+        body: JSON.stringify({
+          message: error instanceof Error ? error.message : String(error)
+        })
+      }).catch(() => undefined);
+    } finally {
+      isRunningTask = false;
+    }
+    return;
+  }
 
   isRunningTask = true;
   try {
