@@ -11,6 +11,7 @@ function chatGptRun(input: unknown): RunRecord {
   return {
     id: "run-1",
     workflowId: "based-blink.chatgpt.extension-image-transform",
+    origin: { source: "ui" },
     name: "ChatGPT run",
     runDir: null,
     status: "completed",

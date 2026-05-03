@@ -100,6 +100,105 @@ body {
   overflow: hidden;
 }
 
+@keyframes based-blink-activity-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.78);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes based-blink-progress-sheen {
+  from {
+    transform: translateX(-110%);
+  }
+
+  to {
+    transform: translateX(110%);
+  }
+}
+
+@keyframes based-blink-active-rail {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.run-activity-dot,
+.queue-running-indicator {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: based-blink-activity-pulse 1.6s ease-in-out infinite;
+}
+
+.run-activity-dot--strong {
+  animation-duration: 1.15s;
+}
+
+.queue-running-indicator {
+  position: relative;
+}
+
+.queue-running-indicator::after {
+  position: absolute;
+  inset: -0.2rem;
+  border-radius: inherit;
+  border: 1px solid currentColor;
+  content: "";
+  opacity: 0.35;
+  pointer-events: none;
+  animation: based-blink-activity-pulse 1.6s ease-in-out infinite;
+}
+
+.run-progress-motion::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, hsl(var(--primary) / 0.24), transparent);
+  content: "";
+  pointer-events: none;
+  transform: translateX(-110%);
+  animation: based-blink-progress-sheen 1.8s ease-in-out infinite;
+}
+
+.run-row-active {
+  position: relative;
+  overflow: hidden;
+}
+
+.run-row-active::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: hsl(var(--primary));
+  content: "";
+  opacity: 0.5;
+  pointer-events: none;
+  animation: based-blink-active-rail 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-activity-dot,
+  .queue-running-indicator,
+  .queue-running-indicator::after,
+  .run-progress-motion::after,
+  .run-row-active::before {
+    animation: none;
+  }
+}
+
 button,
 input,
 textarea,

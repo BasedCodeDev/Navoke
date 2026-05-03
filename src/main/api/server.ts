@@ -152,7 +152,8 @@ export class ApiServer {
         const run = this.options.runner.enqueue({
           workflowId: String(req.body.workflowId ?? ""),
           name: req.body.name,
-          workflowInput: req.body.input ?? {}
+          workflowInput: req.body.input ?? {},
+          origin: req.body.origin
         });
         res.status(201).json(run);
       } catch (error) {

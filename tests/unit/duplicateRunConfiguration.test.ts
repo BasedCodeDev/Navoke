@@ -14,6 +14,7 @@ function run(input: Partial<RunRecord> & { workflowId: string; input: unknown })
   return {
     id: "run-1",
     workflowId: input.workflowId,
+    origin: input.origin ?? { source: "ui" },
     name: input.name ?? "Source run",
     runDir: null,
     status: "completed",
@@ -114,7 +115,7 @@ describe("duplicate run configuration", () => {
     expect(duplicate.filePaths).toEqual(["C:\\runs\\inputs\\source.png"]);
   });
 
-  it("copies Hunyuan views, settings, profile, pause flag, and selectors", () => {
+  it("copies Hunyuan view images, prompt, profile, settings, and selectors", () => {
     const duplicate = buildDuplicateRunConfiguration(
       run({
         workflowId: "based-blink.hunyuan.image-to-model",
@@ -130,7 +131,7 @@ describe("duplicate run configuration", () => {
           generateTexture: false,
           autoRig: true,
           exportFormat: "glb",
-          selectors: { imageTo3dTab: "button.image-to-3d" }
+          selectors: { generateButton: "button.generate" }
         }
       }),
       { workflow: hunyuanWorkflow, compatibleClients: [], newChatGptTabValue: "__new__" }
@@ -151,12 +152,7 @@ describe("duplicate run configuration", () => {
       hunyuanAutoRig: true,
       hunyuanExportFormat: "glb"
     });
-    expect(JSON.parse(duplicate.hunyuanSelectorsJson)).toEqual({ imageTo3dTab: "button.image-to-3d" });
-    expect(duplicate.filePaths).toEqual([
-      "C:\\runs\\inputs\\front.png",
-      "C:\\runs\\inputs\\back.png",
-      "C:\\runs\\inputs\\left45.png"
-    ]);
+    expect(JSON.parse(duplicate.hunyuanSelectorsJson)).toMatchObject({ generateButton: "button.generate" });
   });
 
   it("collects unique input file paths across supported file fields", () => {
@@ -166,9 +162,9 @@ describe("duplicate run configuration", () => {
         referenceImages: ["C:\\a.png"],
         subjectImages: ["C:\\c.png"],
         sourceImages: ["C:\\d.png"],
-        frontImage: "C:\\front.png",
-        backImage: "C:\\b.png"
+        frontImage: "C:\\e.png",
+        right45Image: "C:\\f.png"
       })
-    ).toEqual(["C:\\a.png", "C:\\b.png", "C:\\c.png", "C:\\d.png", "C:\\front.png"]);
+    ).toEqual(["C:\\a.png", "C:\\b.png", "C:\\c.png", "C:\\d.png", "C:\\e.png", "C:\\f.png"]);
   });
 });

@@ -37,6 +37,12 @@ export interface HunyuanRunFormState {
   selectorsJson: string;
 }
 
+export interface HunyuanSelectorAssignment {
+  key: string;
+  label: string;
+  path: string[];
+}
+
 export const HUNYUAN_VIEW_FIELDS: HunyuanViewFieldDefinition[] = [
   { field: "frontImage", selectorKey: "front", label: "Front image", chooseLabel: "Choose front", required: true },
   { field: "backImage", selectorKey: "back", label: "Back image", chooseLabel: "Choose back" },
@@ -150,6 +156,54 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG = {
 
 export const DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON = `${JSON.stringify(DEFAULT_HUNYUAN_SELECTOR_CONFIG, null, 2)}\n`;
 
+export const HUNYUAN_SELECTOR_ASSIGNMENTS: HunyuanSelectorAssignment[] = [
+  { key: "loginReadySelector", label: "Login ready selector", path: ["loginReadySelector"] },
+  { key: "loginReadyText", label: "Login ready text", path: ["loginReadyText"] },
+  { key: "loginRequiredSelector", label: "Login required selector", path: ["loginRequiredSelector"] },
+  { key: "loginRequiredText", label: "Login required text", path: ["loginRequiredText"] },
+  { key: "imageTo3dTab", label: "Image-to-3D tab", path: ["imageTo3dTab"] },
+  { key: "multipleImagesTab", label: "Multiple Images tab", path: ["multipleImagesTab"] },
+  { key: "addMultipleViewsButton", label: "Add Multiple Views", path: ["addMultipleViewsButton"] },
+  { key: "multipleViewsConfirmButton", label: "Multiple Views confirm", path: ["multipleViewsConfirmButton"] },
+  ...HUNYUAN_VIEW_FIELDS.map((field) => ({
+    key: `viewUploadInputs.${field.selectorKey}`,
+    label: `${field.label} upload input`,
+    path: ["viewUploadInputs", field.selectorKey]
+  })),
+  { key: "modelDropdown", label: "Model dropdown", path: ["modelDropdown"] },
+  { key: "modelOptionV31", label: "3D generate V3.1 option", path: ["modelOptionV31"] },
+  ...HUNYUAN_FACE_COUNTS.map((count) => ({
+    key: `faceCountButtons.${count}`,
+    label: `${count} face button`,
+    path: ["faceCountButtons", count]
+  })),
+  { key: "modelTypeGeometryTexturePhased", label: "Geometry + texture phased option", path: ["modelTypeGeometryTexturePhased"] },
+  { key: "promptTextbox", label: "Prompt textbox", path: ["promptTextbox"] },
+  { key: "generateButton", label: "Initial generate button", path: ["generateButton"] },
+  { key: "geometryRunningSelector", label: "Geometry running selector", path: ["geometryRunningSelector"] },
+  { key: "geometryRunningText", label: "Geometry running text", path: ["geometryRunningText"] },
+  { key: "geometryReadySelector", label: "Geometry ready selector", path: ["geometryReadySelector"] },
+  { key: "retopologyTypeButtons.triangle", label: "Triangle retopology option", path: ["retopologyTypeButtons", "triangle"] },
+  { key: "retopologyTypeButtons.quad", label: "Quad retopology option", path: ["retopologyTypeButtons", "quad"] },
+  { key: "smartRetopologyButton", label: "Smart retopology button", path: ["smartRetopologyButton"] },
+  { key: "retopologyRunningSelector", label: "Retopology running selector", path: ["retopologyRunningSelector"] },
+  { key: "retopologyRunningText", label: "Retopology running text", path: ["retopologyRunningText"] },
+  { key: "retopologyReadySelector", label: "Retopology ready selector", path: ["retopologyReadySelector"] },
+  { key: "generateTextureButton", label: "Generate texture button", path: ["generateTextureButton"] },
+  { key: "textureRunningSelector", label: "Texture running selector", path: ["textureRunningSelector"] },
+  { key: "textureRunningText", label: "Texture running text", path: ["textureRunningText"] },
+  { key: "textureReadySelector", label: "Texture ready selector", path: ["textureReadySelector"] },
+  { key: "autoRigButton", label: "Auto-rig button", path: ["autoRigButton"] },
+  { key: "autoRigRunningSelector", label: "Auto-rig running selector", path: ["autoRigRunningSelector"] },
+  { key: "autoRigRunningText", label: "Auto-rig running text", path: ["autoRigRunningText"] },
+  { key: "autoRigReadySelector", label: "Auto-rig ready selector", path: ["autoRigReadySelector"] },
+  { key: "exportFormatDropdown", label: "Export format dropdown", path: ["exportFormatDropdown"] },
+  { key: "exportFormatOptions.obj", label: "OBJ export option", path: ["exportFormatOptions", "obj"] },
+  { key: "exportFormatOptions.glb", label: "GLB export option", path: ["exportFormatOptions", "glb"] },
+  { key: "downloadReadySelector", label: "Download ready selector", path: ["downloadReadySelector"] },
+  { key: "downloadButton", label: "Download button", path: ["downloadButton"] }
+];
+
 export function emptyHunyuanViewFiles(): HunyuanViewFiles {
   return { ...EMPTY_HUNYUAN_VIEW_FILES };
 }
@@ -186,6 +240,14 @@ export function parseHunyuanSelectorsJson(value: string): Record<string, unknown
   return parsed as Record<string, unknown>;
 }
 
+export function assignHunyuanSelectorJson(currentJson: string, assignmentKey: string, selector: string): string {
+  const assignment = HUNYUAN_SELECTOR_ASSIGNMENTS.find((candidate) => candidate.key === assignmentKey);
+  if (!assignment) throw new Error(`Unknown Hunyuan selector target: ${assignmentKey}`);
+  const config = { ...DEFAULT_HUNYUAN_SELECTOR_CONFIG, ...parseHunyuanSelectorsJson(currentJson) } as Record<string, unknown>;
+  assignNestedValue(config, assignment.path, selector);
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
+
 export function collectHunyuanInputFilePaths(input: Record<string, unknown>): string[] {
   return HUNYUAN_VIEW_FIELDS.map((field) => input[field.field]).filter((value): value is string => typeof value === "string" && value.length > 0);
 }
@@ -196,4 +258,16 @@ function firstFile(files: string[]): string {
 
 function compactObject(value: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== "" && entry !== undefined));
+}
+
+function assignNestedValue(target: Record<string, unknown>, path: string[], value: string): void {
+  let cursor = target;
+  for (const segment of path.slice(0, -1)) {
+    const existing = cursor[segment];
+    if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
+      cursor[segment] = {};
+    }
+    cursor = cursor[segment] as Record<string, unknown>;
+  }
+  cursor[path[path.length - 1]] = value;
 }

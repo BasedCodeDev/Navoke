@@ -25,6 +25,17 @@ export type PluginSource = "builtin" | "user";
 
 export type WorkflowPluginCapability = "filesystem.artifacts" | "browser" | "extension.chatgpt";
 
+export type RunOrigin =
+  | { source: "ui" }
+  | {
+      source: "cli";
+      agentName?: string;
+      command?: string;
+      cwd?: string;
+      pid?: number;
+      cliVersion?: string;
+    };
+
 export interface WorkflowPluginMetadata {
   id: string;
   name: string;
@@ -71,6 +82,7 @@ export interface RunRecord {
   pluginVersion?: string | null;
   pluginApiVersion?: string | null;
   pluginSource?: PluginSource | "unknown" | null;
+  origin: RunOrigin;
   name: string;
   runDir: string | null;
   status: "queued" | "running" | "pausing" | "waiting_manual" | "completed" | "failed" | "cancelled";
@@ -370,7 +382,7 @@ export async function waitForLabCondition(input: {
   });
 }
 
-export async function createRun(input: { workflowId: string; name?: string; input: unknown }): Promise<RunRecord> {
+export async function createRun(input: { workflowId: string; name?: string; input: unknown; origin?: RunOrigin }): Promise<RunRecord> {
   return apiFetch("/api/runs", { method: "POST", body: JSON.stringify(input) });
 }
 

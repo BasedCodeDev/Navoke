@@ -10,6 +10,7 @@ import { AppSettingsStore, projectDisplayName, renameProject as writeProjectName
 import { RuntimeEventBus } from "./runtime/eventBus";
 import { LocalWorkflowRunner } from "./runtime/localWorkflowRunner";
 import { createRuntimePaths } from "./runtime/paths";
+import { removeRuntimePointer, writeRuntimePointer } from "./runtime/runtimePointer";
 import type { RuntimePaths, WorkflowRegistry } from "./runtime/types";
 import { createWorkflowRegistry } from "./workflows";
 
@@ -48,7 +49,7 @@ async function bootstrap(): Promise<void> {
     app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
   }
   const appIconPath = resolveAppIconPath();
-  if (process.platform === "darwin" && appIconPath) {
+  if (process.platform === "darwin" && appIconPath && app.dock) {
     app.dock.setIcon(appIconPath);
   }
   Menu.setApplicationMenu(null);
@@ -113,6 +114,7 @@ async function openProject(projectDir: string): Promise<AppConfig> {
     workflowLab
   });
   await apiServer.start();
+  writeRuntimePointer(paths, apiServer.baseUrl);
 
   runtime = { apiServer, eventBus, paths, runner, store, workflowLab };
   settingsStore?.setLastProjectDir(paths.projectDir);
@@ -149,6 +151,7 @@ async function closeRuntime(): Promise<void> {
     shutdownError = error;
   }
   await current.apiServer.stop();
+  removeRuntimePointer(current.paths);
   current.store.close();
   if (shutdownError) throw shutdownError;
 }

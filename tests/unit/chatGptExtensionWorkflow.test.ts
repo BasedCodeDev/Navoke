@@ -122,6 +122,7 @@ describe("ChatGPT extension workflow output normalization", () => {
     const baseRun: RunRecord = {
       id: "run-1",
       workflowId: "based-blink.chatgpt.extension-image-transform",
+      origin: { source: "ui" },
       name: "ChatGPT run",
       runDir: null,
       status: "failed",

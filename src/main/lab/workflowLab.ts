@@ -183,6 +183,8 @@ export class WorkflowLab {
     this.sessions.set(id, session);
     this.addLog(session, "session.created", `Started ${input.mode} Workflow Lab session`, {
       targetUrl: session.targetUrl,
+      profileWorkflowId: session.profileWorkflowId,
+      profileName: session.profileName,
       clientId: session.clientId
     });
     return this.toSummary(session);

@@ -31,8 +31,21 @@ describe("workflow plugin packages", () => {
     expect(manager.listWorkflowRegistrations().map((registration) => registration.definition.manifest.id)).toEqual([
       "based-blink.hunyuan.image-to-model"
     ]);
-    expect(manager.listWorkflowRegistrations()[0].definition.inputSchema.safeParse({ frontImage: "front.png" }).success).toBe(false);
-    expect(manager.listWorkflowRegistrations()[0].definition.inputSchema.safeParse({ frontImage: "front.png", backImage: "back.png" }).success).toBe(true);
+    const workflow = manager.listWorkflowRegistrations()[0].definition;
+    expect(workflow.inputSchema.safeParse({ frontImage: "C:\\tmp\\front.png" }).success).toBe(false);
+    const parsed = workflow.inputSchema.safeParse({
+      frontImage: "C:\\tmp\\front.png",
+      backImage: "C:\\tmp\\back.png"
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error("Expected Hunyuan input defaults to parse.");
+    expect(parsed.data).toMatchObject({
+      modelFaceCount: "50k",
+      retopologyType: "quad",
+      generateTexture: true,
+      autoRig: false,
+      exportFormat: "obj"
+    });
   });
 
   it("loads the ChatGPT workflow package with image transform and image sequence workflows", async () => {
@@ -91,12 +104,14 @@ describe("workflow plugin packages", () => {
     registration.definition.run = async () => ({ artifactIds: [], summary: "Stubbed plugin run." });
     const runner = new LocalWorkflowRunner(registry, store, paths, new RuntimeEventBus());
     const imagePath = path.join(projectDir, "input.png");
+    const backImagePath = path.join(projectDir, "back.png");
     fs.writeFileSync(imagePath, "image");
+    fs.writeFileSync(backImagePath, "image");
 
     const run = runner.enqueue({
       workflowId: "based-blink.hunyuan.image-to-model",
       name: "Hunyuan plugin snapshot",
-      workflowInput: { frontImage: imagePath, backImage: imagePath, prompt: "", profileName: "default", pauseForManualLogin: true }
+      workflowInput: { frontImage: imagePath, backImage: backImagePath, prompt: "", profileName: "default", pauseForManualLogin: true }
     });
 
     expect(run.workflowId).toBe("based-blink.hunyuan.image-to-model");

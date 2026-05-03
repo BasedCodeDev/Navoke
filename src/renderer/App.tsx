@@ -66,7 +66,7 @@ import {
   type WorkflowLabInspectionResult,
   type WorkflowSummary
 } from "@/lib/api";
-import { cn, formatDate, statusTone } from "@/lib/utils";
+import { cn, formatDate, isMotionActiveStatus, statusTone } from "@/lib/utils";
 import {
   THEME_STORAGE_KEY,
   appThemes,
@@ -93,12 +93,15 @@ import {
   getChatGptRunInput,
   type ChatGptRunInputModel
 } from "@/lib/chatGptArtifactPairing";
+import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "@/lib/duplicateRunConfiguration";
 import {
   DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
   HUNYUAN_EXPORT_FORMATS,
   HUNYUAN_FACE_COUNTS,
+  HUNYUAN_SELECTOR_ASSIGNMENTS,
   HUNYUAN_VIEW_FIELDS,
   HUNYUAN_WORKFLOW_ID,
+  assignHunyuanSelectorJson,
   buildHunyuanRunInput,
   emptyHunyuanViewFiles,
   type HunyuanExportFormat,
@@ -107,8 +110,8 @@ import {
   type HunyuanViewField,
   type HunyuanViewFiles
 } from "@/lib/hunyuanWorkflow";
-import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "@/lib/duplicateRunConfiguration";
 import { isRecoverableFailedChatGptRun, resolveChatGptFocusTarget } from "@/lib/chatGptTabFocus";
+import { activeCliAgentRuns, isCliRun, runOriginCommand, runOriginLabel } from "@/lib/runOrigin";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -354,21 +357,21 @@ export default function App(): JSX.Element {
         await window.basedBlink.openExternal(chatGptTab.url ?? buildNewChatGptTabUrl(chatGptTab.routingToken));
       }
       const workflowInput =
-        isHunyuanWorkflow
-          ? buildHunyuanRunInput({
-              viewFiles: hunyuanViewFiles,
-              prompt,
-              profileName,
-              pauseForManualLogin,
-              modelFaceCount: hunyuanModelFaceCount,
-              retopologyType: hunyuanRetopologyType,
-              generateTexture: hunyuanGenerateTexture,
-              autoRig: hunyuanAutoRig,
-              exportFormat: hunyuanExportFormat,
-              selectorsJson: hunyuanSelectorsJson
-            })
-          : workflowHasCapability(selectedWorkflow, "browser.profile")
-          ? { images: selectedFiles, prompt, profileName, pauseForManualLogin }
+        workflowHasCapability(selectedWorkflow, "browser.profile")
+          ? isHunyuanWorkflow
+            ? buildHunyuanRunInput({
+                viewFiles: hunyuanViewFiles,
+                prompt,
+                profileName,
+                pauseForManualLogin,
+                modelFaceCount: hunyuanModelFaceCount,
+                retopologyType: hunyuanRetopologyType,
+                generateTexture: hunyuanGenerateTexture,
+                autoRig: hunyuanAutoRig,
+                exportFormat: hunyuanExportFormat,
+                selectorsJson: hunyuanSelectorsJson
+              })
+            : { images: selectedFiles, prompt, profileName, pauseForManualLogin }
           : workflowHasCapability(selectedWorkflow, "chatgpt.tabRouting")
               ? isChatGptSequenceWorkflow
                 ? { sourceImages: sourceFiles, prompts: sequencePrompts, masterPrompt, chatGptTab }
@@ -463,6 +466,7 @@ export default function App(): JSX.Element {
       : String(selectedRunQuery.error)
     : null;
   const selectedRunIds = new Set([selectedRunId]);
+  const cliAgentRuns = useMemo(() => activeCliAgentRuns(runsQuery.data ?? []), [runsQuery.data]);
   const extensionClients = systemQuery.data?.extension.connectedClients ?? [];
   const compatibleExtensionClients = useMemo(() => extensionClients.filter((client) => client.compatible), [extensionClients]);
   const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 7;
@@ -618,12 +622,21 @@ export default function App(): JSX.Element {
           <div className="flex items-center gap-2">
             {!showLanding ? (
               <>
-                <Badge className={cn("border", toneClassNames.neutral)}>
-                  Queue: {systemQuery.data?.runner.queued ?? 0} · Running: {systemQuery.data?.runner.running ?? 0}
+                <Badge
+                  className={cn(
+                    "gap-1.5 border",
+                    (systemQuery.data?.runner.running ?? 0) > 0 ? toneClassNames.info : toneClassNames.neutral
+                  )}
+                >
+                  {(systemQuery.data?.runner.running ?? 0) > 0 ? <span className="queue-running-indicator" aria-hidden="true" /> : null}
+                  Queue: {systemQuery.data?.runner.queued ?? 0} | Running: {systemQuery.data?.runner.running ?? 0}
                 </Badge>
                 <Badge className={cn("border", toneClassNames.info)}>
                   Extension: {systemQuery.data?.extension.connectedClients.length ?? 0}
                 </Badge>
+                {cliAgentRuns.length > 0 ? (
+                  <Badge className={cn("border", toneClassNames.warning)}>CLI agents: {cliAgentRuns.length}</Badge>
+                ) : null}
                 <Button type="button" variant="outline" size="sm" onClick={() => setShowProjectLanding(true)}>
                   <FolderOpen className="h-4 w-4" />
                   Open Project
@@ -784,6 +797,7 @@ export default function App(): JSX.Element {
               ) : isHunyuanWorkflow ? (
                 <HunyuanWorkflowFields
                   viewFiles={hunyuanViewFiles}
+                  prompt={prompt}
                   modelFaceCount={hunyuanModelFaceCount}
                   retopologyType={hunyuanRetopologyType}
                   generateTexture={hunyuanGenerateTexture}
@@ -792,6 +806,7 @@ export default function App(): JSX.Element {
                   selectorsJson={hunyuanSelectorsJson}
                   onChooseView={(field, title) => void chooseImages((files) => setHunyuanViewField(field, files), title)}
                   onClearView={(field) => setHunyuanViewField(field, [])}
+                  onPromptChange={setPrompt}
                   onModelFaceCountChange={setHunyuanModelFaceCount}
                   onRetopologyTypeChange={setHunyuanRetopologyType}
                   onGenerateTextureChange={setHunyuanGenerateTexture}
@@ -810,18 +825,16 @@ export default function App(): JSX.Element {
                 />
               )}
 
-              {!workflowHasField(selectedWorkflow, "masterPrompt") ? (
+              {!workflowHasField(selectedWorkflow, "masterPrompt") && !isHunyuanWorkflow ? (
                 <>
                   <div className="space-y-1.5">
                     <Label>Prompt</Label>
                     <Textarea className="min-h-12 py-1.5" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Optional model prompt" />
                   </div>
-                  {!isHunyuanWorkflow ? (
-                    <div className="space-y-1.5">
-                      <Label>Model name</Label>
-                      <Input className="h-9" value={modelName} onChange={(event) => setModelName(event.target.value)} />
-                    </div>
-                  ) : null}
+                  <div className="space-y-1.5">
+                    <Label>Model name</Label>
+                    <Input className="h-9" value={modelName} onChange={(event) => setModelName(event.target.value)} />
+                  </div>
                 </>
               ) : null}
 
@@ -910,7 +923,16 @@ export default function App(): JSX.Element {
           </div>
 
           <div className={workspaceView === "lab" ? "min-h-0 flex-1 overflow-hidden" : "hidden"}>
-            <WorkflowLabPanel extensionClients={extensionClients} hasProject={hasProject} apiBaseUrl={apiBaseUrl} />
+            <WorkflowLabPanel
+              extensionClients={extensionClients}
+              hasProject={hasProject}
+              apiBaseUrl={apiBaseUrl}
+              onApplyHunyuanSelectorConfig={(selectorsJson) => {
+                setHunyuanSelectorsJson(selectorsJson);
+                setSelectedWorkflowId(HUNYUAN_WORKFLOW_ID);
+                setWorkspaceView("runs");
+              }}
+            />
           </div>
 
           <div className={workspaceView === "plugins" ? "min-h-0 flex-1 overflow-hidden" : "hidden"}>
@@ -932,6 +954,9 @@ export default function App(): JSX.Element {
           </div>
 
           <div className={workspaceView === "runs" ? "flex min-h-0 flex-1 flex-col gap-4" : "hidden"}>
+              {cliAgentRuns.length > 0 ? (
+                <AgentActivityPanel runs={cliAgentRuns} onSelectRun={(runId) => setSelectedRunId(runId)} />
+              ) : null}
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Runs</h2>
               </div>
@@ -1028,6 +1053,58 @@ function LocalRuntimeFooter({ config, system }: { config?: BasedBlinkConfig; sys
         </span>
       </div>
     </footer>
+  );
+}
+
+function RunStatusBadge({ status }: { status: RunRecord["status"] }): JSX.Element {
+  const motionActive = isMotionActiveStatus(status);
+  return (
+    <Badge className={cn("gap-1.5 border", statusTone(status))}>
+      {motionActive ? (
+        <span className={cn("run-activity-dot", status === "running" && "run-activity-dot--strong")} aria-hidden="true" />
+      ) : null}
+      {status}
+    </Badge>
+  );
+}
+
+function AgentActivityPanel({ runs, onSelectRun }: { runs: RunRecord[]; onSelectRun(runId: string): void }): JSX.Element {
+  return (
+    <Card className="shrink-0">
+      <CardHeader className="p-3 pb-2">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">CLI Agent Activity</CardTitle>
+          <Badge className={cn("border", toneClassNames.warning)}>{runs.length} active</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-2 p-3 pt-0">
+        {runs.map((run) => {
+          const command = runOriginCommand(run);
+          return (
+            <button
+              key={run.id}
+              type="button"
+              onClick={() => onSelectRun(run.id)}
+              className="w-full rounded-md border border-border bg-background p-3 text-left transition hover:border-primary"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{run.name}</div>
+                  <div className="truncate text-xs text-muted-foreground">{run.workflowId}</div>
+                  <div className="mt-1 truncate text-sm text-muted-foreground">{run.currentStep ?? "Queued"}</div>
+                  {command ? <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{command}</div> : null}
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <Badge className={cn("border", toneClassNames.neutral)}>{runOriginLabel(run)}</Badge>
+                  <RunStatusBadge status={run.status} />
+                </div>
+              </div>
+              <Progress value={run.progress} active={isMotionActiveStatus(run.status)} className="mt-3" />
+            </button>
+          );
+        })}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1666,10 +1743,20 @@ function RunDetailModal({
                           </div>
                         ) : null}
                       </div>
-                      <Badge className={cn("border", statusTone(run.status))}>{run.status}</Badge>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {isCliRun(run) ? <Badge className={cn("border", toneClassNames.neutral)}>{runOriginLabel(run)}</Badge> : null}
+                        <RunStatusBadge status={run.status} />
+                      </div>
                     </div>
-                    <Progress value={run.progress} />
+                    <Progress value={run.progress} active={isMotionActiveStatus(run.status)} />
                     <div className="text-sm text-muted-foreground">{run.currentStep ?? "No step yet"}</div>
+                    {isCliRun(run) ? (
+                      <div className="rounded-md border border-border bg-background p-3 text-xs text-muted-foreground">
+                        <div className="font-medium text-foreground">{runOriginLabel(run)}</div>
+                        {runOriginCommand(run) ? <div className="mt-1 truncate font-mono">{runOriginCommand(run)}</div> : null}
+                        {run.origin.source === "cli" && run.origin.cwd ? <div className="mt-1 truncate">cwd: {run.origin.cwd}</div> : null}
+                      </div>
+                    ) : null}
                   </div>
 
                   {run.error ? <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>{run.error}</div> : null}
@@ -2239,6 +2326,7 @@ function OutputImagePreview({ artifact }: { artifact: ArtifactRecord }): JSX.Ele
 
 function HunyuanWorkflowFields({
   viewFiles,
+  prompt,
   modelFaceCount,
   retopologyType,
   generateTexture,
@@ -2247,6 +2335,7 @@ function HunyuanWorkflowFields({
   selectorsJson,
   onChooseView,
   onClearView,
+  onPromptChange,
   onModelFaceCountChange,
   onRetopologyTypeChange,
   onGenerateTextureChange,
@@ -2255,6 +2344,7 @@ function HunyuanWorkflowFields({
   onSelectorsJsonChange
 }: {
   viewFiles: HunyuanViewFiles;
+  prompt: string;
   modelFaceCount: HunyuanFaceCount;
   retopologyType: HunyuanRetopologyType;
   generateTexture: boolean;
@@ -2263,6 +2353,7 @@ function HunyuanWorkflowFields({
   selectorsJson: string;
   onChooseView(field: HunyuanViewField, title: string): void;
   onClearView(field: HunyuanViewField): void;
+  onPromptChange(value: string): void;
   onModelFaceCountChange(value: HunyuanFaceCount): void;
   onRetopologyTypeChange(value: HunyuanRetopologyType): void;
   onGenerateTextureChange(value: boolean): void;
@@ -2272,22 +2363,33 @@ function HunyuanWorkflowFields({
 }): JSX.Element {
   return (
     <>
-      <div className="grid grid-cols-2 gap-2">
-        {HUNYUAN_VIEW_FIELDS.map((field) => (
-          <ImagePicker
-            key={field.field}
-            label={`${field.label}${field.required ? " *" : ""}`}
-            chooseLabel={field.chooseLabel}
-            files={viewFiles[field.field]}
-            emptyText="No file"
-            onChoose={() => onChooseView(field.field, `Choose ${field.label.toLowerCase()}`)}
-            onClear={() => onClearView(field.field)}
-          />
-        ))}
+      <div className="space-y-2">
+        <div className="grid gap-3 sm:grid-cols-2">
+          {HUNYUAN_VIEW_FIELDS.map((field) => (
+            <ImagePicker
+              key={field.field}
+              label={`${field.label}${field.required ? " *" : ""}`}
+              chooseLabel={field.chooseLabel}
+              files={viewFiles[field.field]}
+              emptyText={field.required ? "Required front view" : "No image selected"}
+              onChoose={() => onChooseView(field.field, `${field.chooseLabel} image`)}
+              onClear={() => onClearView(field.field)}
+            />
+          ))}
+        </div>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="space-y-1.5">
+        <Label>Prompt</Label>
+        <Textarea
+          className="min-h-12 py-1.5"
+          value={prompt}
+          onChange={(event) => onPromptChange(event.target.value)}
+          placeholder="Optional model prompt"
+        />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
         <div className="space-y-1.5">
-          <Label>Faces</Label>
+          <Label>Model faces</Label>
           <select
             value={modelFaceCount}
             onChange={(event) => onModelFaceCountChange(event.target.value as HunyuanFaceCount)}
@@ -2326,7 +2428,7 @@ function HunyuanWorkflowFields({
           </select>
         </div>
       </div>
-      <div className="flex items-center gap-4 text-sm">
+      <div className="flex flex-wrap gap-4 text-sm">
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={generateTexture} onChange={(event) => onGenerateTextureChange(event.target.checked)} />
           Generate texture
@@ -2339,7 +2441,7 @@ function HunyuanWorkflowFields({
       <div className="space-y-1.5">
         <Label>Hunyuan selector config</Label>
         <Textarea
-          className="min-h-32 font-mono text-xs"
+          className="min-h-40 font-mono text-xs"
           value={selectorsJson}
           onChange={(event) => onSelectorsJsonChange(event.target.value)}
           spellCheck={false}
@@ -2352,11 +2454,13 @@ function HunyuanWorkflowFields({
 function WorkflowLabPanel({
   extensionClients,
   hasProject,
-  apiBaseUrl
+  apiBaseUrl,
+  onApplyHunyuanSelectorConfig
 }: {
   extensionClients: SystemInfo["extension"]["connectedClients"];
   hasProject: boolean;
   apiBaseUrl: string;
+  onApplyHunyuanSelectorConfig(selectorsJson: string): void;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<"playwright" | "extension">("extension");
@@ -2376,6 +2480,8 @@ function WorkflowLabPanel({
   const [waitMinImages, setWaitMinImages] = useState(1);
   const [labError, setLabError] = useState<string | null>(null);
   const [waitMessage, setWaitMessage] = useState<string | null>(null);
+  const [hunyuanSelectorTarget, setHunyuanSelectorTarget] = useState(HUNYUAN_SELECTOR_ASSIGNMENTS[0].key);
+  const [hunyuanSelectorJson, setHunyuanSelectorJson] = useState(DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON);
 
   const compatibleClients = extensionClients.filter((client) => client.compatible);
   const sessionsQuery = useQuery({
@@ -2400,11 +2506,17 @@ function WorkflowLabPanel({
   useEffect(() => {
     if (mode !== "playwright") return;
     if (profileWorkflowId === "hunyuan") {
-      if (!targetUrl.trim() || targetUrl === CHATGPT_NEW_TAB_URL || targetUrl === "about:blank") setTargetUrl(HUNYUAN_LAB_TARGET_URL);
-      if (!profileName.trim() || profileName === "lab") setProfileName("default");
+      if (!targetUrl.trim() || targetUrl === CHATGPT_NEW_TAB_URL || targetUrl === "about:blank") {
+        setTargetUrl(HUNYUAN_LAB_TARGET_URL);
+      }
+      if (!profileName.trim() || profileName === "lab") {
+        setProfileName("default");
+      }
       return;
     }
-    if (!profileName.trim() || profileName === "default") setProfileName("lab");
+    if (!profileName.trim() || profileName === "default") {
+      setProfileName("lab");
+    }
   }, [mode, profileWorkflowId]);
 
   const createSessionMutation = useMutation({
@@ -2551,6 +2663,26 @@ function WorkflowLabPanel({
     if (files.length > 0) setActionFiles(files);
   }
 
+  function assignCurrentSelectorToHunyuanPreset(): void {
+    try {
+      const trimmedSelector = selector.trim();
+      if (!trimmedSelector) throw new Error("Choose a probe selector before assigning it.");
+      setHunyuanSelectorJson((current) => assignHunyuanSelectorJson(current, hunyuanSelectorTarget, trimmedSelector));
+      setLabError(null);
+    } catch (error) {
+      setLabError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function copyHunyuanSelectorPreset(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(hunyuanSelectorJson);
+      setLabError(null);
+    } catch (error) {
+      setLabError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -2560,7 +2692,12 @@ function WorkflowLabPanel({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className={cn("grid gap-3", mode === "playwright" ? "grid-cols-[150px_1fr_140px_120px_auto]" : "grid-cols-[150px_1fr_120px_auto]")}>
+        <div
+          className={cn(
+            "grid gap-3",
+            mode === "playwright" ? "grid-cols-[150px_1fr_140px_120px_auto]" : "grid-cols-[150px_1fr_120px_auto]"
+          )}
+        >
           <div className="space-y-2">
             <Label>Bridge</Label>
             <select
@@ -2591,10 +2728,6 @@ function WorkflowLabPanel({
               <Input value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://example.com" />
             )}
           </div>
-          <div className="space-y-2">
-            <Label>Profile</Label>
-            <Input value={profileName} onChange={(event) => setProfileName(event.target.value)} disabled={mode === "extension"} />
-          </div>
           {mode === "playwright" ? (
             <div className="space-y-2">
               <Label>Profile owner</Label>
@@ -2608,6 +2741,10 @@ function WorkflowLabPanel({
               </select>
             </div>
           ) : null}
+          <div className="space-y-2">
+            <Label>Profile</Label>
+            <Input value={profileName} onChange={(event) => setProfileName(event.target.value)} disabled={mode === "extension"} />
+          </div>
           <div className="flex items-end">
             <Button
               type="button"
@@ -2636,9 +2773,9 @@ function WorkflowLabPanel({
               >
                 <div className="font-medium">{session.title || session.mode}</div>
                 <div className="max-w-56 truncate text-muted-foreground">{session.url || session.targetUrl}</div>
-                {session.mode === "playwright" ? (
-                  <div className="max-w-56 truncate text-muted-foreground">
-                    {(session.profileWorkflowId ?? "workflow-lab")}/{session.profileName ?? "lab"}
+                {session.mode === "playwright" && session.profileName ? (
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    {session.profileWorkflowId ?? "workflow-lab"} / {session.profileName}
                   </div>
                 ) : null}
               </button>
@@ -2769,6 +2906,43 @@ function WorkflowLabPanel({
         ) : (
           <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">Start a lab session to inspect and probe a page.</div>
         )}
+
+        <div className="rounded-md border border-border bg-background p-3">
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-72 flex-1 space-y-2">
+              <Label>Hunyuan selector target</Label>
+              <select
+                value={hunyuanSelectorTarget}
+                onChange={(event) => setHunyuanSelectorTarget(event.target.value)}
+                className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+              >
+                {HUNYUAN_SELECTOR_ASSIGNMENTS.map((assignment) => (
+                  <option key={assignment.key} value={assignment.key}>
+                    {assignment.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={assignCurrentSelectorToHunyuanPreset}>
+              <Plus className="h-4 w-4" />
+              Assign
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => void copyHunyuanSelectorPreset()}>
+              <Copy className="h-4 w-4" />
+              Copy JSON
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => onApplyHunyuanSelectorConfig(hunyuanSelectorJson)}>
+              <CheckCircle2 className="h-4 w-4" />
+              Use in run
+            </Button>
+          </div>
+          <Textarea
+            className="mt-3 min-h-32 font-mono text-xs"
+            value={hunyuanSelectorJson}
+            onChange={(event) => setHunyuanSelectorJson(event.target.value)}
+            spellCheck={false}
+          />
+        </div>
 
         {labError ? (
           <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.danger)}>
@@ -2998,10 +3172,12 @@ function RunRow({
   onDuplicate: () => void;
 }): JSX.Element {
   const workflowUnavailable = workflowAvailability.status === "missing" || workflowAvailability.status === "version-mismatch";
+  const motionActive = isMotionActiveStatus(run.status);
   return (
     <div
       className={cn(
         "rounded-lg border bg-card p-4 shadow-sm transition hover:border-primary",
+        run.status === "running" && "run-row-active",
         selected ? "border-primary ring-1 ring-primary" : "border-border"
       )}
     >
@@ -3019,10 +3195,11 @@ function RunRow({
             <div className="text-xs text-muted-foreground">{run.workflowId} | {formatDate(run.createdAt)}</div>
             <div className="truncate text-sm text-muted-foreground">{run.currentStep ?? "Queued"}</div>
           </div>
-          <Progress value={run.progress} className="mt-3" />
+          <Progress value={run.progress} active={motionActive} className="mt-3" />
         </button>
         <div className="flex shrink-0 flex-col items-end gap-2">
-          <Badge className={cn("border", statusTone(run.status))}>{run.status}</Badge>
+          {isCliRun(run) ? <Badge className={cn("border", toneClassNames.neutral)}>{runOriginLabel(run)}</Badge> : null}
+          <RunStatusBadge status={run.status} />
           {workflowUnavailable ? <Badge className={cn("border", toneClassNames.danger)}>plugin missing</Badge> : null}
           <Button
             type="button"
@@ -3134,21 +3311,31 @@ function ImagePicker({
   onChoose(): void;
   onClear(): void;
 }): JSX.Element {
+  const fieldLabel = label.replace(/\s+\*$/, "");
   const statusText = files.length === 0 ? emptyText : files.length === 1 ? files[0] : `${files.length} selected`;
 
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       <div className="flex items-center justify-between gap-3">
-        <Label>{label}</Label>
-        <span className="min-w-0 truncate text-xs text-muted-foreground">{statusText}</span>
+        <Label className="shrink-0">{label}</Label>
+        <span className="min-w-0 flex-1 truncate text-right text-xs text-muted-foreground">{statusText}</span>
       </div>
-      <div className="grid grid-cols-[1fr_auto] gap-2">
-        <Button type="button" variant="outline" size="sm" className="justify-start" onClick={onChoose}>
+      <div className="grid grid-cols-[minmax(0,1fr)_2rem] gap-2">
+        <Button type="button" variant="outline" size="sm" className="min-w-0 justify-start" onClick={onChoose}>
           <Upload className="h-4 w-4" />
-          {chooseLabel}
+          <span className="truncate">{chooseLabel}</span>
         </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onClear} disabled={files.length === 0}>
-          Clear
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-8 w-8"
+          onClick={onClear}
+          disabled={files.length === 0}
+          aria-label={`Clear ${fieldLabel}`}
+          title={`Clear ${fieldLabel}`}
+        >
+          <X className="h-4 w-4" />
         </Button>
       </div>
     </div>

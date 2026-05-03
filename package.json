@@ -5,13 +5,17 @@
   "license": "GPL-3.0-only",
   "description": "Local desktop app for Based BLINK browser workflow automation.",
   "main": "dist/main/main.js",
+  "bin": {
+    "blink": "dist/cli/index.js"
+  },
   "scripts": {
     "dev": "npm run build:main && concurrently -k -n renderer,electron -c cyan,green \"vite --host 127.0.0.1 --port 5173\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist/main/main.js\"",
-    "build": "npm run build:main && npm run build:plugins && vite build",
+    "build": "npm run build:main && npm run build:cli && npm run build:plugins && vite build",
     "build:main": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
+    "build:cli": "tsc -p tsconfig.cli.json",
     "build:plugins": "tsc -p plugins/workflows/based-blink-hunyuan/tsconfig.json && tsc -p plugins/workflows/based-blink-chatgpt/tsconfig.json",
     "start": "npm run build && electron dist/main/main.js",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.preload.json && npm run typecheck:plugins",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.cli.json && npm run typecheck:plugins",
     "typecheck:plugins": "tsc --noEmit -p plugins/workflows/based-blink-hunyuan/tsconfig.json && tsc --noEmit -p plugins/workflows/based-blink-chatgpt/tsconfig.json",
     "test": "npm run build:plugins && vitest run",
     "test:watch": "vitest",
@@ -45,12 +49,12 @@
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
-    "electron": "^33.2.1",
+    "electron": "^41.5.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
-    "vitest": "^2.1.8",
+    "vitest": "^4.1.5",
     "wait-on": "^8.0.1"
   }
 }

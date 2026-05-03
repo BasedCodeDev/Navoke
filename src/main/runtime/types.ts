@@ -23,6 +23,19 @@ export interface RuntimePaths {
   dbPath: string;
 }
 
+export type RunOriginSource = "ui" | "cli";
+
+export type RunOrigin =
+  | { source: "ui" }
+  | {
+      source: "cli";
+      agentName?: string;
+      command?: string;
+      cwd?: string;
+      pid?: number;
+      cliVersion?: string;
+    };
+
 export interface RunRecord {
   id: string;
   workflowId: string;
@@ -31,6 +44,7 @@ export interface RunRecord {
   pluginVersion?: string | null;
   pluginApiVersion?: string | null;
   pluginSource?: PluginSource | "unknown" | null;
+  origin: RunOrigin;
   name: string;
   runDir: string | null;
   status: RunStatus;

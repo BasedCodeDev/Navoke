@@ -5,6 +5,7 @@ import { RuntimeEventBus } from "./eventBus";
 import type { SqliteStore } from "../db/sqliteStore";
 import type {
   ArtifactRecord,
+  RunOrigin,
   RunRecord,
   RuntimePaths,
   WorkflowContext,
@@ -14,6 +15,7 @@ import type {
   WorkflowRegistry
 } from "./types";
 import { ensureRunDataDirs, getRunArtifactDir, getRunDir, getRunInputDir, getRunOutputArtifactDir } from "./paths";
+import { normalizeRunOrigin } from "./runOrigin";
 import { copyFileToDir, writeJson } from "../utils/files";
 
 function createId(): string {
@@ -67,10 +69,11 @@ export class LocalWorkflowRunner {
     this.workflows = normalizeWorkflowRegistry(workflows);
   }
 
-  enqueue(input: { workflowId: string; name?: string; workflowInput: unknown }): RunRecord {
+  enqueue(input: { workflowId: string; name?: string; workflowInput: unknown; origin?: unknown }): RunRecord {
     const registration = this.workflows.get(input.workflowId);
     if (!registration) throw new Error(`Unknown workflow: ${input.workflowId}`);
     const workflow = registration.definition;
+    const origin = normalizeRunOrigin(input.origin);
 
     const parsed = workflow.inputSchema.safeParse(input.workflowInput);
     if (!parsed.success) {
@@ -91,6 +94,7 @@ export class LocalWorkflowRunner {
         runName,
         runDir,
         plugin: registration.plugin,
+        origin,
         originalInput: parsed.data,
         copiedInput: preparedInput.input,
         fileMappings: preparedInput.fileMappings
@@ -105,6 +109,7 @@ export class LocalWorkflowRunner {
       pluginVersion: registration.plugin.version,
       pluginApiVersion: registration.plugin.apiVersion,
       pluginSource: registration.plugin.source,
+      origin,
       name: runName,
       runDir,
       status: "queued",
@@ -537,7 +542,8 @@ function copyWorkflowInputFiles(
 
   for (const field of fileFields) {
     const value = input[field.name];
-    if (typeof value === "string" && value.trim()) {
+    if (typeof value === "string") {
+      if (value.trim().length === 0) continue;
       const copiedPath = copyFileToDir(value, path.join(inputDir, field.name), "01-");
       fileMappings.push({
         field: field.name,
@@ -549,21 +555,22 @@ function copyWorkflowInputFiles(
       copiedInput[field.name] = copiedPath;
       continue;
     }
-    if (!Array.isArray(value)) continue;
 
-    const copiedPaths = value.map((filePath, index) => {
-      if (typeof filePath !== "string") return filePath;
-      const copiedPath = copyFileToDir(filePath, path.join(inputDir, field.name), `${String(index + 1).padStart(2, "0")}-`);
-      fileMappings.push({
-        field: field.name,
-        index,
-        name: path.basename(copiedPath),
-        originalPath: filePath,
-        copiedPath
+    if (Array.isArray(value)) {
+      const copiedPaths = value.map((filePath, index) => {
+        if (typeof filePath !== "string") return filePath;
+        const copiedPath = copyFileToDir(filePath, path.join(inputDir, field.name), `${String(index + 1).padStart(2, "0")}-`);
+        fileMappings.push({
+          field: field.name,
+          index,
+          name: path.basename(copiedPath),
+          originalPath: filePath,
+          copiedPath
+        });
+        return copiedPath;
       });
-      return copiedPath;
-    });
-    copiedInput[field.name] = copiedPaths;
+      copiedInput[field.name] = copiedPaths;
+    }
   }
 
   return { input: copiedInput, fileMappings };
@@ -572,6 +579,7 @@ function copyWorkflowInputFiles(
 function buildPromptsDocument(input: {
   workflow: WorkflowDefinition;
   plugin: WorkflowPluginMetadata;
+  origin: RunOrigin;
   runId: string;
   runName: string;
   runDir: string;
@@ -597,6 +605,7 @@ function buildPromptsDocument(input: {
     },
     runDir: input.runDir,
     createdAt: new Date().toISOString(),
+    origin: input.origin,
     prompts: {
       masterPrompt: original.masterPrompt ?? null,
       prompt: original.prompt ?? null,

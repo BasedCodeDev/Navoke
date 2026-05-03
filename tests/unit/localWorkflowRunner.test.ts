@@ -84,6 +84,7 @@ describe("LocalWorkflowRunner", () => {
     expect(run.workflowVersion).toBe("0.0.0");
     expect(run.pluginId).toBe("test.plugin");
     expect(run.pluginVersion).toBe("1.2.3");
+    expect(run.origin).toEqual({ source: "ui" });
     expect(fs.existsSync(path.join(run.runDir!, "prompts.json"))).toBe(true);
 
     await waitFor(() => store.getRun(run.id)?.status === "completed");
@@ -92,6 +93,54 @@ describe("LocalWorkflowRunner", () => {
     expect(store.listEvents(run.id).length).toBeGreaterThan(1);
     expect(store.getRun(run.id)?.output).toEqual({ ok: true });
 
+    store.close();
+  });
+
+  it("stores CLI origin metadata on runs and prompt records", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const workflow: WorkflowDefinition<{ message: string }, { ok: boolean }> = {
+      manifest: {
+        id: "test.cli-origin",
+        title: "CLI Origin Workflow",
+        description: "Runtime origin test workflow",
+        category: "utility",
+        version: "0.0.0",
+        concurrency: 1,
+        inputFields: [],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({ message: z.string() }),
+      outputSchema: z.object({ ok: z.boolean() }),
+      async run() {
+        return { ok: true };
+      }
+    };
+    const runner = new LocalWorkflowRunner(new Map([[workflow.manifest.id, workflow]]), store, paths, new RuntimeEventBus());
+
+    const run = runner.enqueue({
+      workflowId: workflow.manifest.id,
+      name: "CLI origin",
+      workflowInput: { message: "test" },
+      origin: {
+        source: "cli",
+        agentName: "codex",
+        command: "blink run test.cli-origin --input input.json --wait",
+        cwd: dir,
+        pid: 123,
+        cliVersion: "0.1.0"
+      }
+    });
+
+    expect(run.origin).toMatchObject({ source: "cli", agentName: "codex", pid: 123 });
+    expect(store.getRun(run.id)?.origin).toMatchObject({ source: "cli", command: "blink run test.cli-origin --input input.json --wait" });
+    const prompts = JSON.parse(fs.readFileSync(path.join(run.runDir!, "prompts.json"), "utf8")) as { origin: unknown };
+    expect(prompts.origin).toMatchObject({ source: "cli", agentName: "codex" });
+
+    await waitFor(() => store.getRun(run.id)?.status === "completed");
     store.close();
   });
 

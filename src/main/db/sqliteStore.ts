@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import initSqlJs, { type Database as SqlJsDatabase } from "sql.js";
 import { fileSize } from "../utils/files";
-import type { ArtifactRecord, ArtifactKind, RunRecord, RunStatus, RuntimeEvent } from "../runtime/types";
+import { normalizeRunOrigin } from "../runtime/runOrigin";
+import type { ArtifactRecord, ArtifactKind, RunOrigin, RunRecord, RunStatus, RuntimeEvent } from "../runtime/types";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -22,6 +23,7 @@ function rowToRun(row: Record<string, unknown>): RunRecord {
     pluginVersion: row.plugin_version ? String(row.plugin_version) : null,
     pluginApiVersion: row.plugin_api_version ? String(row.plugin_api_version) : null,
     pluginSource: row.plugin_source ? (String(row.plugin_source) as RunRecord["pluginSource"]) : null,
+    origin: normalizeRunOrigin(parseJson(row.origin_json)),
     name: String(row.name),
     runDir: row.run_dir ? String(row.run_dir) : null,
     status: String(row.status) as RunStatus,
@@ -91,6 +93,7 @@ export class SqliteStore {
     pluginVersion?: string | null;
     pluginApiVersion?: string | null;
     pluginSource?: RunRecord["pluginSource"];
+    origin?: RunOrigin;
     name: string;
     runDir?: string | null;
     status: RunStatus;
@@ -100,8 +103,8 @@ export class SqliteStore {
     this.db.run(
       `insert into runs (
         id, workflow_id, workflow_version, plugin_id, plugin_version, plugin_api_version, plugin_source,
-        name, run_dir, status, current_step, progress, input_json, output_json, error, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, 0, ?, null, null, ?, ?)`,
+        origin_json, name, run_dir, status, current_step, progress, input_json, output_json, error, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, 0, ?, null, null, ?, ?)`,
       [
         input.id,
         input.workflowId,
@@ -110,6 +113,7 @@ export class SqliteStore {
         input.pluginVersion ?? null,
         input.pluginApiVersion ?? null,
         input.pluginSource ?? null,
+        JSON.stringify(normalizeRunOrigin(input.origin)),
         input.name,
         input.runDir ?? null,
         input.status,
@@ -293,6 +297,7 @@ export class SqliteStore {
         plugin_version text,
         plugin_api_version text,
         plugin_source text,
+        origin_json text,
         name text not null,
         run_dir text,
         status text not null,
@@ -338,6 +343,7 @@ export class SqliteStore {
     this.addColumnIfMissing("runs", "plugin_version text");
     this.addColumnIfMissing("runs", "plugin_api_version text");
     this.addColumnIfMissing("runs", "plugin_source text");
+    this.addColumnIfMissing("runs", "origin_json text");
   }
 
   private addColumnIfMissing(table: string, columnDefinition: string): void {

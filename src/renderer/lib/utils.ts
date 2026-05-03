@@ -30,3 +30,9 @@ export function statusTone(status: string): string {
       return toneClassNames.neutral;
   }
 }
+
+const MOTION_ACTIVE_STATUSES = new Set(["queued", "running", "pausing"]);
+
+export function isMotionActiveStatus(status: string): boolean {
+  return MOTION_ACTIVE_STATUSES.has(status);
+}

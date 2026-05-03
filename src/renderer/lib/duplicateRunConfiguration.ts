@@ -1,7 +1,9 @@
 import type { RunRecord, SystemInfo, WorkflowSummary } from "./api";
 import {
   DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
+  HUNYUAN_VIEW_FIELDS,
   HUNYUAN_WORKFLOW_ID,
+  collectHunyuanInputFilePaths,
   emptyHunyuanViewFiles,
   type HunyuanExportFormat,
   type HunyuanFaceCount,
@@ -70,27 +72,7 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     filePaths: []
   };
 
-  if (run.workflowId === HUNYUAN_WORKFLOW_ID) {
-    base.hunyuanViewFiles = {
-      frontImage: stringFieldAsArray(input, "frontImage"),
-      backImage: stringFieldAsArray(input, "backImage"),
-      leftImage: stringFieldAsArray(input, "leftImage"),
-      rightImage: stringFieldAsArray(input, "rightImage"),
-      topImage: stringFieldAsArray(input, "topImage"),
-      bottomImage: stringFieldAsArray(input, "bottomImage"),
-      left45Image: stringFieldAsArray(input, "left45Image"),
-      right45Image: stringFieldAsArray(input, "right45Image")
-    };
-    base.prompt = stringField(input, "prompt");
-    base.profileName = stringField(input, "profileName") || DEFAULT_PROFILE_NAME;
-    base.pauseForManualLogin = booleanField(input, "pauseForManualLogin", true);
-    base.hunyuanModelFaceCount = hunyuanFaceCountField(input, "modelFaceCount");
-    base.hunyuanRetopologyType = hunyuanRetopologyTypeField(input, "retopologyType");
-    base.hunyuanGenerateTexture = booleanField(input, "generateTexture", true);
-    base.hunyuanAutoRig = booleanField(input, "autoRig", false);
-    base.hunyuanExportFormat = hunyuanExportFormatField(input, "exportFormat");
-    base.hunyuanSelectorsJson = jsonObjectField(input, "selectors") ?? DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON;
-  } else if (isChatGptWorkflowInput(input, options.workflow)) {
+  if (isChatGptWorkflowInput(input, options.workflow)) {
     if ("sourceImages" in input || "prompts" in input) {
       base.sourceFiles = stringArrayField(input, "sourceImages");
       base.sequencePrompts = stringArrayField(input, "prompts");
@@ -101,6 +83,18 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     }
     base.masterPrompt = stringField(input, "masterPrompt");
     base.chatGptTabSelection = resolveDuplicateChatGptTabSelection(input, options);
+  } else if (isHunyuanWorkflowInput(run.workflowId, input, options.workflow)) {
+    base.hunyuanViewFiles = readHunyuanViewFiles(input);
+    base.selectedFiles = Object.values(base.hunyuanViewFiles).flat();
+    base.prompt = stringField(input, "prompt");
+    base.profileName = stringField(input, "profileName") || DEFAULT_PROFILE_NAME;
+    base.pauseForManualLogin = booleanField(input, "pauseForManualLogin", true);
+    base.hunyuanModelFaceCount = enumField(input, "modelFaceCount", ["1.5m", "1m", "500k", "50k"], "50k");
+    base.hunyuanRetopologyType = enumField(input, "retopologyType", ["triangle", "quad"], "quad");
+    base.hunyuanGenerateTexture = booleanField(input, "generateTexture", true);
+    base.hunyuanAutoRig = booleanField(input, "autoRig", false);
+    base.hunyuanExportFormat = enumField(input, "exportFormat", ["obj", "glb"], "obj");
+    base.hunyuanSelectorsJson = selectorsJsonField(input);
   } else if (isBrowserProfileWorkflowInput(input, options.workflow)) {
     base.selectedFiles = stringArrayField(input, "images");
     base.prompt = stringField(input, "prompt");
@@ -124,6 +118,10 @@ function isBrowserProfileWorkflowInput(input: Record<string, unknown>, workflow:
   return Boolean(workflow?.manifest.uiCapabilities?.includes("browser.profile")) || "profileName" in input || "pauseForManualLogin" in input;
 }
 
+function isHunyuanWorkflowInput(workflowId: string, input: Record<string, unknown>, workflow: WorkflowSummary | undefined): boolean {
+  return workflowId === HUNYUAN_WORKFLOW_ID || workflow?.manifest.id === HUNYUAN_WORKFLOW_ID || "frontImage" in input;
+}
+
 export function collectRunInputFilePaths(input: unknown): string[] {
   const record = asRecord(input);
   return uniqueStrings([
@@ -131,16 +129,7 @@ export function collectRunInputFilePaths(input: unknown): string[] {
     ...stringArrayField(record, "referenceImages"),
     ...stringArrayField(record, "subjectImages"),
     ...stringArrayField(record, "sourceImages"),
-    ...[
-      "frontImage",
-      "backImage",
-      "leftImage",
-      "rightImage",
-      "topImage",
-      "bottomImage",
-      "left45Image",
-      "right45Image"
-    ].map((field) => stringField(record, field))
+    ...collectHunyuanInputFilePaths(record)
   ]);
 }
 
@@ -174,11 +163,6 @@ function stringArrayField(record: Record<string, unknown>, field: string): strin
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function stringFieldAsArray(record: Record<string, unknown>, field: string): string[] {
-  const value = stringField(record, field);
-  return value ? [value] : [];
-}
-
 function stringField(record: Record<string, unknown>, field: string): string {
   const value = record[field];
   return typeof value === "string" ? value : "";
@@ -189,29 +173,36 @@ function booleanField(record: Record<string, unknown>, field: string, fallback: 
   return typeof value === "boolean" ? value : fallback;
 }
 
-function hunyuanFaceCountField(record: Record<string, unknown>, field: string): HunyuanFaceCount {
-  const value = stringField(record, field);
-  return value === "1.5m" || value === "1m" || value === "500k" || value === "50k" ? value : "50k";
-}
-
-function hunyuanRetopologyTypeField(record: Record<string, unknown>, field: string): HunyuanRetopologyType {
-  const value = stringField(record, field);
-  return value === "triangle" || value === "quad" ? value : "quad";
-}
-
-function hunyuanExportFormatField(record: Record<string, unknown>, field: string): HunyuanExportFormat {
-  const value = stringField(record, field);
-  return value === "obj" || value === "glb" ? value : "obj";
-}
-
-function jsonObjectField(record: Record<string, unknown>, field: string): string | null {
+function enumField<T extends string>(record: Record<string, unknown>, field: string, values: T[], fallback: T): T {
   const value = record[field];
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return `${JSON.stringify(value, null, 2)}\n`;
+  return typeof value === "string" && values.includes(value as T) ? (value as T) : fallback;
+}
+
+function selectorsJsonField(record: Record<string, unknown>): string {
+  const selectors = record.selectors;
+  if (!selectors || typeof selectors !== "object" || Array.isArray(selectors)) return DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON;
+  return `${JSON.stringify(selectors, null, 2)}\n`;
+}
+
+function readHunyuanViewFiles(input: Record<string, unknown>): HunyuanViewFiles {
+  const viewFiles = emptyHunyuanViewFiles();
+  for (const field of HUNYUAN_VIEW_FIELDS) {
+    const value = input[field.field];
+    if (typeof value === "string" && value.length > 0) {
+      viewFiles[field.field] = [value];
+    }
+  }
+
+  if (Object.values(viewFiles).every((files) => files.length === 0)) {
+    const legacyImages = stringArrayField(input, "images");
+    if (legacyImages[0]) viewFiles.frontImage = [legacyImages[0]];
+    if (legacyImages[1]) viewFiles.backImage = [legacyImages[1]];
+  }
+  return viewFiles;
 }
 
 function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
+  return [...new Set(values)];
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
