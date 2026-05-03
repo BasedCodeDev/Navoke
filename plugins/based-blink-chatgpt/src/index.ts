@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type * as zod from "zod";
 import type {
   ChatGptExtensionTaskTarget,
@@ -20,6 +20,20 @@ export interface ChatGptPage {
   clientId?: string;
   routingToken?: string;
   capturedAt: string;
+}
+
+const CHATGPT_NEW_TAB_URL = "https://chatgpt.com/";
+const CHATGPT_TAB_ROUTING_PARAM = "based-blink-tab";
+
+function buildNewChatGptTabUrl(routingToken: string): string {
+  const url = new URL(CHATGPT_NEW_TAB_URL);
+  url.hash = `${CHATGPT_TAB_ROUTING_PARAM}=${encodeURIComponent(routingToken)}`;
+  return url.toString();
+}
+
+function createDefaultChatGptTabTarget(): { mode: "new"; routingToken: string; url: string } {
+  const routingToken = randomUUID();
+  return { mode: "new", routingToken, url: buildNewChatGptTabUrl(routingToken) };
 }
 
 export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
@@ -68,29 +82,31 @@ const checkpointSchema = z.object({
   pausedSubject: pausedSubjectSchema.nullable().optional()
 });
 
+const chatGptTabSchema = z
+  .discriminatedUnion("mode", [
+    z.object({ mode: z.literal("any") }),
+    z.object({
+      mode: z.literal("existing"),
+      clientId: z.string().trim().min(1, "Choose a ChatGPT tab."),
+      url: z.string().trim().optional(),
+      title: z.string().trim().optional()
+    }),
+    z.object({
+      mode: z.literal("new"),
+      routingToken: z.string().trim().min(8, "New-tab routing token is required."),
+      url: z.string().trim().optional(),
+      title: z.string().trim().optional()
+    })
+  ])
+  .default(createDefaultChatGptTabTarget);
+
 const inputSchema = z.object({
   referenceImages: z.array(z.string()).optional().default([]),
   subjectImages: z.array(z.string()).min(1, "Choose at least one subject image."),
   masterPrompt: z.string().min(1, "Master prompt is required."),
   subjectInstruction: z.string().optional().default(""),
   timeoutMinutes: z.number().min(1).max(240).optional().default(60),
-  chatGptTab: z
-    .discriminatedUnion("mode", [
-      z.object({ mode: z.literal("any") }),
-      z.object({
-        mode: z.literal("existing"),
-        clientId: z.string().trim().min(1, "Choose a ChatGPT tab."),
-        url: z.string().trim().optional(),
-        title: z.string().trim().optional()
-      }),
-      z.object({
-        mode: z.literal("new"),
-        routingToken: z.string().trim().min(8, "New-tab routing token is required."),
-        url: z.string().trim().optional(),
-        title: z.string().trim().optional()
-      })
-    ])
-    .default({ mode: "any" }),
+  chatGptTab: chatGptTabSchema,
   selectors: selectorsSchema
 });
 
@@ -140,23 +156,7 @@ const sequenceInputSchema = z.object({
   prompts: promptSequenceSchema,
   masterPrompt: z.string().optional().default("").transform((value) => value.trim()),
   timeoutMinutes: z.number().min(1).max(240).optional().default(60),
-  chatGptTab: z
-    .discriminatedUnion("mode", [
-      z.object({ mode: z.literal("any") }),
-      z.object({
-        mode: z.literal("existing"),
-        clientId: z.string().trim().min(1, "Choose a ChatGPT tab."),
-        url: z.string().trim().optional(),
-        title: z.string().trim().optional()
-      }),
-      z.object({
-        mode: z.literal("new"),
-        routingToken: z.string().trim().min(8, "New-tab routing token is required."),
-        url: z.string().trim().optional(),
-        title: z.string().trim().optional()
-      })
-    ])
-    .default({ mode: "any" }),
+  chatGptTab: chatGptTabSchema,
   selectors: selectorsSchema
 });
 

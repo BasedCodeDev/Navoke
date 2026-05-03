@@ -21,7 +21,7 @@ The missing pieces are dynamic discovery, plugin metadata, stable public SDK bou
 Plugins are installed under the user's app data directory:
 
 ```text
-<userData>/plugins/workflows/<pluginId>/<pluginVersion>/
+<userData>/plugins/<pluginId>/<pluginVersion>/
 ```
 
 Each installed plugin version contains a `plugin.json` manifest:

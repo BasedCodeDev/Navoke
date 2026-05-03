@@ -10,6 +10,17 @@ exports.normalizeChatGptExtensionSequenceOutputs = normalizeChatGptExtensionSequ
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const node_crypto_1 = require("node:crypto");
+const CHATGPT_NEW_TAB_URL = "https://chatgpt.com/";
+const CHATGPT_TAB_ROUTING_PARAM = "based-blink-tab";
+function buildNewChatGptTabUrl(routingToken) {
+    const url = new URL(CHATGPT_NEW_TAB_URL);
+    url.hash = `${CHATGPT_TAB_ROUTING_PARAM}=${encodeURIComponent(routingToken)}`;
+    return url.toString();
+}
+function createDefaultChatGptTabTarget() {
+    const routingToken = (0, node_crypto_1.randomUUID)();
+    return { mode: "new", routingToken, url: buildNewChatGptTabUrl(routingToken) };
+}
 function createWorkflows(sdk) {
     const { z } = sdk.schema;
     const chatgpt = sdk.extension.chatgpt;
@@ -50,29 +61,30 @@ function createWorkflows(sdk) {
         outputMappings: z.array(outputMappingSchema),
         pausedSubject: pausedSubjectSchema.nullable().optional()
     });
+    const chatGptTabSchema = z
+        .discriminatedUnion("mode", [
+        z.object({ mode: z.literal("any") }),
+        z.object({
+            mode: z.literal("existing"),
+            clientId: z.string().trim().min(1, "Choose a ChatGPT tab."),
+            url: z.string().trim().optional(),
+            title: z.string().trim().optional()
+        }),
+        z.object({
+            mode: z.literal("new"),
+            routingToken: z.string().trim().min(8, "New-tab routing token is required."),
+            url: z.string().trim().optional(),
+            title: z.string().trim().optional()
+        })
+    ])
+        .default(createDefaultChatGptTabTarget);
     const inputSchema = z.object({
         referenceImages: z.array(z.string()).optional().default([]),
         subjectImages: z.array(z.string()).min(1, "Choose at least one subject image."),
         masterPrompt: z.string().min(1, "Master prompt is required."),
         subjectInstruction: z.string().optional().default(""),
         timeoutMinutes: z.number().min(1).max(240).optional().default(60),
-        chatGptTab: z
-            .discriminatedUnion("mode", [
-            z.object({ mode: z.literal("any") }),
-            z.object({
-                mode: z.literal("existing"),
-                clientId: z.string().trim().min(1, "Choose a ChatGPT tab."),
-                url: z.string().trim().optional(),
-                title: z.string().trim().optional()
-            }),
-            z.object({
-                mode: z.literal("new"),
-                routingToken: z.string().trim().min(8, "New-tab routing token is required."),
-                url: z.string().trim().optional(),
-                title: z.string().trim().optional()
-            })
-        ])
-            .default({ mode: "any" }),
+        chatGptTab: chatGptTabSchema,
         selectors: selectorsSchema
     });
     const outputSchema = z.object({
@@ -112,23 +124,7 @@ function createWorkflows(sdk) {
         prompts: promptSequenceSchema,
         masterPrompt: z.string().optional().default("").transform((value) => value.trim()),
         timeoutMinutes: z.number().min(1).max(240).optional().default(60),
-        chatGptTab: z
-            .discriminatedUnion("mode", [
-            z.object({ mode: z.literal("any") }),
-            z.object({
-                mode: z.literal("existing"),
-                clientId: z.string().trim().min(1, "Choose a ChatGPT tab."),
-                url: z.string().trim().optional(),
-                title: z.string().trim().optional()
-            }),
-            z.object({
-                mode: z.literal("new"),
-                routingToken: z.string().trim().min(8, "New-tab routing token is required."),
-                url: z.string().trim().optional(),
-                title: z.string().trim().optional()
-            })
-        ])
-            .default({ mode: "any" }),
+        chatGptTab: chatGptTabSchema,
         selectors: selectorsSchema
     });
     const sequenceOutputSchema = z.object({

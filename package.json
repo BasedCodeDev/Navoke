@@ -13,10 +13,10 @@
     "build": "npm run build:main && npm run build:cli && npm run build:plugins && vite build",
     "build:main": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
     "build:cli": "tsc -p tsconfig.cli.json",
-    "build:plugins": "tsc -p plugins/workflows/based-blink-hunyuan/tsconfig.json && tsc -p plugins/workflows/based-blink-chatgpt/tsconfig.json",
+    "build:plugins": "tsc -p plugins/workflows/based-blink-hunyuan/tsconfig.json && tsc -p plugins/based-blink-chatgpt/tsconfig.json",
     "start": "npm run build && electron dist/main/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.cli.json && npm run typecheck:plugins",
-    "typecheck:plugins": "tsc --noEmit -p plugins/workflows/based-blink-hunyuan/tsconfig.json && tsc --noEmit -p plugins/workflows/based-blink-chatgpt/tsconfig.json",
+    "typecheck:plugins": "tsc --noEmit -p plugins/workflows/based-blink-hunyuan/tsconfig.json && tsc --noEmit -p plugins/based-blink-chatgpt/tsconfig.json",
     "test": "npm run build:plugins && vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test"

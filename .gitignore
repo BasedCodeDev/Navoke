@@ -9,11 +9,10 @@ release/
 .vite/
 *.tsbuildinfo
 !plugins/
-!plugins/workflows/
-!plugins/workflows/*/
-!plugins/workflows/*/dist/
-plugins/workflows/*/dist/*
-!plugins/workflows/*/dist/index.js
+!plugins/*/
+!plugins/*/dist/
+plugins/*/dist/*
+!plugins/*/dist/index.js
 
 # Test and coverage output
 coverage/

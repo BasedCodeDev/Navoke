@@ -24,6 +24,8 @@ function createId(): string {
 
 const DELETE_WAIT_TIMEOUT_MS = 30_000;
 const ACTIVE_RENAME_STATUSES = new Set(["queued", "running", "pausing", "waiting_manual"]);
+const CHATGPT_ORIGIN = "https://chatgpt.com";
+const CHATGPT_ROUTING_TOKEN_PARAM = "based-blink-tab";
 const INLINE_WORKFLOW_PLUGIN: WorkflowPluginMetadata = {
   id: "runtime.inline",
   name: "Runtime Inline Workflow",
@@ -54,6 +56,10 @@ interface RunningRun {
   resume?: () => void;
 }
 
+interface LocalWorkflowRunnerOptions {
+  openExternalUrl?(url: string): void | Promise<void>;
+}
+
 export class LocalWorkflowRunner {
   private queue: QueuedRun[] = [];
   private readonly running = new Map<string, RunningRun>();
@@ -64,7 +70,8 @@ export class LocalWorkflowRunner {
     workflows: Map<string, WorkflowDefinition | WorkflowRegistration>,
     private readonly store: SqliteStore,
     private readonly paths: RuntimePaths,
-    private readonly eventBus: RuntimeEventBus
+    private readonly eventBus: RuntimeEventBus,
+    private readonly options: LocalWorkflowRunnerOptions = {}
   ) {
     this.workflows = normalizeWorkflowRegistry(workflows);
   }
@@ -125,6 +132,7 @@ export class LocalWorkflowRunner {
       metadata: { source: "run-inputs", artifactDir }
     });
     this.eventBus.publish({ kind: "artifact-added", runId: run.id, artifactId: promptsArtifact.id });
+    this.openCliChatGptTabIfNeeded(run.id, origin, preparedInput.input);
     this.queue.push({ runId: run.id, workflowId: workflow.manifest.id, input: preparedInput.input });
     this.eventBus.publish({ kind: "run-updated", runId: run.id });
     void this.drain();
@@ -527,6 +535,34 @@ export class LocalWorkflowRunner {
         `Installed workflow ${run.workflowId} is provided by ${plugin.id}@${plugin.version}.`
     );
   }
+
+  private openCliChatGptTabIfNeeded(runId: string, origin: RunOrigin, input: unknown): void {
+    if (origin.source !== "cli" || !this.options.openExternalUrl) return;
+    const url = safeRoutedChatGptNewTabUrl(input);
+    if (!url) return;
+
+    try {
+      const opened = this.options.openExternalUrl(url);
+      if (opened && typeof (opened as Promise<void>).catch === "function") {
+        void (opened as Promise<void>).catch((error) => this.recordChatGptTabOpenFailure(runId, url, error));
+      }
+    } catch (error) {
+      this.recordChatGptTabOpenFailure(runId, url, error);
+    }
+  }
+
+  private recordChatGptTabOpenFailure(runId: string, url: string, error: unknown): void {
+    const event = this.store.addEvent({
+      runId,
+      type: "chatgpt.new_tab.open_failed",
+      message: "Could not open routed ChatGPT tab for CLI run",
+      data: {
+        url,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    });
+    this.eventBus.publish({ kind: "event", event });
+  }
 }
 
 function copyWorkflowInputFiles(
@@ -649,6 +685,32 @@ function mappedPathsForField(fileMappings: FileInputMapping[], field: string): A
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function safeRoutedChatGptNewTabUrl(input: unknown): string | null {
+  if (!isRecord(input)) return null;
+  const chatGptTab = input.chatGptTab;
+  if (!isRecord(chatGptTab) || chatGptTab.mode !== "new") return null;
+
+  const routingToken = typeof chatGptTab.routingToken === "string" ? chatGptTab.routingToken.trim() : "";
+  const url = typeof chatGptTab.url === "string" ? chatGptTab.url.trim() : "";
+  if (!routingToken || !url) return null;
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.origin !== CHATGPT_ORIGIN) return null;
+    if (routingTokenFromUrl(parsed) !== routingToken) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function routingTokenFromUrl(url: URL): string {
+  const searchToken = url.searchParams.get(CHATGPT_ROUTING_TOKEN_PARAM)?.trim();
+  if (searchToken) return searchToken;
+  const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  return hash.get(CHATGPT_ROUTING_TOKEN_PARAM)?.trim() ?? "";
 }
 
 function normalizeWorkflowRegistry(workflows: Map<string, WorkflowDefinition | WorkflowRegistration>): WorkflowRegistry {

@@ -7,7 +7,7 @@ import {
   createWorkflows,
   normalizeChatGptExtensionOutputs,
   normalizeChatGptExtensionSequenceOutputs
-} from "../../plugins/workflows/based-blink-chatgpt/src";
+} from "../../plugins/based-blink-chatgpt/src";
 import { CHATGPT_EXTENSION_PROTOCOL_VERSION, extensionBridge, type ExtensionTaskPayload, type ExtensionTaskResult } from "../../src/main/extension/extensionBridge";
 import type { ArtifactRecord, RunRecord, WorkflowContext, WorkflowDefinition } from "../../src/main/runtime/types";
 import { createWorkflowSdk } from "../../src/main/workflowSdk";
@@ -118,6 +118,52 @@ function createWorkflowHarness(options: { subjectCount?: number; previousOutput?
 }
 
 describe("ChatGPT extension workflow output normalization", () => {
+  it("defaults image transform runs to a routed new ChatGPT tab", () => {
+    const parsed = chatGptExtensionImageTransformWorkflow.inputSchema.safeParse({
+      referenceImages: [],
+      subjectImages: ["C:\\tmp\\subject.png"],
+      masterPrompt: "Transform this image.",
+      subjectInstruction: ""
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const data = parsed.data as { chatGptTab: { mode: string; routingToken?: string; url?: string } };
+    const chatGptTab = data.chatGptTab;
+    expect(chatGptTab.mode).toBe("new");
+    expect(chatGptTab.routingToken).toEqual(expect.any(String));
+    expect(chatGptTab.url).toBe(`https://chatgpt.com/#based-blink-tab=${encodeURIComponent(chatGptTab.routingToken!)}`);
+  });
+
+  it("defaults image sequence runs to a routed new ChatGPT tab", () => {
+    const parsed = chatGptExtensionImageSequenceWorkflow.inputSchema.safeParse({
+      sourceImages: ["C:\\tmp\\source.png"],
+      prompts: ["Rotate the image."]
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const data = parsed.data as { chatGptTab: { mode: string; routingToken?: string; url?: string } };
+    const chatGptTab = data.chatGptTab;
+    expect(chatGptTab.mode).toBe("new");
+    expect(chatGptTab.routingToken).toEqual(expect.any(String));
+    expect(chatGptTab.url).toBe(`https://chatgpt.com/#based-blink-tab=${encodeURIComponent(chatGptTab.routingToken!)}`);
+  });
+
+  it("preserves explicit any-tab ChatGPT routing", () => {
+    const parsed = chatGptExtensionImageTransformWorkflow.inputSchema.safeParse({
+      referenceImages: [],
+      subjectImages: ["C:\\tmp\\subject.png"],
+      masterPrompt: "Transform this image.",
+      chatGptTab: { mode: "any" }
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const data = parsed.data as { chatGptTab: unknown };
+    expect(data.chatGptTab).toEqual({ mode: "any" });
+  });
+
   it("marks failed ChatGPT runs recoverable only when they have a checkpoint, page, or target URL", () => {
     const baseRun: RunRecord = {
       id: "run-1",

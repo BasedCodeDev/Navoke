@@ -144,6 +144,87 @@ describe("LocalWorkflowRunner", () => {
     store.close();
   });
 
+  it("opens safe routed ChatGPT tabs for CLI-origin runs only", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const workflow: WorkflowDefinition<{ chatGptTab?: unknown }, { ok: boolean }> = {
+      manifest: {
+        id: "test.chatgpt-cli-open",
+        title: "ChatGPT CLI Open Workflow",
+        description: "Runtime ChatGPT tab opener test workflow",
+        category: "chatgpt",
+        version: "0.0.0",
+        concurrency: 1,
+        inputFields: [],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({ chatGptTab: z.unknown().optional() }),
+      outputSchema: z.object({ ok: z.boolean() }),
+      async run() {
+        return { ok: true };
+      }
+    };
+    const openedUrls: string[] = [];
+    const runner = new LocalWorkflowRunner(
+      new Map([[workflow.manifest.id, workflow]]),
+      store,
+      paths,
+      new RuntimeEventBus(),
+      {
+        openExternalUrl: (url) => {
+          openedUrls.push(url);
+        }
+      }
+    );
+
+    const safeUrl = "https://chatgpt.com/#based-blink-tab=run-token-1";
+    const chatGptTab = { mode: "new", routingToken: "run-token-1", url: safeUrl };
+    runner.enqueue({
+      workflowId: workflow.manifest.id,
+      workflowInput: { chatGptTab },
+      origin: { source: "cli" }
+    });
+    runner.enqueue({
+      workflowId: workflow.manifest.id,
+      workflowInput: { chatGptTab },
+      origin: { source: "ui" }
+    });
+    runner.enqueue({
+      workflowId: workflow.manifest.id,
+      workflowInput: { chatGptTab: { mode: "existing", clientId: "tab-1" } },
+      origin: { source: "cli" }
+    });
+    runner.enqueue({
+      workflowId: workflow.manifest.id,
+      workflowInput: {
+        chatGptTab: {
+          mode: "new",
+          routingToken: "run-token-2",
+          url: "https://example.test/#based-blink-tab=run-token-2"
+        }
+      },
+      origin: { source: "cli" }
+    });
+    runner.enqueue({
+      workflowId: workflow.manifest.id,
+      workflowInput: {
+        chatGptTab: {
+          mode: "new",
+          routingToken: "run-token-3",
+          url: "https://chatgpt.com/#based-blink-tab=other-token"
+        }
+      },
+      origin: { source: "cli" }
+    });
+
+    expect(openedUrls).toEqual([safeUrl]);
+    await waitFor(() => store.listRuns().filter((run) => run.status === "completed").length === 5);
+    store.close();
+  });
+
   it("deletes a queued run and its artifact directory", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
     tempDirs.push(dir);

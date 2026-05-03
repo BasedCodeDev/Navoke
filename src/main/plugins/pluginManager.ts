@@ -24,7 +24,7 @@ export class PluginManager {
   private workflowRegistrations: WorkflowRegistration[] = [];
 
   constructor(userDataDir: string) {
-    this.pluginRoot = path.join(userDataDir, "plugins", "workflows");
+    this.pluginRoot = path.join(userDataDir, "plugins");
   }
 
   get rootDir(): string {

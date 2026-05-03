@@ -111,6 +111,7 @@ import {
   type HunyuanViewFiles
 } from "@/lib/hunyuanWorkflow";
 import { isRecoverableFailedChatGptRun, resolveChatGptFocusTarget } from "@/lib/chatGptTabFocus";
+import { resolveChatGptTabSelection } from "@/lib/chatGptTabRouting";
 import { activeCliAgentRuns, isCliRun, runOriginCommand, runOriginLabel } from "@/lib/runOrigin";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
 import { Badge } from "@/components/ui/badge";
@@ -479,9 +480,11 @@ export default function App(): JSX.Element {
   useEffect(() => {
     if (!isChatGptExtensionWorkflow) return;
     setChatGptTabSelection((current) => {
-      if (current === NEW_CHATGPT_TAB_VALUE) return current;
-      if (current && compatibleExtensionClients.some((client) => client.id === current)) return current;
-      return compatibleExtensionClients[0]?.id ?? NEW_CHATGPT_TAB_VALUE;
+      return resolveChatGptTabSelection(
+        current,
+        compatibleExtensionClients.map((client) => client.id),
+        NEW_CHATGPT_TAB_VALUE
+      );
     });
   }, [compatibleExtensionClients, isChatGptExtensionWorkflow]);
 

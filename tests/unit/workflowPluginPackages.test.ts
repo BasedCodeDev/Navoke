@@ -50,7 +50,7 @@ describe("workflow plugin packages", () => {
 
   it("loads the ChatGPT workflow package with image transform and image sequence workflows", async () => {
     const manager = new PluginManager(tempDir());
-    await manager.installFromPath(path.join(repoRoot, "plugins", "workflows", "based-blink-chatgpt"));
+    await manager.installFromPath(path.join(repoRoot, "plugins", "based-blink-chatgpt"));
 
     expect(manager.listPlugins()[0]).toMatchObject({
       pluginId: "based-blink.chatgpt",
