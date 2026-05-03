@@ -60,6 +60,8 @@ class CliUsageError extends Error {
   exitCode = 2;
 }
 
+const MUTATING_COMMANDS = new Set<ParsedCommand["kind"]>(["run", "plugin-install", "pause", "resume", "cancel", "delete"]);
+
 export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): Promise<number> {
   const stdout = deps.stdout ?? ((line: string) => process.stdout.write(line));
   const stderr = deps.stderr ?? ((line: string) => process.stderr.write(line));
@@ -86,6 +88,7 @@ export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): 
       ...(runtime.runtimeFile ? { runtimeFile: runtime.runtimeFile } : {}),
       ...(runtime.staleRuntimeFile ? { staleRuntimeFile: runtime.staleRuntimeFile } : {})
     };
+    assertSafeRuntimeForCommand(parsed, runtime);
 
     switch (parsed.kind) {
       case "status": {
@@ -182,6 +185,17 @@ export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): 
     });
     return exitCode;
   }
+}
+
+function assertSafeRuntimeForCommand(command: ParsedCommand, runtime: RuntimeDiscovery): void {
+  if (!MUTATING_COMMANDS.has(command.kind) || runtime.source !== "default") return;
+  const staleHint = runtime.staleRuntimeFile
+    ? ` The runtime file at ${runtime.staleRuntimeFile} is stale or invalid.`
+    : "";
+  throw new CliUsageError(
+    `Refusing to run mutating command "${command.kind}" using the default BLINK API ${DEFAULT_API_URL}.${staleHint} ` +
+      "Pass --project <project-dir>, pass --api-url <url>, or set BASED_BLINK_API_URL so the target app is explicit."
+  );
 }
 
 export function parseBlinkArgs(argv: string[]): ParsedCommand {
@@ -398,13 +412,13 @@ function commandList(): string[] {
     "blink status",
     "blink workflows",
     "blink workflow <workflowId>",
-    "blink run <workflowId> --input <json-file> [--name <name>] [--agent <name>] [--wait]",
+    "blink --project <project-dir> run <workflowId> --input <json-file> [--name <name>] [--agent <name>] [--wait]",
     "blink runs [--active]",
     "blink get <runId>",
     "blink watch <runId>",
-    "blink pause|resume|cancel|delete <runId>",
+    "blink --project <project-dir> pause|resume|cancel|delete <runId>",
     "blink plugins",
-    "blink plugin-install <path>"
+    "blink --project <project-dir> plugin-install <path>"
   ];
 }
 

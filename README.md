@@ -38,7 +38,18 @@ Open a new terminal, then check the runtime:
 blink status
 ```
 
-For one-off use without linking, run `node .\dist\cli\index.js workflows` after `npm.cmd run build:cli`. If `blink` is not recognized after linking, add the npm global prefix from `npm.cmd prefix -g` to your user `PATH`.
+If `blink` is not recognized after linking, add npm's global prefix to your user `PATH`, then open a new terminal:
+
+```powershell
+$npmGlobal = npm.cmd prefix -g
+[Environment]::SetEnvironmentVariable(
+  "Path",
+  [Environment]::GetEnvironmentVariable("Path", "User") + ";$npmGlobal",
+  "User"
+)
+```
+
+For one-off use without linking or changing `PATH`, run `node .\dist\cli\index.js workflows` after `npm.cmd run build:cli`.
 
 Runtime discovery uses this order:
 
@@ -47,20 +58,23 @@ Runtime discovery uses this order:
 3. `.blink/runtime.json` from `--project <project-dir>` or the nearest parent project folder
 4. `http://127.0.0.1:39201`
 
+Read-only commands may use the default port fallback. Commands that start or control work (`run`, `plugin-install`, `pause`, `resume`, `cancel`, and `delete`) require an explicit target runtime through `--project <project-dir>`, `--api-url <url>`, or `BASED_BLINK_API_URL`. Agents should prefer `--project <project-dir>` so runs attach to the BLINK app that opened that project.
+
 Common commands:
 
 ```powershell
 blink workflows
 blink workflow <workflowId>
-blink run <workflowId> --input input.json --name "Run name" --agent codex --wait
+blink --project <project-dir> run <workflowId> --input input.json --name "Run name" --agent codex --wait
 blink runs --active
 blink get <runId>
 blink watch <runId>
-blink pause <runId>
-blink resume <runId>
-blink cancel <runId>
+blink --project <project-dir> pause <runId>
+blink --project <project-dir> resume <runId>
+blink --project <project-dir> cancel <runId>
+blink --project <project-dir> delete <runId>
 blink plugins
-blink plugin-install C:\path\to\plugin
+blink --project <project-dir> plugin-install C:\path\to\plugin
 ```
 
 Normal commands print one JSON object. `blink run --wait` and `blink watch` print newline-delimited JSON events so agents and scripts can stream progress. CLI-created runs are tagged with origin metadata, and the UI shows active CLI work in the CLI Agent Activity panel.
@@ -76,23 +90,39 @@ For workflow input, create a JSON file that matches the selected workflow's sche
 }
 ```
 
-If a run reaches `waiting_manual`, complete the requested browser action in the app or target browser, then run `blink resume <runId>` and continue watching.
+If a run reaches `waiting_manual`, complete the requested browser action in the app or target browser, then run `blink --project <project-dir> resume <runId>` and continue watching.
 
 ### Agent Skill
 
-The repo includes an agent skill at `.agents/skills/based-blink-cli`. To make it available from any project, copy that folder into your Codex skills directory, usually `~/.codex/skills/based-blink-cli`. For project-local use, copy it into another repo's `.agents/skills/based-blink-cli` folder instead.
+The repo includes agent skill copies at `.agents/skills/based-blink-cli` and `.claude/skills/based-blink-cli`. To make the skill available from another project, copy the appropriate folder into that repo's agent skill directory. For Claude Code, use `.claude/skills/based-blink-cli`; for other agent environments, use their supported project or global skills directory.
+
+For per-user global install across projects:
+
+```powershell
+# Codex: use CODEX_HOME when set; otherwise use ~/.codex
+$codexSkills = if ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "skills" } else { Join-Path $HOME ".codex\skills" }
+New-Item -ItemType Directory -Force $codexSkills | Out-Null
+Copy-Item -Recurse -Force ".agents\skills\based-blink-cli" (Join-Path $codexSkills "based-blink-cli")
+
+# Claude Code: personal skills live under ~/.claude/skills
+$claudeSkills = Join-Path $HOME ".claude\skills"
+New-Item -ItemType Directory -Force $claudeSkills | Out-Null
+Copy-Item -Recurse -Force ".claude\skills\based-blink-cli" (Join-Path $claudeSkills "based-blink-cli")
+```
 
 The skill only teaches agents how to use the CLI. The `blink` command itself must still be built and linked or otherwise available on `PATH`.
 
 ## Selector Calibration
 
-The Hunyuan workflow intentionally takes selector JSON from the UI. Use Playwright codegen to capture stable selectors for the current site UI:
+Browser workflow selectors should be calibrated with Workflow Lab and proven through the installed app runtime with the BLINK CLI. The repeatable loop is documented in [Workflow Lab And BLINK CLI Plugin Calibration Loop](Docs/workflow-lab-cli-plugin-calibration.md).
 
 ```powershell
-npx playwright codegen https://3d.hunyuan.tencent.com/
+blink --project <project-dir> run <workflowId> --input input.json --agent codex --name "Selector calibration"
+blink --project <project-dir> watch <runId>
+blink --project <project-dir> get <runId>
 ```
 
-Paste the resulting selectors into the workflow's selector config JSON. ChatGPT account-based work uses the Chrome extension described below rather than Playwright.
+Use Workflow Lab or the run trace to inspect the exact failed page state, update plugin defaults and tests, reload the installed plugin, then rerun until the workflow produces the intended artifact. ChatGPT account-based work uses the Chrome extension described below rather than Playwright.
 
 ## Adding Workflows
 

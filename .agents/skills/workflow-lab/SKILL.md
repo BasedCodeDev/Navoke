@@ -36,6 +36,41 @@ Workflow Lab is the repo's interactive harness for learning a target site's DOM,
 6. Translate proven selectors and wait predicates into workflow or extension code.
 7. Add unit coverage for the reusable wait/action logic before handing off.
 
+## Pairing With BLINK CLI
+
+Workflow Lab learns the page; the BLINK CLI proves the installed workflow. Use both for browser plugin calibration:
+
+1. Run the workflow through `blink --project <project-dir> run ...` with real input files.
+2. Watch progress until the run completes or fails.
+3. On failure, use `blink --project <project-dir> get <runId>` to capture the exact step, error, screenshot artifacts, trace artifact, and selector key involved.
+4. Use Workflow Lab against the live target page when it is still open. Match the workflow's browser profile owner/name when login or generated page state matters.
+5. If the workflow closed the browser, inspect the Playwright trace snapshots from the failed run and reproduce the relevant state in Lab when possible.
+6. Patch the workflow defaults/helpers and renderer preset, add focused tests, rebuild, reload the installed plugin, and rerun with BLINK CLI.
+
+This loop should continue until a real run produces the intended artifact. A selector is not considered calibrated just because it matches once in isolation; it must work in the workflow phase where the automation uses it.
+
+## Trace-Backed Calibration
+
+When a run fails after the browser closes, use the trace as the page-state source of truth:
+
+- Look at the snapshot immediately before the failed action.
+- Find the actual visible, enabled, user-clickable element or its clickable ancestor.
+- Compare similar controls; one part of the site may use `t-select` options while another uses `t-dropdown` items.
+- Prefer selectors scoped by nearby headings, panels, or workflow phase containers.
+- Avoid hidden duplicate text and inner spans unless the helper intentionally walks to a clickable ancestor.
+- Capture the learned selector shape in tests and documentation.
+
+Good failures include diagnostics: selector key, selector text, candidate count, visible count, enabled count, ancestor candidates, and a calibration screenshot when possible.
+
+## Browser Plugin Calibration Patterns
+
+- Use persistent Playwright profiles for workflows that need login/session reuse.
+- Detect an already logged-in state and continue automatically, but pause for real account checks.
+- For uploads, use Lab `attach-file` with the same input slots and file types as the workflow.
+- For action buttons, handle disabled-but-visible controls explicitly.
+- For generated phases, verify the click entered a running state before accepting a ready state. Some ready controls are visible before the action has been started.
+- For downloads, inspect the export dropdown/menu in the final page state and wrap the final click with a Playwright download event.
+
 ## Wait Conditions
 
 Supported wait kinds:

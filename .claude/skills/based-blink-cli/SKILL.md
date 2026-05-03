@@ -45,7 +45,7 @@ blink --project <project-dir> workflow <workflowId>
 4. Start and watch the run:
 
 ```powershell
-blink --project <project-dir> run <workflowId> --input input.json --agent codex --wait
+blink --project <project-dir> run <workflowId> --input input.json --agent claude --wait
 ```
 
 Use `--name <name>` when a human-readable run name helps identify the output in the UI. Use `--agent <name>` so the UI can show who is driving the run.
@@ -56,7 +56,7 @@ Use this loop with Workflow Lab when a browser plugin workflow is being built, c
 
 1. Confirm the runtime and workflow manifest with `status`, `workflows`, and `workflow`.
 2. Create a stable input JSON file with real absolute file paths. Avoid BOM-encoded JSON when creating files from PowerShell.
-3. Start a named run with `--project`, `--input`, `--agent codex`, and `--name`.
+3. Start a named run with `--project`, `--input`, `--agent claude`, and `--name`.
 4. Watch in bounded chunks. If local `watch` times out, the run may still be active; call `get` or `watch` again.
 5. On failure, call `get <runId>` and preserve the exact error, current step, events, artifacts, screenshots, and trace path.
 6. Use Workflow Lab or trace snapshots to learn the real page state, then patch the plugin and tests.

@@ -86,6 +86,20 @@ V1 installation accepts a local plugin folder path. The app validates `plugin.js
 
 Uninstall removes an installed plugin version from the user plugin directory and reloads the registry. Active runs are not migrated. Historical runs keep their snapshot metadata and can report the missing plugin later.
 
+## Calibration Workflow
+
+Browser workflow plugins should be built and hardened with the repeatable Workflow Lab plus BLINK CLI loop in [Workflow Lab And BLINK CLI Plugin Calibration Loop](./workflow-lab-cli-plugin-calibration.md).
+
+The short version:
+
+1. Run the installed plugin through the CLI with real inputs.
+2. Capture the exact failing step, error, screenshot, trace, events, and artifact state.
+3. Use Workflow Lab or trace snapshots to learn the real DOM and phase transition.
+4. Patch plugin defaults, helpers, renderer presets, tests, and workflow docs.
+5. Rebuild, reload the installed plugin copy, and rerun until a real artifact is produced.
+
+This keeps selector work grounded in the app runtime rather than isolated selector experiments. It also catches common plugin issues such as stale installed bundles, hidden duplicate text, disabled controls, modal transitions, generation phases that never started, and export menus that use a different UI component than earlier dropdowns.
+
 ## UI Behavior
 
 The renderer should show:

@@ -111,6 +111,8 @@ Use the Chrome extension path when the workflow must run inside the user's norma
 
 Detailed Workflow Lab guidance lives in `.agents/skills/workflow-lab/SKILL.md`. Use that skill when inspecting pages, calibrating selectors, debugging ChatGPT tab states, adding Lab actions, adding Lab wait conditions, or turning Lab observations into workflow code.
 
+For browser plugin workflows, pair Workflow Lab with the BLINK CLI skill. Run the installed plugin with real inputs, capture exact failures and trace artifacts through `blink`, inspect the page state with Workflow Lab or trace snapshots, patch the plugin and tests, reload the installed plugin copy, and rerun until the intended artifact is produced. The durable loop is documented in `Docs/workflow-lab-cli-plugin-calibration.md`.
+
 ## Renderer Form Wiring
 
 The current generic form supports:
