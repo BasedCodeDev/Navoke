@@ -1,0 +1,9 @@
+{
+  "id": "based-blink.hunyuan",
+  "name": "Based BLINK Hunyuan",
+  "version": "0.1.0",
+  "pluginApiVersion": "1",
+  "entrypoint": "dist/index.js",
+  "workflows": ["based-blink.hunyuan.image-to-model"],
+  "capabilities": ["filesystem.artifacts", "browser"]
+}

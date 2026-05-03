@@ -7,11 +7,13 @@
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "npm run build:main && concurrently -k -n renderer,electron -c cyan,green \"vite --host 127.0.0.1 --port 5173\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist/main/main.js\"",
-    "build": "npm run build:main && vite build",
+    "build": "npm run build:main && npm run build:plugins && vite build",
     "build:main": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
+    "build:plugins": "tsc -p plugins/workflows/based-blink-hunyuan/tsconfig.json && tsc -p plugins/workflows/based-blink-chatgpt/tsconfig.json",
     "start": "npm run build && electron dist/main/main.js",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.preload.json",
-    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.preload.json && npm run typecheck:plugins",
+    "typecheck:plugins": "tsc --noEmit -p plugins/workflows/based-blink-hunyuan/tsconfig.json && tsc --noEmit -p plugins/workflows/based-blink-chatgpt/tsconfig.json",
+    "test": "npm run build:plugins && vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test"
   },

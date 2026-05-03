@@ -9,6 +9,7 @@ declare global {
     recentProjects: Array<{ name: string; path: string; exists: boolean }>;
     projectDialogCancelled?: boolean;
     platform: string;
+    pluginRootDir: string | null;
   }
 
   interface Window {

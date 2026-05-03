@@ -1,62 +1,69 @@
 import path from "node:path";
-import { z } from "zod";
-import { launchPersistentProfile, saveScreenshot, startTrace, stopTrace, timeoutMinutes } from "../automation/browserHarness";
-import type { WorkflowDefinition } from "../runtime/types";
-import { WorkflowConfigurationError } from "../runtime/errors";
-import { inferMimeType } from "../utils/files";
+import type * as zod from "zod";
+import type { WorkflowDefinition, WorkflowSdk } from "./sdkTypes";
 
-const selectorsSchema = z
-  .object({
-    uploadInput: z.string().optional(),
-    promptTextbox: z.string().optional(),
-    generateButton: z.string().optional(),
-    readyText: z.string().optional(),
-    downloadButton: z.string().optional()
-  })
-  .default({});
+export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
+  const { z } = sdk.schema;
+  const { launchPersistentProfile, saveScreenshot, startTrace, stopTrace, timeoutMinutes } = sdk.browser;
+  const { WorkflowConfigurationError } = sdk.errors;
+  const { inferMimeType } = sdk.files;
 
-const inputSchema = z.object({
-  images: z.array(z.string()).min(1, "Choose at least one image."),
-  prompt: z.string().optional().default(""),
-  profileName: z.string().optional().default("default"),
-  headless: z.boolean().optional().default(false),
-  pauseForManualLogin: z.boolean().optional().default(true),
-  timeoutMinutes: z.number().min(1).max(240).optional().default(90),
-  selectors: selectorsSchema
-});
+  const selectorsSchema = z
+    .object({
+      uploadInput: z.string().optional(),
+      promptTextbox: z.string().optional(),
+      generateButton: z.string().optional(),
+      readyText: z.string().optional(),
+      downloadButton: z.string().optional()
+    })
+    .default({});
 
-const outputSchema = z.object({
-  artifactIds: z.array(z.string()),
-  summary: z.string()
-});
+  const inputSchema = z.object({
+    images: z.array(z.string()).min(1, "Choose at least one image."),
+    prompt: z.string().optional().default(""),
+    profileName: z.string().optional().default("default"),
+    headless: z.boolean().optional().default(false),
+    pauseForManualLogin: z.boolean().optional().default(true),
+    timeoutMinutes: z.number().min(1).max(240).optional().default(90),
+    selectors: selectorsSchema
+  });
 
-export const hunyuanImageToModelWorkflow: WorkflowDefinition<z.infer<typeof inputSchema>, z.infer<typeof outputSchema>> = {
-  manifest: {
-    id: "hunyuan.image-to-model",
-    title: "Hunyuan Image to 3D Model",
-    description: "Drives 3d.hunyuan.tencent.com with a persistent profile and configurable selectors.",
-    category: "hunyuan",
-    version: "0.1.0",
-    concurrency: 1,
-    requiresBrowser: true,
-    targetUrl: "https://3d.hunyuan.tencent.com/",
-    outputKinds: ["model", "download", "trace", "screenshot"],
-    inputFields: [
-      { name: "images", label: "Input images", type: "fileList", required: true },
-      { name: "prompt", label: "Prompt", type: "textarea" },
-      { name: "profileName", label: "Browser profile", type: "text", defaultValue: "default" },
-      { name: "pauseForManualLogin", label: "Pause for manual login", type: "checkbox", defaultValue: true },
-      {
-        name: "selectors",
-        label: "Selector config",
-        type: "json",
-        help: "Use Playwright codegen to calibrate selectors for upload, generation, readiness, and download."
-      }
-    ]
-  },
-  inputSchema,
-  outputSchema,
-  async run(input, ctx) {
+  const outputSchema = z.object({
+    artifactIds: z.array(z.string()),
+    summary: z.string()
+  });
+
+  const hunyuanImageToModelWorkflow: WorkflowDefinition<
+    zod.infer<typeof inputSchema>,
+    zod.infer<typeof outputSchema>
+  > = {
+    manifest: {
+      id: "based-blink.hunyuan.image-to-model",
+      title: "Hunyuan Image to 3D Model",
+      description: "Drives 3d.hunyuan.tencent.com with a persistent profile and configurable selectors.",
+      category: "hunyuan",
+      version: "0.1.0",
+      concurrency: 1,
+      requiresBrowser: true,
+      targetUrl: "https://3d.hunyuan.tencent.com/",
+      outputKinds: ["model", "download", "trace", "screenshot"],
+      uiCapabilities: ["browser.profile"],
+      inputFields: [
+        { name: "images", label: "Input images", type: "fileList", required: true },
+        { name: "prompt", label: "Prompt", type: "textarea" },
+        { name: "profileName", label: "Browser profile", type: "text", defaultValue: "default" },
+        { name: "pauseForManualLogin", label: "Pause for manual login", type: "checkbox", defaultValue: true },
+        {
+          name: "selectors",
+          label: "Selector config",
+          type: "json",
+          help: "Use Playwright codegen to calibrate selectors for upload, generation, readiness, and download."
+        }
+      ]
+    },
+    inputSchema,
+    outputSchema,
+    async run(input, ctx) {
     const artifactIds: string[] = [];
     const context = await launchPersistentProfile({
       paths: ctx.paths,
@@ -126,7 +133,7 @@ export const hunyuanImageToModelWorkflow: WorkflowDefinition<z.infer<typeof inpu
       });
       artifactIds.push(artifact.id);
 
-      return { artifactIds, summary: "Hunyuan workflow completed." };
+        return { artifactIds, summary: "Hunyuan workflow completed." };
     } finally {
       await stopTrace(context, tracePath).catch(() => undefined);
       const traceArtifact = await ctx.addArtifact({
@@ -139,4 +146,7 @@ export const hunyuanImageToModelWorkflow: WorkflowDefinition<z.infer<typeof inpu
       await context.close().catch(() => undefined);
     }
   }
-};
+  };
+
+  return [hunyuanImageToModelWorkflow];
+}

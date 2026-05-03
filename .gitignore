@@ -8,6 +8,12 @@ out/
 release/
 .vite/
 *.tsbuildinfo
+!plugins/
+!plugins/workflows/
+!plugins/workflows/*/
+!plugins/workflows/*/dist/
+plugins/workflows/*/dist/*
+!plugins/workflows/*/dist/index.js
 
 # Test and coverage output
 coverage/

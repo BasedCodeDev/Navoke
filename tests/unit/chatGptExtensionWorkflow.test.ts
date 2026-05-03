@@ -4,12 +4,21 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildChatGptPage,
-  canResumeFailedChatGptRun,
-  chatGptExtensionImageTransformWorkflow,
-  normalizeChatGptExtensionOutputs
-} from "../../src/main/workflows/chatGptExtensionWorkflow";
+  createWorkflows,
+  normalizeChatGptExtensionOutputs,
+  normalizeChatGptExtensionSequenceOutputs
+} from "../../plugins/workflows/based-blink-chatgpt/src";
 import { CHATGPT_EXTENSION_PROTOCOL_VERSION, extensionBridge, type ExtensionTaskPayload, type ExtensionTaskResult } from "../../src/main/extension/extensionBridge";
-import type { ArtifactRecord, RunRecord, WorkflowContext } from "../../src/main/runtime/types";
+import type { ArtifactRecord, RunRecord, WorkflowContext, WorkflowDefinition } from "../../src/main/runtime/types";
+import { createWorkflowSdk } from "../../src/main/workflowSdk";
+
+const chatGptWorkflows = createWorkflows(createWorkflowSdk()) as Array<WorkflowDefinition<unknown, any>>;
+const chatGptExtensionImageTransformWorkflow = chatGptWorkflows.find(
+  (workflow) => workflow.manifest.id === "based-blink.chatgpt.extension-image-transform"
+)!;
+const chatGptExtensionImageSequenceWorkflow = chatGptWorkflows.find(
+  (workflow) => workflow.manifest.id === "based-blink.chatgpt.extension-image-sequence"
+)!;
 
 function output(subjectIndex: number, base64: string): ExtensionTaskResult["outputs"][number] {
   return {
@@ -112,7 +121,7 @@ describe("ChatGPT extension workflow output normalization", () => {
   it("marks failed ChatGPT runs recoverable only when they have a checkpoint, page, or target URL", () => {
     const baseRun: RunRecord = {
       id: "run-1",
-      workflowId: "chatgpt.extension-image-transform",
+      workflowId: "based-blink.chatgpt.extension-image-transform",
       name: "ChatGPT run",
       runDir: null,
       status: "failed",
@@ -131,9 +140,9 @@ describe("ChatGPT extension workflow output normalization", () => {
       updatedAt: "2026-01-01T00:00:00.000Z"
     };
 
-    expect(canResumeFailedChatGptRun(baseRun)).toBe(false);
+    expect(chatGptExtensionImageTransformWorkflow.canResumeFailedRun!(baseRun)).toBe(false);
     expect(
-      canResumeFailedChatGptRun({
+      chatGptExtensionImageTransformWorkflow.canResumeFailedRun!({
         ...baseRun,
         input: {
           ...(baseRun.input as Record<string, unknown>),
@@ -142,7 +151,7 @@ describe("ChatGPT extension workflow output normalization", () => {
       })
     ).toBe(true);
     expect(
-      canResumeFailedChatGptRun({
+      chatGptExtensionImageTransformWorkflow.canResumeFailedRun!({
         ...baseRun,
         output: {
           artifactIds: [],
@@ -151,7 +160,7 @@ describe("ChatGPT extension workflow output normalization", () => {
         }
       })
     ).toBe(true);
-    expect(canResumeFailedChatGptRun({ ...baseRun, status: "cancelled" })).toBe(false);
+    expect(chatGptExtensionImageTransformWorkflow.canResumeFailedRun!({ ...baseRun, status: "cancelled" })).toBe(false);
   });
 
   it("promotes extension completion metadata into a durable ChatGPT page target", () => {
@@ -493,6 +502,243 @@ describe("ChatGPT extension workflow output normalization", () => {
     fs.rmSync(harness.dir, { recursive: true, force: true });
   });
 
+  it("runs sequence prompts without setup and chains each output into the next prompt", async () => {
+    const harness = createWorkflowHarness();
+    extensionBridge.heartbeat({
+      id: harness.clientId,
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.9.0",
+      url: "https://chatgpt.com/c/start"
+    });
+
+    const run = chatGptExtensionImageSequenceWorkflow.run(
+      {
+        sourceImages: [harness.subjectPath],
+        prompts: ["Back view", "Side view"],
+        masterPrompt: "",
+        timeoutMinutes: 1,
+        chatGptTab: { mode: "existing", clientId: harness.clientId, url: "https://chatgpt.com/c/start" },
+        selectors: {}
+      },
+      harness.ctx
+    );
+
+    const firstTask = await waitForLeasedTask(harness.clientId, "subject");
+    expect(firstTask.subjectImage).toMatchObject({ index: 0, name: "subject-1.png" });
+    expect(firstTask.subjectInstruction).toBe("Back view");
+    extensionBridge.addTaskOutput(firstTask.id, output(0, "back-output"));
+    extensionBridge.completeTask(firstTask.id, {
+      outputs: [],
+      metadata: { url: "https://chatgpt.com/c/sequence", title: "Sequence conversation" }
+    });
+
+    const secondTask = await waitForLeasedTask(harness.clientId, "subject");
+    expect(secondTask.subjectImage).toMatchObject({ index: 1, name: "subject-1-prompt-01-chatgpt.png" });
+    expect(secondTask.subjectInstruction).toBe("Side view");
+    extensionBridge.addTaskOutput(secondTask.id, output(1, "side-output"));
+    extensionBridge.completeTask(secondTask.id, {
+      outputs: [],
+      metadata: { url: "https://chatgpt.com/c/sequence", title: "Sequence conversation" }
+    });
+
+    const result = await run;
+    expect(result.checkpoint).toMatchObject({
+      setupCompleted: true,
+      completedPromptIndexes: [0, 1],
+      pausedPrompt: null
+    });
+    expect(harness.artifacts.filter((artifact) => artifact.kind === "image").map((artifact) => artifact.name)).toEqual([
+      "subject-1-prompt-01-chatgpt.png",
+      "subject-1-prompt-02-chatgpt.png"
+    ]);
+    expect(harness.artifacts[0].metadata).toMatchObject({
+      workflowKind: "image-sequence",
+      promptIndex: 0,
+      pairId: "prompt-1"
+    });
+
+    fs.rmSync(harness.dir, { recursive: true, force: true });
+  });
+
+  it("sends the source image as setup reference context when a sequence setup prompt is provided", async () => {
+    const harness = createWorkflowHarness();
+    extensionBridge.heartbeat({
+      id: harness.clientId,
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.9.0",
+      url: "https://chatgpt.com/c/start"
+    });
+
+    const run = chatGptExtensionImageSequenceWorkflow.run(
+      {
+        sourceImages: [harness.subjectPath],
+        prompts: ["Back view"],
+        masterPrompt: "Keep the same character across every edit.",
+        timeoutMinutes: 1,
+        chatGptTab: { mode: "existing", clientId: harness.clientId, url: "https://chatgpt.com/c/start" },
+        selectors: {}
+      },
+      harness.ctx
+    );
+
+    const setupTask = await waitForLeasedTask(harness.clientId, "setup");
+    expect(setupTask.masterPrompt).toBe("Keep the same character across every edit.");
+    expect(setupTask.referenceImages?.[0]).toMatchObject({ index: 0, name: "subject-1.png" });
+    extensionBridge.completeTask(setupTask.id, {
+      outputs: [],
+      metadata: { url: "https://chatgpt.com/c/sequence", title: "Sequence conversation" }
+    });
+
+    const promptTask = await waitForLeasedTask(harness.clientId, "subject");
+    expect(promptTask.subjectInstruction).toBe("Back view");
+    extensionBridge.addTaskOutput(promptTask.id, output(0, "back-output"));
+    extensionBridge.completeTask(promptTask.id, {
+      outputs: [],
+      metadata: { url: "https://chatgpt.com/c/sequence", title: "Sequence conversation" }
+    });
+
+    const result = await run;
+    expect(result.checkpoint).toMatchObject({
+      setupCompleted: true,
+      completedPromptIndexes: [0]
+    });
+
+    fs.rmSync(harness.dir, { recursive: true, force: true });
+  });
+
+  it("restores completed sequence prompt outputs and continues the chain from the latest artifact", async () => {
+    const harness = createWorkflowHarness();
+    const restoredOutputPath = path.join(harness.artifactDir, "restored-prompt-1.png");
+    fs.writeFileSync(restoredOutputPath, Buffer.from("restored prompt 1"));
+    harness.ctx.previousOutput = {
+      artifactIds: ["restored-artifact-1"],
+      summary: "Processed 1 of 2 ChatGPT prompt(s).",
+      chatGptPage: {
+        url: "https://chatgpt.com/c/recovered",
+        title: "Recovered conversation",
+        clientId: harness.clientId,
+        capturedAt: new Date().toISOString()
+      },
+      checkpoint: {
+        setupCompleted: true,
+        completedPromptIndexes: [0],
+        outputMappings: [
+          {
+            promptIndex: 0,
+            prompt: "Back view",
+            inputImage: harness.subjectPath,
+            pairId: "prompt-1",
+            artifactId: "restored-artifact-1",
+            outputPath: restoredOutputPath
+          }
+        ],
+        pausedPrompt: null
+      }
+    };
+    extensionBridge.heartbeat({
+      id: harness.clientId,
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.9.0",
+      url: "https://chatgpt.com/c/recovered"
+    });
+
+    const run = chatGptExtensionImageSequenceWorkflow.run(
+      {
+        sourceImages: [harness.subjectPath],
+        prompts: ["Back view", "Side view"],
+        masterPrompt: "",
+        timeoutMinutes: 1,
+        chatGptTab: { mode: "existing", clientId: harness.clientId, url: "https://chatgpt.com/c/recovered" },
+        selectors: {}
+      },
+      harness.ctx
+    );
+
+    const promptTask = await waitForLeasedTask(harness.clientId, "subject");
+    expect(promptTask.subjectImage).toMatchObject({ index: 1, name: "restored-prompt-1.png" });
+    expect(promptTask.subjectInstruction).toBe("Side view");
+    extensionBridge.addTaskOutput(promptTask.id, output(1, "side-output"));
+    extensionBridge.completeTask(promptTask.id, {
+      outputs: [],
+      metadata: { url: "https://chatgpt.com/c/recovered", title: "Recovered conversation" }
+    });
+
+    const result = await run;
+    expect(result.checkpoint).toMatchObject({
+      setupCompleted: true,
+      completedPromptIndexes: [0, 1],
+      pausedPrompt: null
+    });
+    expect(result.artifactIds).toContain("restored-artifact-1");
+    expect(result.artifactIds).toContain("artifact-1");
+
+    fs.rmSync(harness.dir, { recursive: true, force: true });
+  });
+
+  it("fails a sequence workflow when a prompt does not return an output", async () => {
+    const harness = createWorkflowHarness();
+    extensionBridge.heartbeat({
+      id: harness.clientId,
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.9.0",
+      url: "https://chatgpt.com/c/start"
+    });
+
+    const run = chatGptExtensionImageSequenceWorkflow.run(
+      {
+        sourceImages: [harness.subjectPath],
+        prompts: ["Back view"],
+        masterPrompt: "",
+        timeoutMinutes: 1,
+        chatGptTab: { mode: "existing", clientId: harness.clientId, url: "https://chatgpt.com/c/start" },
+        selectors: {}
+      },
+      harness.ctx
+    );
+
+    const task = await waitForLeasedTask(harness.clientId, "subject");
+    extensionBridge.completeTask(task.id, {
+      outputs: [],
+      metadata: { url: "https://chatgpt.com/c/start", title: "Sequence conversation" }
+    });
+
+    await expect(run).rejects.toThrow("did not return an output image for prompt 1");
+    fs.rmSync(harness.dir, { recursive: true, force: true });
+  });
+
+  it("fails a sequence workflow when one prompt returns multiple distinct outputs", async () => {
+    const harness = createWorkflowHarness();
+    extensionBridge.heartbeat({
+      id: harness.clientId,
+      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.9.0",
+      url: "https://chatgpt.com/c/start"
+    });
+
+    const run = chatGptExtensionImageSequenceWorkflow.run(
+      {
+        sourceImages: [harness.subjectPath],
+        prompts: ["Back view"],
+        masterPrompt: "",
+        timeoutMinutes: 1,
+        chatGptTab: { mode: "existing", clientId: harness.clientId, url: "https://chatgpt.com/c/start" },
+        selectors: {}
+      },
+      harness.ctx
+    );
+
+    const task = await waitForLeasedTask(harness.clientId, "subject");
+    extensionBridge.addTaskOutput(task.id, output(0, "first-output"));
+    extensionBridge.addTaskOutput(task.id, output(0, "second-output"));
+    extensionBridge.completeTask(task.id, {
+      outputs: [],
+      metadata: { url: "https://chatgpt.com/c/start", title: "Sequence conversation" }
+    });
+
+    await expect(run).rejects.toThrow("multiple distinct output images for prompt 1");
+    fs.rmSync(harness.dir, { recursive: true, force: true });
+  });
+
   it("keeps one output per subject", () => {
     const normalized = normalizeChatGptExtensionOutputs([output(0, "first"), output(1, "second")], [
       "C:\\tmp\\first.png",
@@ -521,6 +767,30 @@ describe("ChatGPT extension workflow output normalization", () => {
   it("fails when one subject has multiple distinct outputs", () => {
     expect(() => normalizeChatGptExtensionOutputs([output(0, "first"), output(0, "second")], ["C:\\tmp\\first.png"])).toThrow(
       "distinct output images for subject 1"
+    );
+  });
+
+  it("keeps one output per sequence prompt", () => {
+    const normalized = normalizeChatGptExtensionSequenceOutputs([output(0, "first"), output(1, "second")], [
+      "Back view",
+      "Side view"
+    ]);
+
+    expect(normalized).toMatchObject([
+      { promptIndex: 0, prompt: "Back view", pairId: "prompt-1" },
+      { promptIndex: 1, prompt: "Side view", pairId: "prompt-2" }
+    ]);
+  });
+
+  it("fails when a sequence prompt is missing an output", () => {
+    expect(() => normalizeChatGptExtensionSequenceOutputs([output(0, "first")], ["Back view", "Side view"])).toThrow(
+      "did not return an output image for prompt 2"
+    );
+  });
+
+  it("fails when one sequence prompt has multiple distinct outputs", () => {
+    expect(() => normalizeChatGptExtensionSequenceOutputs([output(0, "first"), output(0, "second")], ["Back view"])).toThrow(
+      "distinct output images for prompt 1"
     );
   });
 });

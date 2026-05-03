@@ -5,9 +5,10 @@ import cors from "cors";
 import express from "express";
 import type { ExtensionBridge } from "../extension/extensionBridge";
 import type { SqliteStore } from "../db/sqliteStore";
+import type { PluginManager } from "../plugins/pluginManager";
 import type { LocalWorkflowRunner } from "../runtime/localWorkflowRunner";
 import type { RuntimeEventBus } from "../runtime/eventBus";
-import type { RuntimePaths, WorkflowDefinition } from "../runtime/types";
+import type { PublicWorkflow, RuntimePaths, WorkflowRegistration, WorkflowRegistry } from "../runtime/types";
 import type { WorkflowLab, WorkflowLabAction } from "../lab/workflowLab";
 import type { LabWaitCondition } from "../lab/waitConditions";
 
@@ -15,7 +16,9 @@ interface ApiServerOptions {
   store: SqliteStore;
   runner: LocalWorkflowRunner;
   eventBus: RuntimeEventBus;
-  workflows: Map<string, WorkflowDefinition>;
+  workflows: WorkflowRegistry;
+  plugins: PluginManager;
+  reloadWorkflows(): Promise<void>;
   paths: RuntimePaths;
   extensionBridge: ExtensionBridge;
   workflowLab: WorkflowLab;
@@ -40,8 +43,36 @@ export class ApiServer {
       res.json({
         paths: this.options.paths,
         runner: this.options.runner.stats(),
+        plugins: {
+          rootDir: this.options.plugins.rootDir,
+          installed: this.options.plugins.listPlugins().length
+        },
         extension: this.options.extensionBridge.status()
       });
+    });
+
+    app.get("/api/plugins", (_req, res) => {
+      res.json({ rootDir: this.options.plugins.rootDir, plugins: this.options.plugins.listPlugins() });
+    });
+
+    app.post("/api/plugins/install", (req, res, next) => {
+      void this.options.plugins
+        .installFromPath(String(req.body?.path ?? ""))
+        .then(async (result) => {
+          await this.options.reloadWorkflows();
+          res.status(201).json(result);
+        })
+        .catch(next);
+    });
+
+    app.delete("/api/plugins/:id", (req, res, next) => {
+      void this.options.plugins
+        .uninstall(req.params.id, typeof req.query.version === "string" ? req.query.version : undefined)
+        .then(async () => {
+          await this.options.reloadWorkflows();
+          res.json({ id: req.params.id, deleted: true });
+        })
+        .catch(next);
     });
 
     app.get("/api/lab/sessions", (_req, res) => {
@@ -101,7 +132,7 @@ export class ApiServer {
     });
 
     app.get("/api/workflows", (_req, res) => {
-      res.json([...this.options.workflows.values()].map((workflow) => ({ manifest: workflow.manifest })));
+      res.json([...this.options.workflows.values()].map(publicWorkflow));
     });
 
     app.post("/api/files/validate", (req, res) => {
@@ -459,7 +490,7 @@ export class ApiServer {
 
 function getRunInputFilePath(input: unknown, field: string, index: number): string | undefined {
   if (!Number.isInteger(index) || index < 0) return undefined;
-  if (!["images", "referenceImages", "subjectImages"].includes(field)) return undefined;
+  if (!["images", "referenceImages", "subjectImages", "sourceImages"].includes(field)) return undefined;
   if (!input || typeof input !== "object") return undefined;
   const value = (input as Record<string, unknown>)[field];
   if (!Array.isArray(value)) return undefined;
@@ -498,4 +529,12 @@ function validateLocalFilePath(filePath: string): {
 
 function isMissingFileError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT");
+}
+
+function publicWorkflow(registration: WorkflowRegistration): PublicWorkflow {
+  return {
+    manifest: registration.definition.manifest,
+    plugin: registration.plugin,
+    availability: { status: "available" }
+  };
 }

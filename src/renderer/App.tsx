@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Bot,
   Camera,
   CheckCircle2,
@@ -12,10 +14,12 @@ import {
   FolderOpen,
   Info,
   MousePointerClick,
+  Package,
   Palette,
   Pencil,
   PauseCircle,
   Play,
+  Plus,
   RefreshCcw,
   Square,
   Trash2,
@@ -34,8 +38,10 @@ import {
   getConfig,
   getRun,
   getSystemInfo,
+  installPlugin,
   inspectLabSession,
   listLabSessions,
+  listPlugins,
   listRuns,
   listWorkflows,
   openProject,
@@ -46,15 +52,18 @@ import {
   runInputFileUrl,
   runLabAction,
   subscribeRuntimeEvents,
+  uninstallPlugin,
   validateFilePaths,
   waitForLabCondition,
   type ArtifactRecord,
   type FileValidationResult,
+  type InstalledPluginRecord,
   type LabWaitCondition,
   type RunRecord,
   type RuntimeEvent,
   type SystemInfo,
-  type WorkflowLabInspectionResult
+  type WorkflowLabInspectionResult,
+  type WorkflowSummary
 } from "@/lib/api";
 import { cn, formatDate, statusTone } from "@/lib/utils";
 import {
@@ -104,12 +113,14 @@ function getInitialFontId(): FontId {
   return resolveFontId(window.localStorage.getItem(FONT_STORAGE_KEY));
 }
 
-function usesMasterPrompt(workflowId: string): boolean {
-  return ["chatgpt.extension-image-transform"].includes(workflowId);
+type WorkflowUiCapability = NonNullable<WorkflowSummary["manifest"]["uiCapabilities"]>[number];
+
+function workflowHasCapability(workflow: WorkflowSummary | undefined, capability: WorkflowUiCapability): boolean {
+  return Boolean(workflow?.manifest.uiCapabilities?.includes(capability));
 }
 
-function usesBrowserProfile(workflowId: string): boolean {
-  return ["hunyuan.image-to-model"].includes(workflowId);
+function workflowHasField(workflow: WorkflowSummary | undefined, fieldName: string): boolean {
+  return Boolean(workflow?.manifest.inputFields.some((field) => field.name === fieldName));
 }
 
 const NEW_CHATGPT_TAB_VALUE = "__new_chatgpt_tab__";
@@ -153,21 +164,65 @@ function chatGptTabOptionLabel(client: SystemInfo["extension"]["connectedClients
   return `${label} (${client.status || "ready"})`;
 }
 
+type RunWorkflowAvailability =
+  | { status: "available"; message: string; workflow: WorkflowSummary }
+  | { status: "legacy"; message: string; workflow: WorkflowSummary }
+  | { status: "missing"; message: string; workflow: null }
+  | { status: "version-mismatch"; message: string; workflow: WorkflowSummary };
+
+function resolveRunWorkflowAvailability(run: RunRecord, workflows: WorkflowSummary[]): RunWorkflowAvailability {
+  const exact = workflows.find(
+    (workflow) =>
+      workflow.manifest.id === run.workflowId &&
+      (!run.pluginId ||
+        (workflow.plugin.id === run.pluginId &&
+          workflow.plugin.version === run.pluginVersion &&
+          workflow.plugin.apiVersion === (run.pluginApiVersion ?? workflow.plugin.apiVersion)))
+  );
+  if (exact) {
+    return run.pluginId
+      ? { status: "available", message: `${exact.plugin.name} ${exact.plugin.version}`, workflow: exact }
+      : { status: "legacy", message: "Run has no plugin snapshot; matching by workflow id.", workflow: exact };
+  }
+
+  const workflowIdMatch = workflows.find((workflow) => workflow.manifest.id === run.workflowId);
+  if (workflowIdMatch && run.pluginId && run.pluginVersion) {
+    return {
+      status: "version-mismatch",
+      message: `This run needs ${run.pluginId}@${run.pluginVersion}, but ${workflowIdMatch.plugin.id}@${workflowIdMatch.plugin.version} is installed.`,
+      workflow: workflowIdMatch
+    };
+  }
+
+  const required = run.pluginId && run.pluginVersion ? `${run.pluginId}@${run.pluginVersion}` : run.workflowId;
+  return {
+    status: "missing",
+    message: `The workflow plugin for this run is not installed: ${required}.`,
+    workflow: null
+  };
+}
+
+function canUseRunWorkflow(availability: RunWorkflowAvailability | null): boolean {
+  return !availability || availability.status === "available" || availability.status === "legacy";
+}
+
 export default function App(): JSX.Element {
   const queryClient = useQueryClient();
   const [themeId, setThemeId] = useState<ThemeId>(getInitialThemeId);
   const [fontId, setFontId] = useState<FontId>(getInitialFontId);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState("chatgpt.extension-image-transform");
-  const [workspaceView, setWorkspaceView] = useState<"runs" | "lab">("runs");
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+  const [workspaceView, setWorkspaceView] = useState<"runs" | "lab" | "plugins">("runs");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [referenceFiles, setReferenceFiles] = useState<string[]>([]);
   const [subjectFiles, setSubjectFiles] = useState<string[]>([]);
+  const [sourceFiles, setSourceFiles] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [masterPrompt, setMasterPrompt] = useState("");
   const [subjectInstruction, setSubjectInstruction] = useState("");
+  const [sequencePrompts, setSequencePrompts] = useState<string[]>([]);
   const [modelName, setModelName] = useState("Demo model");
   const [profileName, setProfileName] = useState("default");
   const [pauseForManualLogin, setPauseForManualLogin] = useState(true);
@@ -185,6 +240,7 @@ export default function App(): JSX.Element {
   const hasProject = Boolean(configQuery.data?.apiBaseUrl && configQuery.data.projectDir);
   const apiBaseUrl = configQuery.data?.apiBaseUrl ?? "";
   const workflowsQuery = useQuery({ queryKey: ["workflows", apiBaseUrl], queryFn: listWorkflows, enabled: hasProject });
+  const pluginsQuery = useQuery({ queryKey: ["plugins", apiBaseUrl], queryFn: listPlugins, enabled: hasProject });
   const runsQuery = useQuery({
     queryKey: ["runs", apiBaseUrl],
     queryFn: listRuns,
@@ -239,6 +295,21 @@ export default function App(): JSX.Element {
   }, [apiBaseUrl, hasProject, queryClient, selectedRunId]);
 
   const workflows = workflowsQuery.data ?? [];
+  const plugins = pluginsQuery.data?.plugins ?? [];
+  const selectedWorkflow = workflows.find((workflow) => workflow.manifest.id === selectedWorkflowId);
+  const isChatGptExtensionWorkflow = workflowHasCapability(selectedWorkflow, "chatgpt.tabRouting");
+  const isChatGptSequenceWorkflow = selectedWorkflow?.manifest.id === "based-blink.chatgpt.extension-image-sequence";
+  const usesBrowserProfile = workflowHasCapability(selectedWorkflow, "browser.profile");
+
+  useEffect(() => {
+    if (workflows.length === 0) {
+      setSelectedWorkflowId("");
+      return;
+    }
+    if (!selectedWorkflowId || !workflows.some((workflow) => workflow.manifest.id === selectedWorkflowId)) {
+      setSelectedWorkflowId(workflows[0].manifest.id);
+    }
+  }, [selectedWorkflowId, workflows]);
   const createRunMutation = useMutation({
     mutationFn: async () => {
       setFormError(null);
@@ -248,18 +319,23 @@ export default function App(): JSX.Element {
         setShowProjectLanding(true);
         throw new Error("Open a project before starting a run.");
       }
+      if (!selectedWorkflow) {
+        throw new Error("Install a workflow plugin before starting a run.");
+      }
       const chatGptTab =
-        selectedWorkflowId === "chatgpt.extension-image-transform"
+        workflowHasCapability(selectedWorkflow, "chatgpt.tabRouting")
           ? buildChatGptTabInput(chatGptTabSelection, compatibleExtensionClients)
           : null;
       if (chatGptTab?.mode === "new") {
         await window.basedBlink.openExternal(chatGptTab.url ?? buildNewChatGptTabUrl(chatGptTab.routingToken));
       }
       const workflowInput =
-        selectedWorkflowId === "hunyuan.image-to-model"
+        workflowHasCapability(selectedWorkflow, "browser.profile")
           ? { images: selectedFiles, prompt, profileName, pauseForManualLogin }
-          : selectedWorkflowId === "chatgpt.extension-image-transform"
-              ? { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, chatGptTab }
+          : workflowHasCapability(selectedWorkflow, "chatgpt.tabRouting")
+              ? isChatGptSequenceWorkflow
+                ? { sourceImages: sourceFiles, prompts: sequencePrompts, masterPrompt, chatGptTab }
+                : { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, chatGptTab }
               : { images: selectedFiles, prompt, modelName, delayMs: 1_200 };
 
       return createRun({ workflowId: selectedWorkflowId, name, input: workflowInput });
@@ -313,6 +389,35 @@ export default function App(): JSX.Element {
     onError: (error) => setNewRunFocusError(error instanceof Error ? error.message : String(error))
   });
 
+  const installPluginMutation = useMutation({
+    mutationFn: installPlugin,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+      void queryClient.invalidateQueries({ queryKey: ["workflows"] });
+      void queryClient.invalidateQueries({ queryKey: ["system"] });
+    },
+    onError: (error) =>
+      setActionError({
+        title: "Could not install plugin",
+        message: error instanceof Error ? error.message : String(error)
+      })
+  });
+
+  const uninstallPluginMutation = useMutation({
+    mutationFn: ({ pluginId, version }: { pluginId: string; version?: string }) => uninstallPlugin(pluginId, version),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+      void queryClient.invalidateQueries({ queryKey: ["workflows"] });
+      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["system"] });
+    },
+    onError: (error) =>
+      setActionError({
+        title: "Could not uninstall plugin",
+        message: error instanceof Error ? error.message : String(error)
+      })
+  });
+
   const selectedRunSummary = (runsQuery.data ?? []).find((run) => run.id === selectedRunId);
   const activeRun = selectedRunQuery.data?.run ?? selectedRunSummary;
   const selectedRunDetailError = selectedRunQuery.error
@@ -324,8 +429,11 @@ export default function App(): JSX.Element {
   const extensionClients = systemQuery.data?.extension.connectedClients ?? [];
   const compatibleExtensionClients = useMemo(() => extensionClients.filter((client) => client.compatible), [extensionClients]);
   const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 7;
-  const isChatGptExtensionWorkflow = selectedWorkflowId === "chatgpt.extension-image-transform";
   const duplicateFilePaths = useMemo(() => collectRunInputFilePaths(duplicateSourceRun?.input), [duplicateSourceRun?.input]);
+  const activeRunWorkflowAvailability = useMemo(
+    () => (activeRun ? resolveRunWorkflowAvailability(activeRun, workflows) : null),
+    [activeRun, workflows]
+  );
 
   useEffect(() => {
     if (!isChatGptExtensionWorkflow) return;
@@ -356,6 +464,7 @@ export default function App(): JSX.Element {
       queryClient.removeQueries({ queryKey: ["run"] });
     }
     void queryClient.invalidateQueries({ queryKey: ["workflows"] });
+    void queryClient.invalidateQueries({ queryKey: ["plugins"] });
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
     void queryClient.invalidateQueries({ queryKey: ["system"] });
     if (config.projectDir && !config.projectDialogCancelled) {
@@ -372,11 +481,13 @@ export default function App(): JSX.Element {
   }
 
   async function duplicateRunConfiguration(run: RunRecord): Promise<void> {
-    if (workflows.length > 0 && !workflows.some((workflow) => workflow.manifest.id === run.workflowId)) {
-      throw new Error(`The workflow for this run is not available: ${run.workflowId}`);
+    const availability = resolveRunWorkflowAvailability(run, workflows);
+    if (availability.status === "missing" || availability.status === "version-mismatch") {
+      throw new Error(availability.message);
     }
 
     const duplicate = buildDuplicateRunConfiguration(run, {
+      workflow: availability.workflow ?? undefined,
       compatibleClients: compatibleExtensionClients,
       newChatGptTabValue: NEW_CHATGPT_TAB_VALUE
     });
@@ -386,9 +497,11 @@ export default function App(): JSX.Element {
     setSelectedFiles(duplicate.selectedFiles);
     setReferenceFiles(duplicate.referenceFiles);
     setSubjectFiles(duplicate.subjectFiles);
+    setSourceFiles(duplicate.sourceFiles);
     setPrompt(duplicate.prompt);
     setMasterPrompt(duplicate.masterPrompt);
     setSubjectInstruction(duplicate.subjectInstruction);
+    setSequencePrompts(duplicate.sequencePrompts);
     setModelName(duplicate.modelName);
     setProfileName(duplicate.profileName);
     setPauseForManualLogin(duplicate.pauseForManualLogin);
@@ -521,13 +634,20 @@ export default function App(): JSX.Element {
                   onChange={(event) => setSelectedWorkflowId(event.target.value)}
                   className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
                 >
+                  {workflows.length === 0 ? <option value="">No workflow plugins installed</option> : null}
                   {workflows.map((workflow) => (
                     <option key={workflow.manifest.id} value={workflow.manifest.id}>
-                      {workflow.manifest.title}
+                      {workflow.manifest.title} [{workflow.plugin.source}: {workflow.plugin.id}@{workflow.plugin.version}]
                     </option>
                   ))}
                 </select>
               </div>
+              {hasProject && workflows.length === 0 ? (
+                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.info)}>
+                  <Package className="mt-0.5 h-4 w-4 shrink-0" />
+                  Install a workflow plugin from the Plugins tab before starting a run.
+                </div>
+              ) : null}
 
               <div className="space-y-1.5">
                 <Label>Run name</Label>
@@ -554,42 +674,65 @@ export default function App(): JSX.Element {
               ) : null}
 
               {isChatGptExtensionWorkflow ? (
-                <>
-                  <ImagePicker
-                    label="Reference images"
-                    chooseLabel="Choose references"
-                    files={referenceFiles}
-                    emptyText="No reference files selected"
-                    onChoose={() => void chooseImages(setReferenceFiles, "Choose optional reference images")}
-                    onClear={() => setReferenceFiles([])}
-                  />
-                  <div className="space-y-1.5">
-                    <Label>Master prompt</Label>
-                    <Textarea
-                      className="min-h-12 py-1.5"
-                      value={masterPrompt}
-                      onChange={(event) => setMasterPrompt(event.target.value)}
-                      placeholder='Initial instruction. Example: "After the first response, respond with images only. When ready, respond READY."'
+                isChatGptSequenceWorkflow ? (
+                  <>
+                    <ImagePicker
+                      label="Source image"
+                      chooseLabel="Choose source"
+                      files={sourceFiles}
+                      emptyText="No source file selected"
+                      onChoose={() => void chooseImages((files) => setSourceFiles(files.slice(0, 1)), "Choose one source image")}
+                      onClear={() => setSourceFiles([])}
                     />
-                  </div>
-                  <ImagePicker
-                    label="Subject images"
-                    chooseLabel="Choose subjects"
-                    files={subjectFiles}
-                    emptyText="No subject files selected"
-                    onChoose={() => void chooseImages(setSubjectFiles, "Choose subject images")}
-                    onClear={() => setSubjectFiles([])}
-                  />
-                  <div className="space-y-1.5">
-                    <Label>Per-subject instruction</Label>
-                    <Textarea
-                      className="min-h-12 py-1.5"
-                      value={subjectInstruction}
-                      onChange={(event) => setSubjectInstruction(event.target.value)}
-                      placeholder="Optional. Leave blank to send each subject image without text."
+                    <div className="space-y-1.5">
+                      <Label>Setup prompt</Label>
+                      <Textarea
+                        className="min-h-12 py-1.5"
+                        value={masterPrompt}
+                        onChange={(event) => setMasterPrompt(event.target.value)}
+                        placeholder="Optional global setup sent with the source image before the sequence."
+                      />
+                    </div>
+                    <PromptSequenceEditor prompts={sequencePrompts} onChange={setSequencePrompts} />
+                  </>
+                ) : (
+                  <>
+                    <ImagePicker
+                      label="Reference images"
+                      chooseLabel="Choose references"
+                      files={referenceFiles}
+                      emptyText="No reference files selected"
+                      onChoose={() => void chooseImages(setReferenceFiles, "Choose optional reference images")}
+                      onClear={() => setReferenceFiles([])}
                     />
-                  </div>
-                </>
+                    <div className="space-y-1.5">
+                      <Label>Master prompt</Label>
+                      <Textarea
+                        className="min-h-12 py-1.5"
+                        value={masterPrompt}
+                        onChange={(event) => setMasterPrompt(event.target.value)}
+                        placeholder='Initial instruction. Example: "After the first response, respond with images only. When ready, respond READY."'
+                      />
+                    </div>
+                    <ImagePicker
+                      label="Subject images"
+                      chooseLabel="Choose subjects"
+                      files={subjectFiles}
+                      emptyText="No subject files selected"
+                      onChoose={() => void chooseImages(setSubjectFiles, "Choose subject images")}
+                      onClear={() => setSubjectFiles([])}
+                    />
+                    <div className="space-y-1.5">
+                      <Label>Per-subject instruction</Label>
+                      <Textarea
+                        className="min-h-12 py-1.5"
+                        value={subjectInstruction}
+                        onChange={(event) => setSubjectInstruction(event.target.value)}
+                        placeholder="Optional. Leave blank to send each subject image without text."
+                      />
+                    </div>
+                  </>
+                )
               ) : (
                 <ImagePicker
                   label="Images"
@@ -601,7 +744,7 @@ export default function App(): JSX.Element {
                 />
               )}
 
-              {!usesMasterPrompt(selectedWorkflowId) ? (
+              {!workflowHasField(selectedWorkflow, "masterPrompt") ? (
                 <>
                   <div className="space-y-1.5">
                     <Label>Prompt</Label>
@@ -614,7 +757,7 @@ export default function App(): JSX.Element {
                 </>
               ) : null}
 
-              {usesBrowserProfile(selectedWorkflowId) ? (
+              {usesBrowserProfile ? (
                 <>
                   <div className="grid grid-cols-[1fr_auto] items-end gap-3">
                     <div className="space-y-1.5">
@@ -646,7 +789,7 @@ export default function App(): JSX.Element {
                 </div>
               ) : null}
 
-              <Button className="h-9 w-full" onClick={() => createRunMutation.mutate()} disabled={createRunMutation.isPending}>
+              <Button className="h-9 w-full" onClick={() => createRunMutation.mutate()} disabled={createRunMutation.isPending || !selectedWorkflow}>
                 <Play className="h-4 w-4" />
                 {hasProject ? "Start run" : "Choose project and start"}
               </Button>
@@ -677,6 +820,16 @@ export default function App(): JSX.Element {
               >
                 Workflow Lab
               </button>
+              <button
+                type="button"
+                onClick={() => setWorkspaceView("plugins")}
+                className={cn(
+                  "rounded px-3 py-1.5 text-sm font-medium transition",
+                  workspaceView === "plugins" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Plugins
+              </button>
             </div>
             <div className="flex items-center gap-2">
               {workspaceView === "runs" ? (
@@ -690,6 +843,24 @@ export default function App(): JSX.Element {
 
           <div className={workspaceView === "lab" ? "min-h-0 flex-1 overflow-hidden" : "hidden"}>
             <WorkflowLabPanel extensionClients={extensionClients} hasProject={hasProject} apiBaseUrl={apiBaseUrl} />
+          </div>
+
+          <div className={workspaceView === "plugins" ? "min-h-0 flex-1 overflow-hidden" : "hidden"}>
+            <PluginPanel
+              plugins={plugins}
+              workflows={workflows}
+              rootDir={pluginsQuery.data?.rootDir ?? configQuery.data?.pluginRootDir ?? ""}
+              hasProject={hasProject}
+              isLoading={pluginsQuery.isLoading}
+              isInstalling={installPluginMutation.isPending}
+              uninstallingPlugin={`${uninstallPluginMutation.variables?.pluginId ?? ""}@${uninstallPluginMutation.variables?.version ?? ""}`}
+              onInstall={(pluginPath) => installPluginMutation.mutate(pluginPath)}
+              onUninstall={(pluginId, version) => uninstallPluginMutation.mutate({ pluginId, version })}
+              onRefresh={() => {
+                void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+                void queryClient.invalidateQueries({ queryKey: ["workflows"] });
+              }}
+            />
           </div>
 
           <div className={workspaceView === "runs" ? "flex min-h-0 flex-1 flex-col gap-4" : "hidden"}>
@@ -707,6 +878,7 @@ export default function App(): JSX.Element {
                     key={run.id}
                     run={run}
                     selected={selectedRunIds.has(run.id)}
+                    workflowAvailability={resolveRunWorkflowAvailability(run, workflows)}
                     onSelect={() => setSelectedRunId(run.id)}
                     onDuplicate={() => openDuplicateRunDialog(run)}
                   />
@@ -730,6 +902,7 @@ export default function App(): JSX.Element {
           artifacts={selectedRunQuery.data?.artifacts ?? []}
           events={selectedRunQuery.data?.events ?? []}
           extensionClients={extensionClients}
+          workflowAvailability={activeRunWorkflowAvailability}
           hasDetails={Boolean(selectedRunQuery.data)}
           isLoading={selectedRunQuery.isLoading}
           detailError={selectedRunDetailError}
@@ -781,11 +954,166 @@ function LocalRuntimeFooter({ config, system }: { config?: BasedBlinkConfig; sys
         <span className="min-w-0 flex-[1.2_1_0] truncate">Project: {config?.projectDir ?? "No project selected"}</span>
         <span className="min-w-0 flex-1 truncate">Data: {config?.dataDir || "Choose a project to create .blink data"}</span>
         <span className="shrink-0 truncate">API: {config?.apiBaseUrl || "Not running"}</span>
+        <span className="shrink-0 truncate">Plugins: {system?.plugins?.installed ?? 0}</span>
         <span className="shrink-0">
           Extension: {system?.extension.connectedClients.length ?? 0}; pending: {system?.extension.pending ?? 0}
         </span>
       </div>
     </footer>
+  );
+}
+
+function PluginPanel({
+  plugins,
+  workflows,
+  rootDir,
+  hasProject,
+  isLoading,
+  isInstalling,
+  uninstallingPlugin,
+  onInstall,
+  onUninstall,
+  onRefresh
+}: {
+  plugins: InstalledPluginRecord[];
+  workflows: WorkflowSummary[];
+  rootDir: string;
+  hasProject: boolean;
+  isLoading: boolean;
+  isInstalling: boolean;
+  uninstallingPlugin: string;
+  onInstall(pluginPath: string): void;
+  onUninstall(pluginId: string, version: string): void;
+  onRefresh(): void;
+}): JSX.Element {
+  const [pluginPath, setPluginPath] = useState("");
+  const builtInWorkflows = workflows.filter((workflow) => workflow.plugin.source === "builtin");
+  const installedWorkflowCount = workflows.filter((workflow) => workflow.plugin.source === "user").length;
+
+  return (
+    <Card className="flex h-full min-h-0 flex-col">
+      <CardHeader className="shrink-0 p-4 pb-2">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle>Workflow Plugins</CardTitle>
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              {rootDir || "Open a project to start the local API and manage user plugins."}
+            </p>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={!hasProject}>
+            <RefreshCcw className="h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-4 pt-2">
+        <div className="grid grid-cols-[1fr_auto] gap-2">
+          <Input
+            value={pluginPath}
+            onChange={(event) => setPluginPath(event.target.value)}
+            placeholder="Local plugin folder path containing plugin.json"
+            disabled={!hasProject || isInstalling}
+          />
+          <Button
+            type="button"
+            onClick={() => onInstall(pluginPath.trim())}
+            disabled={!hasProject || isInstalling || !pluginPath.trim()}
+          >
+            <Upload className="h-4 w-4" />
+            Install
+          </Button>
+        </div>
+
+        {!hasProject ? (
+          <div className={cn("rounded-md border p-3 text-sm", toneClassNames.info)}>
+            Open a project to use the local plugin API. Plugins are installed per user, not per project.
+          </div>
+        ) : null}
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <PluginStat label="Installed plugins" value={String(plugins.length)} />
+          <PluginStat label="Plugin workflows" value={String(installedWorkflowCount)} />
+          <PluginStat label="Built-ins" value={String(builtInWorkflows.length)} />
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
+          {isLoading ? (
+            <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">Loading plugins...</div>
+          ) : null}
+
+          {plugins.length === 0 && !isLoading ? (
+            <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
+              No user plugins are installed. Built-in workflows remain available.
+            </div>
+          ) : null}
+
+          {plugins.map((plugin) => {
+            const pluginKey = `${plugin.pluginId}@${plugin.version}`;
+            const isUninstalling = uninstallingPlugin === pluginKey;
+            return (
+              <div key={pluginKey} className="rounded-md border border-border bg-background p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Package className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div className="truncate text-sm font-medium">
+                        {plugin.name} {plugin.version}
+                      </div>
+                      <Badge
+                        className={cn(
+                          "border",
+                          plugin.status === "loaded"
+                            ? toneClassNames.success
+                            : plugin.status === "incompatible"
+                              ? toneClassNames.warning
+                              : toneClassNames.danger
+                        )}
+                      >
+                        {plugin.status}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 truncate text-xs text-muted-foreground">
+                      {plugin.pluginId} | API {plugin.pluginApiVersion}
+                    </div>
+                    <div className="mt-1 truncate text-xs text-muted-foreground">{plugin.installPath}</div>
+                    {plugin.error ? <div className={cn("mt-2 text-xs", toneTextClassNames.danger)}>{plugin.error}</div> : null}
+                    {plugin.workflows.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {plugin.workflows.map((workflowId) => (
+                          <Badge key={workflowId} className={cn("border", toneClassNames.neutral)}>
+                            {workflowId}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => onUninstall(plugin.pluginId, plugin.version)}
+                    disabled={isUninstalling}
+                    title="Uninstall this user plugin version"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Uninstall
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PluginStat({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="rounded-md border border-border bg-background p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 text-lg font-semibold">{value}</div>
+    </div>
   );
 }
 
@@ -1079,6 +1407,7 @@ function RunDetailModal({
   artifacts,
   events,
   extensionClients,
+  workflowAvailability,
   hasDetails,
   isLoading,
   detailError,
@@ -1097,6 +1426,7 @@ function RunDetailModal({
   artifacts: ArtifactRecord[];
   events: RuntimeEvent[];
   extensionClients: SystemInfo["extension"]["connectedClients"];
+  workflowAvailability: RunWorkflowAvailability | null;
   hasDetails: boolean;
   isLoading: boolean;
   detailError: string | null;
@@ -1117,10 +1447,14 @@ function RunDetailModal({
   const [renameError, setRenameError] = useState<string | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
   const chatGptFocusTarget = useMemo(
-    () => resolveChatGptFocusTarget(run, extensionClients),
-    [extensionClients, run]
+    () => resolveChatGptFocusTarget(run, extensionClients, workflowAvailability?.workflow ?? undefined),
+    [extensionClients, run, workflowAvailability?.workflow]
   );
-  const canResumeRun = run?.status === "waiting_manual" || isRecoverableFailedChatGptRun(run);
+  const workflowUsable = canUseRunWorkflow(workflowAvailability);
+  const runWorkflow = workflowAvailability?.workflow ?? undefined;
+  const hasChatGptFocus = workflowHasCapability(runWorkflow, "chatgpt.focusTarget");
+  const hasChatGptArtifactPairs = workflowHasCapability(runWorkflow, "chatgpt.artifactPairs");
+  const canResumeRun = workflowUsable && (run?.status === "waiting_manual" || isRecoverableFailedChatGptRun(run, runWorkflow));
   const canRenameRun = Boolean(run && !["queued", "running", "pausing", "waiting_manual"].includes(run.status));
 
   useEffect(() => {
@@ -1251,6 +1585,18 @@ function RunDetailModal({
                           <div className="truncate font-medium">{run.name}</div>
                         )}
                         <div className="text-xs text-muted-foreground">{run.workflowId}</div>
+                        {workflowAvailability ? (
+                          <div
+                            className={cn(
+                              "text-xs",
+                              workflowAvailability.status === "missing" || workflowAvailability.status === "version-mismatch"
+                                ? toneTextClassNames.danger
+                                : "text-muted-foreground"
+                            )}
+                          >
+                            {workflowAvailability.message}
+                          </div>
+                        ) : null}
                       </div>
                       <Badge className={cn("border", statusTone(run.status))}>{run.status}</Badge>
                     </div>
@@ -1259,6 +1605,11 @@ function RunDetailModal({
                   </div>
 
                   {run.error ? <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>{run.error}</div> : null}
+                  {workflowAvailability?.status === "missing" || workflowAvailability?.status === "version-mismatch" ? (
+                    <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>
+                      {workflowAvailability.message} Install the matching plugin version before duplicating or resuming this run.
+                    </div>
+                  ) : null}
                   {renameError ? <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>{renameError}</div> : null}
                 </>
               ) : (
@@ -1268,7 +1619,7 @@ function RunDetailModal({
               )}
 
               <div className="flex flex-wrap gap-2">
-                {run?.workflowId === "chatgpt.extension-image-transform" && run.status === "running" ? (
+                {run && hasChatGptFocus && run.status === "running" ? (
                   <Button size="sm" variant="outline" onClick={() => onPause(run.id)}>
                     <PauseCircle className="h-4 w-4" />
                     Pause
@@ -1318,7 +1669,7 @@ function RunDetailModal({
                   <Pencil className="h-4 w-4" />
                   Rename
                 </Button>
-                {chatGptFocusTarget ? (
+                {hasChatGptFocus && chatGptFocusTarget ? (
                   <Button
                     variant="outline"
                     size="sm"
@@ -1327,7 +1678,7 @@ function RunDetailModal({
                     title={
                       chatGptFocusTarget.disabledReason ??
                       (chatGptFocusTarget.action === "open"
-                        ? "Open the tracked ChatGPT page so the extension can reconnect."
+                        ? "Open the tracked ChatGPT tab URL."
                         : `Go to ${chatGptFocusTarget.client?.title || "the selected ChatGPT tab"}`)
                     }
                   >
@@ -1353,7 +1704,7 @@ function RunDetailModal({
                   <h3 className="text-sm font-semibold">Artifacts</h3>
                   {artifacts.length === 0 ? (
                     <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No artifacts yet.</div>
-                  ) : run?.workflowId === "chatgpt.extension-image-transform" && getChatGptRunInput(run.input) ? (
+                  ) : hasChatGptArtifactPairs && run && getChatGptRunInput(run.input) ? (
                     <ChatGptArtifactPairs
                       run={run}
                       artifacts={artifacts}
@@ -1554,6 +1905,97 @@ function ChatGptArtifactPairs({
   onOpenDataFolder(): void | Promise<unknown>;
 }): JSX.Element {
   const pairing = buildChatGptArtifactPairing(input, artifacts);
+  if (input.kind === "sequence") {
+    const sourceImage = input.sourceImages[0] ?? "";
+    return (
+      <div className="space-y-4">
+        <div className="rounded-md border border-border bg-background p-4">
+          <h4 className="text-sm font-semibold">GPT sequence context</h4>
+          <div className="mt-3 space-y-3">
+            <div>
+              <div className="mb-1 text-xs font-medium text-muted-foreground">Setup prompt sent first</div>
+              <div className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">
+                {input.masterPrompt || "No setup prompt was sent."}
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 text-xs font-medium text-muted-foreground">Source image</div>
+              {sourceImage ? (
+                <InputImagePreview runId={run.id} field="sourceImages" index={0} filePath={sourceImage} />
+              ) : (
+                <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No source image was recorded.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <h4 className="text-sm font-semibold">Prompt sequence and generated results</h4>
+          {pairing.pairs.map((pair) => {
+            const previousOutput = pair.index > 0 ? pairing.pairs[pair.index - 1]?.primaryOutput ?? null : null;
+            return (
+              <article key={`${pair.prompt}-${pair.index}`} className="rounded-md border border-border bg-background p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-medium">Prompt {pair.index + 1}</div>
+                    <div className="text-xs text-muted-foreground">{pair.index === 0 ? fileName(sourceImage) : "Previous generated result"}</div>
+                  </div>
+                  <Badge className={cn("border", toneClassNames.neutral)}>
+                    {pair.primaryOutput ? "1 result" : "Missing result"}
+                  </Badge>
+                </div>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="space-y-3">
+                    <div className="text-xs font-medium text-muted-foreground">Input to GPT</div>
+                    {pair.index === 0 ? (
+                      <InputImagePreview runId={run.id} field="sourceImages" index={0} filePath={sourceImage} />
+                    ) : previousOutput ? (
+                      <OutputImagePreview artifact={previousOutput} />
+                    ) : (
+                      <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
+                        Previous output is not available yet.
+                      </div>
+                    )}
+                    <div>
+                      <div className="mb-1 text-xs font-medium text-muted-foreground">Prompt paired with this input</div>
+                      <div className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">{pair.prompt}</div>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="text-xs font-medium text-muted-foreground">GPT result</div>
+                    {pair.primaryOutput ? (
+                      <OutputImagePreview artifact={pair.primaryOutput} />
+                    ) : (
+                      <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
+                        No output artifact is paired with this prompt yet.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+
+        {pairing.otherArtifacts.length > 0 ? (
+          <div className="space-y-3">
+            <div className="flex justify-end">
+              <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run.runDir}>
+                <FolderOpen className="h-4 w-4" />
+                Data folder
+              </Button>
+            </div>
+            <h4 className="text-sm font-semibold">Other artifacts</h4>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {pairing.otherArtifacts.map((artifact) => (
+                <ArtifactPreview key={artifact.id} artifact={artifact} />
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -1594,7 +2036,7 @@ function ChatGptArtifactPairs({
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="text-sm font-medium">Subject {pair.index + 1}</div>
-                <div className="text-xs text-muted-foreground">{fileName(pair.subjectImage)}</div>
+                <div className="text-xs text-muted-foreground">{fileName(pair.subjectImage ?? "")}</div>
               </div>
               <Badge className={cn("border", toneClassNames.neutral)}>
                 {pair.primaryOutput ? "1 result" : "Missing result"}
@@ -1603,7 +2045,7 @@ function ChatGptArtifactPairs({
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="space-y-3">
                 <div className="text-xs font-medium text-muted-foreground">Input to GPT</div>
-                <InputImagePreview runId={run.id} field="subjectImages" index={pair.index} filePath={pair.subjectImage} />
+                <InputImagePreview runId={run.id} field="subjectImages" index={pair.index} filePath={pair.subjectImage ?? ""} />
                 <div>
                   <div className="mb-1 text-xs font-medium text-muted-foreground">Prompt paired with this input</div>
                   <div className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">
@@ -1653,7 +2095,7 @@ function InputImagePreview({
   filePath
 }: {
   runId: string;
-  field: "images" | "referenceImages" | "subjectImages";
+  field: "images" | "referenceImages" | "subjectImages" | "sourceImages";
   index: number;
   filePath: string;
 }): JSX.Element {
@@ -2335,14 +2777,17 @@ function ChatGptTabRoutingPanel({
 function RunRow({
   run,
   selected,
+  workflowAvailability,
   onSelect,
   onDuplicate
 }: {
   run: RunRecord;
   selected: boolean;
+  workflowAvailability: RunWorkflowAvailability;
   onSelect: () => void;
   onDuplicate: () => void;
 }): JSX.Element {
+  const workflowUnavailable = workflowAvailability.status === "missing" || workflowAvailability.status === "version-mismatch";
   return (
     <div
       className={cn(
@@ -2354,19 +2799,112 @@ function RunRow({
         <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
           <div className="min-w-0 space-y-1">
             <div className="truncate font-medium">{run.name}</div>
-          <div className="text-xs text-muted-foreground">{run.workflowId} · {formatDate(run.createdAt)}</div>
+            {workflowUnavailable ? (
+              <div className={cn("truncate text-xs", toneTextClassNames.danger)}>{workflowAvailability.message}</div>
+            ) : run.pluginId ? (
+              <div className="truncate text-xs text-muted-foreground">
+                {run.pluginId}@{run.pluginVersion ?? "unknown"}
+              </div>
+            ) : null}
+            <div className="text-xs text-muted-foreground">{run.workflowId} | {formatDate(run.createdAt)}</div>
             <div className="truncate text-sm text-muted-foreground">{run.currentStep ?? "Queued"}</div>
           </div>
           <Progress value={run.progress} className="mt-3" />
         </button>
         <div className="flex shrink-0 flex-col items-end gap-2">
           <Badge className={cn("border", statusTone(run.status))}>{run.status}</Badge>
-          <Button type="button" variant="outline" size="sm" onClick={onDuplicate} title="Duplicate Run Configuration">
+          {workflowUnavailable ? <Badge className={cn("border", toneClassNames.danger)}>plugin missing</Badge> : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onDuplicate}
+            disabled={workflowUnavailable}
+            title={workflowUnavailable ? workflowAvailability.message : "Duplicate Run Configuration"}
+          >
             <Copy className="h-4 w-4" />
             Duplicate config
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function PromptSequenceEditor({
+  prompts,
+  onChange
+}: {
+  prompts: string[];
+  onChange(prompts: string[]): void;
+}): JSX.Element {
+  const updatePrompt = (index: number, value: string): void => {
+    onChange(prompts.map((prompt, promptIndex) => (promptIndex === index ? value : prompt)));
+  };
+  const removePrompt = (index: number): void => {
+    onChange(prompts.filter((_prompt, promptIndex) => promptIndex !== index));
+  };
+  const movePrompt = (index: number, direction: -1 | 1): void => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= prompts.length) return;
+    const next = [...prompts];
+    [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+    onChange(next);
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <Label>Prompt sequence</Label>
+        <Button type="button" variant="outline" size="sm" onClick={() => onChange([...prompts, ""])}>
+          <Plus className="h-4 w-4" />
+          Add prompt
+        </Button>
+      </div>
+      {prompts.length === 0 ? (
+        <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No prompts added.</div>
+      ) : (
+        <div className="space-y-2">
+          {prompts.map((prompt, index) => (
+            <div key={index} className="rounded-md border border-border bg-background p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-xs font-medium text-muted-foreground">Prompt {index + 1}</div>
+                <div className="flex shrink-0 gap-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => movePrompt(index, -1)}
+                    disabled={index === 0}
+                    title="Move prompt up"
+                  >
+                    <ArrowUp className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => movePrompt(index, 1)}
+                    disabled={index === prompts.length - 1}
+                    title="Move prompt down"
+                  >
+                    <ArrowDown className="h-4 w-4" />
+                  </Button>
+                  <Button type="button" variant="outline" size="icon" onClick={() => removePrompt(index)} title="Remove prompt">
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <Textarea
+                className="min-h-16 py-1.5"
+                value={prompt}
+                onChange={(event) => updatePrompt(index, event.target.value)}
+                placeholder="Describe the next edit in the chain."
+              />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

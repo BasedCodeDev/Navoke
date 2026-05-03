@@ -1,4 +1,4 @@
-import type { RunRecord, SystemInfo } from "./api";
+import type { RunRecord, SystemInfo, WorkflowSummary } from "./api";
 
 export interface DuplicateRunConfiguration {
   workflowId: string;
@@ -6,9 +6,11 @@ export interface DuplicateRunConfiguration {
   selectedFiles: string[];
   referenceFiles: string[];
   subjectFiles: string[];
+  sourceFiles: string[];
   prompt: string;
   masterPrompt: string;
   subjectInstruction: string;
+  sequencePrompts: string[];
   modelName: string;
   profileName: string;
   pauseForManualLogin: boolean;
@@ -17,6 +19,7 @@ export interface DuplicateRunConfiguration {
 }
 
 interface DuplicateRunOptions {
+  workflow?: WorkflowSummary;
   compatibleClients: SystemInfo["extension"]["connectedClients"];
   newChatGptTabValue: string;
 }
@@ -32,9 +35,11 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     selectedFiles: [],
     referenceFiles: [],
     subjectFiles: [],
+    sourceFiles: [],
     prompt: "",
     masterPrompt: "",
     subjectInstruction: "",
+    sequencePrompts: [],
     modelName: DEFAULT_MODEL_NAME,
     profileName: DEFAULT_PROFILE_NAME,
     pauseForManualLogin: true,
@@ -42,13 +47,18 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     filePaths: []
   };
 
-  if (run.workflowId === "chatgpt.extension-image-transform") {
-    base.referenceFiles = stringArrayField(input, "referenceImages");
-    base.subjectFiles = stringArrayField(input, "subjectImages");
+  if (isChatGptWorkflowInput(input, options.workflow)) {
+    if ("sourceImages" in input || "prompts" in input) {
+      base.sourceFiles = stringArrayField(input, "sourceImages");
+      base.sequencePrompts = stringArrayField(input, "prompts");
+    } else {
+      base.referenceFiles = stringArrayField(input, "referenceImages");
+      base.subjectFiles = stringArrayField(input, "subjectImages");
+      base.subjectInstruction = stringField(input, "subjectInstruction");
+    }
     base.masterPrompt = stringField(input, "masterPrompt");
-    base.subjectInstruction = stringField(input, "subjectInstruction");
     base.chatGptTabSelection = resolveDuplicateChatGptTabSelection(input, options);
-  } else if (run.workflowId === "hunyuan.image-to-model") {
+  } else if (isBrowserProfileWorkflowInput(input, options.workflow)) {
     base.selectedFiles = stringArrayField(input, "images");
     base.prompt = stringField(input, "prompt");
     base.profileName = stringField(input, "profileName") || DEFAULT_PROFILE_NAME;
@@ -63,12 +73,21 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
   return base;
 }
 
+function isChatGptWorkflowInput(input: Record<string, unknown>, workflow: WorkflowSummary | undefined): boolean {
+  return Boolean(workflow?.manifest.uiCapabilities?.includes("chatgpt.tabRouting")) || "masterPrompt" in input || "subjectImages" in input || "sourceImages" in input;
+}
+
+function isBrowserProfileWorkflowInput(input: Record<string, unknown>, workflow: WorkflowSummary | undefined): boolean {
+  return Boolean(workflow?.manifest.uiCapabilities?.includes("browser.profile")) || "profileName" in input || "pauseForManualLogin" in input;
+}
+
 export function collectRunInputFilePaths(input: unknown): string[] {
   const record = asRecord(input);
   return uniqueStrings([
     ...stringArrayField(record, "images"),
     ...stringArrayField(record, "referenceImages"),
-    ...stringArrayField(record, "subjectImages")
+    ...stringArrayField(record, "subjectImages"),
+    ...stringArrayField(record, "sourceImages")
   ]);
 }
 

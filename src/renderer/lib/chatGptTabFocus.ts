@@ -1,4 +1,4 @@
-import type { RunRecord, SystemInfo } from "./api";
+import type { RunRecord, SystemInfo, WorkflowSummary } from "./api";
 
 export type ExtensionClient = SystemInfo["extension"]["connectedClients"][number];
 
@@ -19,8 +19,12 @@ export interface ChatGptFocusTarget {
   disabledReason: string | null;
 }
 
-export function resolveChatGptFocusTarget(run: RunRecord | undefined, clients: ExtensionClient[]): ChatGptFocusTarget | null {
-  if (!run || run.workflowId !== "chatgpt.extension-image-transform") return null;
+export function resolveChatGptFocusTarget(
+  run: RunRecord | undefined,
+  clients: ExtensionClient[],
+  workflow?: WorkflowSummary
+): ChatGptFocusTarget | null {
+  if (!run || !isChatGptWorkflow(workflow)) return null;
 
   const target = readChatGptTabTarget(run.input);
   const page = readChatGptPage(run.output);
@@ -90,13 +94,17 @@ export function resolveClientById(clientId: string, clients: ExtensionClient[]):
   return clientToFocusTarget(client);
 }
 
-export function isRecoverableFailedChatGptRun(run: RunRecord | undefined): boolean {
-  if (!run || run.status !== "failed" || run.workflowId !== "chatgpt.extension-image-transform") return false;
+export function isRecoverableFailedChatGptRun(run: RunRecord | undefined, workflow?: WorkflowSummary): boolean {
+  if (!run || run.status !== "failed" || !isChatGptWorkflow(workflow)) return false;
   const target = readChatGptTabTarget(run.input);
   const page = readChatGptPage(run.output);
   if (page) return true;
   if (hasChatGptCheckpoint(run.output)) return true;
   return Boolean(target?.url);
+}
+
+function isChatGptWorkflow(workflow?: WorkflowSummary): boolean {
+  return Boolean(workflow?.manifest.uiCapabilities?.includes("chatgpt.focusTarget"));
 }
 
 export function readChatGptTabTarget(input: unknown): ChatGptTabTargetInput | null {
@@ -181,7 +189,7 @@ function urlToOpenTarget(url: string): ChatGptFocusTarget {
     client: null,
     url,
     action: "open",
-    buttonLabel: "Open ChatGPT page",
+    buttonLabel: "Open ChatGPT tab",
     disabledReason: null
   };
 }

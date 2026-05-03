@@ -542,9 +542,14 @@ export class ExtensionBridge {
   findCompatibleClientForTarget(target: ChatGptExtensionTaskTarget): ExtensionClientStatus | undefined {
     const normalizedTarget = normalizeTaskTarget(target);
     this.pruneStaleClients();
-    return [...this.clients.values()].find(
-      (client) => client.compatible && this.matchesTarget(normalizedTarget, client)
-    );
+    const compatibleClients = [...this.clients.values()].filter((client) => client.compatible);
+    if (normalizedTarget.mode === "existing" && normalizedTarget.clientId) {
+      const exactClient = compatibleClients.find(
+        (client) => client.id === normalizedTarget.clientId && this.matchesTarget(normalizedTarget, client)
+      );
+      if (exactClient) return exactClient;
+    }
+    return compatibleClients.find((client) => this.matchesTarget(normalizedTarget, client));
   }
 
   completeTask(taskId: string, result: ExtensionTaskResult): void {

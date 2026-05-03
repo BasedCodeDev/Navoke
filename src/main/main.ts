@@ -5,11 +5,12 @@ import { ApiServer } from "./api/server";
 import { SqliteStore } from "./db/sqliteStore";
 import { extensionBridge } from "./extension/extensionBridge";
 import { WorkflowLab } from "./lab/workflowLab";
+import { PluginManager } from "./plugins/pluginManager";
 import { AppSettingsStore, projectDisplayName, renameProject as writeProjectName } from "./projectSettings";
 import { RuntimeEventBus } from "./runtime/eventBus";
 import { LocalWorkflowRunner } from "./runtime/localWorkflowRunner";
 import { createRuntimePaths } from "./runtime/paths";
-import type { RuntimePaths, WorkflowDefinition } from "./runtime/types";
+import type { RuntimePaths, WorkflowRegistry } from "./runtime/types";
 import { createWorkflowRegistry } from "./workflows";
 
 interface RuntimeState {
@@ -29,12 +30,14 @@ interface AppConfig {
   recentProjects: Array<{ name: string; path: string; exists: boolean }>;
   projectDialogCancelled?: boolean;
   platform: NodeJS.Platform;
+  pluginRootDir: string | null;
 }
 
 let mainWindow: BrowserWindow | null = null;
 let runtime: RuntimeState | null = null;
 let settingsStore: AppSettingsStore | null = null;
-let workflows: Map<string, WorkflowDefinition> = new Map();
+let pluginManager: PluginManager | null = null;
+let workflows: WorkflowRegistry = new Map();
 const APP_ICON_PNG_RELATIVE_PATH = path.join("assets", "app-icon.png");
 const APP_ICON_ICO_RELATIVE_PATH = path.join("assets", "app-icon.ico");
 const WINDOWS_APP_USER_MODEL_ID = "com.based.blink";
@@ -50,7 +53,9 @@ async function bootstrap(): Promise<void> {
   }
   Menu.setApplicationMenu(null);
   settingsStore = new AppSettingsStore(app.getPath("userData"));
-  workflows = createWorkflowRegistry();
+  pluginManager = new PluginManager(app.getPath("userData"));
+  await pluginManager.reload();
+  replaceWorkflowRegistry(createWorkflowRegistry(pluginManager));
   registerIpc();
 
   const lastProjectDir = settingsStore.lastProjectDir;
@@ -72,7 +77,8 @@ function getConfig(): AppConfig {
     projectDir: runtime?.paths.projectDir ?? null,
     projectName: runtime?.paths.projectDir ? projectDisplayName(runtime.paths.projectDir) : null,
     recentProjects: getRecentProjects(),
-    platform: process.platform
+    platform: process.platform,
+    pluginRootDir: pluginManager?.rootDir ?? null
   };
 }
 
@@ -95,12 +101,40 @@ async function openProject(projectDir: string): Promise<AppConfig> {
   const store = await SqliteStore.open(paths.dbPath);
   const runner = new LocalWorkflowRunner(workflows, store, paths, eventBus);
   const workflowLab = new WorkflowLab(paths, extensionBridge);
-  const apiServer = new ApiServer({ store, runner, eventBus, workflows, paths, extensionBridge, workflowLab });
+  const apiServer = new ApiServer({
+    store,
+    runner,
+    eventBus,
+    workflows,
+    plugins: getPluginManager(),
+    reloadWorkflows,
+    paths,
+    extensionBridge,
+    workflowLab
+  });
   await apiServer.start();
 
   runtime = { apiServer, eventBus, paths, runner, store, workflowLab };
   settingsStore?.setLastProjectDir(paths.projectDir);
   return getConfig();
+}
+
+async function reloadWorkflows(): Promise<void> {
+  const plugins = getPluginManager();
+  await plugins.reload();
+  replaceWorkflowRegistry(createWorkflowRegistry(plugins));
+}
+
+function replaceWorkflowRegistry(next: WorkflowRegistry): void {
+  workflows.clear();
+  for (const [workflowId, registration] of next) {
+    workflows.set(workflowId, registration);
+  }
+}
+
+function getPluginManager(): PluginManager {
+  if (!pluginManager) throw new Error("Plugin manager is not initialized.");
+  return pluginManager;
 }
 
 async function closeRuntime(): Promise<void> {

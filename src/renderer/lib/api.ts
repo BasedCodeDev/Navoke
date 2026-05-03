@@ -8,6 +8,7 @@ export interface WorkflowManifest {
   requiresBrowser: boolean;
   targetUrl?: string;
   outputKinds: string[];
+  uiCapabilities?: Array<"chatgpt.tabRouting" | "chatgpt.focusTarget" | "chatgpt.artifactPairs" | "browser.profile">;
   inputFields: Array<{
     name: string;
     label: string;
@@ -19,13 +20,56 @@ export interface WorkflowManifest {
   }>;
 }
 
+export type PluginSource = "builtin" | "user";
+
+export type WorkflowPluginCapability = "filesystem.artifacts" | "browser" | "extension.chatgpt";
+
+export interface WorkflowPluginMetadata {
+  id: string;
+  name: string;
+  version: string;
+  source: PluginSource;
+  apiVersion: string;
+  installPath?: string;
+  capabilities: WorkflowPluginCapability[];
+}
+
 export interface WorkflowSummary {
   manifest: WorkflowManifest;
+  plugin: WorkflowPluginMetadata;
+  availability: {
+    status: "available";
+  };
+}
+
+export interface InstalledPluginRecord {
+  pluginId: string;
+  name: string;
+  version: string;
+  pluginApiVersion: string;
+  installPath: string;
+  manifestPath: string;
+  entrypointPath: string;
+  workflows: string[];
+  capabilities: WorkflowPluginCapability[];
+  status: "loaded" | "failed" | "incompatible";
+  loadedAt: string;
+  error: string | null;
+}
+
+export interface PluginListResult {
+  rootDir: string;
+  plugins: InstalledPluginRecord[];
 }
 
 export interface RunRecord {
   id: string;
   workflowId: string;
+  workflowVersion?: string | null;
+  pluginId?: string | null;
+  pluginVersion?: string | null;
+  pluginApiVersion?: string | null;
+  pluginSource?: PluginSource | "unknown" | null;
   name: string;
   runDir: string | null;
   status: "queued" | "running" | "pausing" | "waiting_manual" | "completed" | "failed" | "cancelled";
@@ -80,6 +124,10 @@ export interface RunDetail {
 export interface SystemInfo {
   paths: Record<string, string>;
   runner: { queued: number; running: number };
+  plugins?: {
+    rootDir: string;
+    installed: number;
+  };
   extension: {
     pending: number;
     running: number;
@@ -247,6 +295,19 @@ export async function listWorkflows(): Promise<WorkflowSummary[]> {
   return apiFetch("/api/workflows");
 }
 
+export async function listPlugins(): Promise<PluginListResult> {
+  return apiFetch("/api/plugins");
+}
+
+export async function installPlugin(path: string): Promise<{ plugin: InstalledPluginRecord }> {
+  return apiFetch("/api/plugins/install", { method: "POST", body: JSON.stringify({ path }) });
+}
+
+export async function uninstallPlugin(pluginId: string, version?: string): Promise<{ id: string; deleted: true }> {
+  const query = version ? `?version=${encodeURIComponent(version)}` : "";
+  return apiFetch(`/api/plugins/${encodeURIComponent(pluginId)}${query}`, { method: "DELETE" });
+}
+
 export async function listRuns(): Promise<RunRecord[]> {
   return apiFetch("/api/runs");
 }
@@ -339,7 +400,7 @@ export async function artifactDownloadUrl(id: string): Promise<string> {
   return `${config.apiBaseUrl}/api/artifacts/${id}/download`;
 }
 
-export async function runInputFileUrl(runId: string, field: "images" | "referenceImages" | "subjectImages", index: number): Promise<string> {
+export async function runInputFileUrl(runId: string, field: "images" | "referenceImages" | "subjectImages" | "sourceImages", index: number): Promise<string> {
   const config = await getConfig();
   return `${config.apiBaseUrl}/api/runs/${runId}/input-files/${field}/${index}`;
 }

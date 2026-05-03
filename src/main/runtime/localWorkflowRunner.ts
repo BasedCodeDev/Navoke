@@ -3,7 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { RuntimeEventBus } from "./eventBus";
 import type { SqliteStore } from "../db/sqliteStore";
-import type { ArtifactRecord, RunRecord, RuntimePaths, WorkflowContext, WorkflowDefinition } from "./types";
+import type {
+  ArtifactRecord,
+  RunRecord,
+  RuntimePaths,
+  WorkflowContext,
+  WorkflowDefinition,
+  WorkflowPluginMetadata,
+  WorkflowRegistration,
+  WorkflowRegistry
+} from "./types";
 import { ensureRunDataDirs, getRunArtifactDir, getRunDir, getRunInputDir, getRunOutputArtifactDir } from "./paths";
 import { copyFileToDir, writeJson } from "../utils/files";
 
@@ -13,6 +22,14 @@ function createId(): string {
 
 const DELETE_WAIT_TIMEOUT_MS = 30_000;
 const ACTIVE_RENAME_STATUSES = new Set(["queued", "running", "pausing", "waiting_manual"]);
+const INLINE_WORKFLOW_PLUGIN: WorkflowPluginMetadata = {
+  id: "runtime.inline",
+  name: "Runtime Inline Workflow",
+  version: "0.0.0",
+  source: "builtin",
+  apiVersion: "1",
+  capabilities: ["filesystem.artifacts"]
+};
 
 interface FileInputMapping {
   field: string;
@@ -39,17 +56,21 @@ export class LocalWorkflowRunner {
   private queue: QueuedRun[] = [];
   private readonly running = new Map<string, RunningRun>();
   private readonly activeByWorkflow = new Map<string, number>();
+  private readonly workflows: WorkflowRegistry;
 
   constructor(
-    private readonly workflows: Map<string, WorkflowDefinition>,
+    workflows: Map<string, WorkflowDefinition | WorkflowRegistration>,
     private readonly store: SqliteStore,
     private readonly paths: RuntimePaths,
     private readonly eventBus: RuntimeEventBus
-  ) {}
+  ) {
+    this.workflows = normalizeWorkflowRegistry(workflows);
+  }
 
   enqueue(input: { workflowId: string; name?: string; workflowInput: unknown }): RunRecord {
-    const workflow = this.workflows.get(input.workflowId);
-    if (!workflow) throw new Error(`Unknown workflow: ${input.workflowId}`);
+    const registration = this.workflows.get(input.workflowId);
+    if (!registration) throw new Error(`Unknown workflow: ${input.workflowId}`);
+    const workflow = registration.definition;
 
     const parsed = workflow.inputSchema.safeParse(input.workflowInput);
     if (!parsed.success) {
@@ -69,6 +90,7 @@ export class LocalWorkflowRunner {
         runId,
         runName,
         runDir,
+        plugin: registration.plugin,
         originalInput: parsed.data,
         copiedInput: preparedInput.input,
         fileMappings: preparedInput.fileMappings
@@ -78,6 +100,11 @@ export class LocalWorkflowRunner {
     const run = this.store.createRun({
       id: runId,
       workflowId: workflow.manifest.id,
+      workflowVersion: workflow.manifest.version,
+      pluginId: registration.plugin.id,
+      pluginVersion: registration.plugin.version,
+      pluginApiVersion: registration.plugin.apiVersion,
+      pluginSource: registration.plugin.source,
       name: runName,
       runDir,
       status: "queued",
@@ -166,8 +193,8 @@ export class LocalWorkflowRunner {
     if (!existing) throw new Error(`Run not found: ${runId}`);
     if (existing.status !== "failed") return existing;
 
-    const workflow = this.workflows.get(existing.workflowId);
-    if (!workflow) throw new Error(`Unknown workflow: ${existing.workflowId}`);
+    const registration = this.getRegistrationForRun(existing);
+    const workflow = registration.definition;
     if (!workflow.canResumeFailedRun?.(existing)) {
       throw new Error("This failed run is not recoverable. Create a new run instead.");
     }
@@ -346,21 +373,23 @@ export class LocalWorkflowRunner {
 
   private async drain(): Promise<void> {
     for (const entry of [...this.queue]) {
-      const workflow = this.workflows.get(entry.workflowId);
-      if (!workflow) continue;
+      const registration = this.workflows.get(entry.workflowId);
+      if (!registration) continue;
+      const workflow = registration.definition;
       const active = this.activeByWorkflow.get(entry.workflowId) ?? 0;
       if (active >= workflow.manifest.concurrency) continue;
 
       this.queue = this.queue.filter((queued) => queued.runId !== entry.runId);
       this.activeByWorkflow.set(entry.workflowId, active + 1);
-      void this.run(entry, workflow).finally(() => {
+      void this.run(entry, registration).finally(() => {
         this.activeByWorkflow.set(entry.workflowId, Math.max(0, (this.activeByWorkflow.get(entry.workflowId) ?? 1) - 1));
         void this.drain();
       });
     }
   }
 
-  private async run(entry: QueuedRun, workflow: WorkflowDefinition): Promise<void> {
+  private async run(entry: QueuedRun, registration: WorkflowRegistration): Promise<void> {
+    const workflow = registration.definition;
     const controller = new AbortController();
     this.running.set(entry.runId, { controller });
     this.store.updateRun(entry.runId, { status: "running", currentStep: "Starting", progress: 1, error: null });
@@ -479,6 +508,20 @@ export class LocalWorkflowRunner {
       }
     };
   }
+
+  private getRegistrationForRun(run: RunRecord): WorkflowRegistration {
+    const registration = this.workflows.get(run.workflowId);
+    if (!registration) throw new Error(`Unknown workflow: ${run.workflowId}`);
+    if (!run.pluginId || !run.pluginVersion) return registration;
+
+    const plugin = registration.plugin;
+    if (plugin.id === run.pluginId && plugin.version === run.pluginVersion) return registration;
+
+    throw new Error(
+      `The workflow plugin required by this run is not available: ${run.pluginId}@${run.pluginVersion}. ` +
+        `Installed workflow ${run.workflowId} is provided by ${plugin.id}@${plugin.version}.`
+    );
+  }
 }
 
 function copyWorkflowInputFiles(
@@ -516,6 +559,7 @@ function copyWorkflowInputFiles(
 
 function buildPromptsDocument(input: {
   workflow: WorkflowDefinition;
+  plugin: WorkflowPluginMetadata;
   runId: string;
   runName: string;
   runDir: string;
@@ -530,19 +574,29 @@ function buildPromptsDocument(input: {
     runId: input.runId,
     runName: input.runName,
     workflowId: input.workflow.manifest.id,
+    workflowVersion: input.workflow.manifest.version,
     workflowTitle: input.workflow.manifest.title,
+    plugin: {
+      id: input.plugin.id,
+      name: input.plugin.name,
+      version: input.plugin.version,
+      source: input.plugin.source,
+      apiVersion: input.plugin.apiVersion
+    },
     runDir: input.runDir,
     createdAt: new Date().toISOString(),
     prompts: {
       masterPrompt: original.masterPrompt ?? null,
       prompt: original.prompt ?? null,
       subjectInstruction: original.subjectInstruction ?? null,
-      perSubjectInstruction: original.subjectInstruction ?? null
+      perSubjectInstruction: original.subjectInstruction ?? null,
+      sequencePrompts: original.prompts ?? null
     },
     imagePaths: {
       images: mappedPathsForField(input.fileMappings, "images"),
       referenceImages: mappedPathsForField(input.fileMappings, "referenceImages"),
-      subjectImages: mappedPathsForField(input.fileMappings, "subjectImages")
+      subjectImages: mappedPathsForField(input.fileMappings, "subjectImages"),
+      sourceImages: mappedPathsForField(input.fileMappings, "sourceImages")
     },
     chatGptTab: original.chatGptTab ?? copied.chatGptTab ?? null,
     selectors: original.selectors ?? copied.selectors ?? null,
@@ -566,6 +620,28 @@ function mappedPathsForField(fileMappings: FileInputMapping[], field: string): A
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizeWorkflowRegistry(workflows: Map<string, WorkflowDefinition | WorkflowRegistration>): WorkflowRegistry {
+  const values = [...workflows.values()];
+  if (values.every(isWorkflowRegistration)) return workflows as WorkflowRegistry;
+  return new Map(
+    [...workflows.entries()].map(([workflowId, value]) => {
+      const registration = isWorkflowRegistration(value) ? value : registerInlineWorkflow(value);
+      return [workflowId, registration];
+    })
+  );
+}
+
+function registerInlineWorkflow(definition: WorkflowDefinition): WorkflowRegistration {
+  return {
+    definition,
+    plugin: INLINE_WORKFLOW_PLUGIN
+  };
+}
+
+function isWorkflowRegistration(value: WorkflowDefinition | WorkflowRegistration): value is WorkflowRegistration {
+  return Boolean(isRecord(value) && isRecord(value.definition) && isRecord(value.plugin));
 }
 
 function rewritePromptsJson(runDir: string, runName: string, oldRunDir: string, newRunDir: string): void {

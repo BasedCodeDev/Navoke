@@ -21,6 +21,11 @@ describe("SqliteStore", () => {
     const run = store.createRun({
       id: "run-1",
       workflowId: "test.workflow",
+      workflowVersion: "0.1.0",
+      pluginId: "test.plugin",
+      pluginVersion: "1.0.0",
+      pluginApiVersion: "1",
+      pluginSource: "user",
       name: "Test run",
       runDir: path.join(dir, "Test run - run-1"),
       status: "queued",
@@ -36,6 +41,8 @@ describe("SqliteStore", () => {
     expect(event.id).toBeGreaterThan(0);
     expect(event.runId).toBe(run.id);
     expect(run.runDir).toBe(path.join(dir, "Test run - run-1"));
+    expect(run.pluginId).toBe("test.plugin");
+    expect(run.pluginVersion).toBe("1.0.0");
     expect(store.listEvents(run.id)).toHaveLength(1);
 
     store.close();

@@ -17,6 +17,11 @@ function rowToRun(row: Record<string, unknown>): RunRecord {
   return {
     id: String(row.id),
     workflowId: String(row.workflow_id),
+    workflowVersion: row.workflow_version ? String(row.workflow_version) : null,
+    pluginId: row.plugin_id ? String(row.plugin_id) : null,
+    pluginVersion: row.plugin_version ? String(row.plugin_version) : null,
+    pluginApiVersion: row.plugin_api_version ? String(row.plugin_api_version) : null,
+    pluginSource: row.plugin_source ? (String(row.plugin_source) as RunRecord["pluginSource"]) : null,
     name: String(row.name),
     runDir: row.run_dir ? String(row.run_dir) : null,
     status: String(row.status) as RunStatus,
@@ -81,6 +86,11 @@ export class SqliteStore {
   createRun(input: {
     id: string;
     workflowId: string;
+    workflowVersion?: string | null;
+    pluginId?: string | null;
+    pluginVersion?: string | null;
+    pluginApiVersion?: string | null;
+    pluginSource?: RunRecord["pluginSource"];
     name: string;
     runDir?: string | null;
     status: RunStatus;
@@ -89,11 +99,17 @@ export class SqliteStore {
     const createdAt = nowIso();
     this.db.run(
       `insert into runs (
-        id, workflow_id, name, run_dir, status, current_step, progress, input_json, output_json, error, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, null, 0, ?, null, null, ?, ?)`,
+        id, workflow_id, workflow_version, plugin_id, plugin_version, plugin_api_version, plugin_source,
+        name, run_dir, status, current_step, progress, input_json, output_json, error, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, 0, ?, null, null, ?, ?)`,
       [
         input.id,
         input.workflowId,
+        input.workflowVersion ?? null,
+        input.pluginId ?? null,
+        input.pluginVersion ?? null,
+        input.pluginApiVersion ?? null,
+        input.pluginSource ?? null,
         input.name,
         input.runDir ?? null,
         input.status,
@@ -272,6 +288,11 @@ export class SqliteStore {
       create table if not exists runs (
         id text primary key,
         workflow_id text not null,
+        workflow_version text,
+        plugin_id text,
+        plugin_version text,
+        plugin_api_version text,
+        plugin_source text,
         name text not null,
         run_dir text,
         status text not null,
@@ -312,6 +333,11 @@ export class SqliteStore {
       create index if not exists idx_artifacts_run_id on artifacts(run_id);
     `);
     this.addColumnIfMissing("runs", "run_dir text");
+    this.addColumnIfMissing("runs", "workflow_version text");
+    this.addColumnIfMissing("runs", "plugin_id text");
+    this.addColumnIfMissing("runs", "plugin_version text");
+    this.addColumnIfMissing("runs", "plugin_api_version text");
+    this.addColumnIfMissing("runs", "plugin_source text");
   }
 
   private addColumnIfMissing(table: string, columnDefinition: string): void {

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildChatGptArtifactPairing, type ChatGptRunInputModel } from "../../src/renderer/lib/chatGptArtifactPairing";
+import { buildChatGptArtifactPairing, type ChatGptRunInputModel, type ChatGptSubjectRunInputModel } from "../../src/renderer/lib/chatGptArtifactPairing";
 import type { ArtifactRecord } from "../../src/renderer/lib/api";
 
-const input: ChatGptRunInputModel = {
+const input: ChatGptSubjectRunInputModel = {
+  kind: "subjects",
   referenceImages: [],
   subjectImages: ["C:\\tmp\\one.png", "C:\\tmp\\two.png", "C:\\tmp\\three.png", "C:\\tmp\\four.png"],
   masterPrompt: "Master",
@@ -52,6 +53,39 @@ describe("ChatGPT artifact pairing", () => {
     ]);
 
     expect(pairing.pairs.map((pair) => pair.primaryOutput?.id)).toEqual(["out-1", "out-2", "out-3", "out-4"]);
+    expect(pairing.otherArtifacts.map((item) => item.id)).toEqual(["manifest"]);
+  });
+
+  it("pairs sequence outputs by prompt index", () => {
+    const sequenceInput: ChatGptRunInputModel = {
+      kind: "sequence",
+      sourceImages: ["C:\\tmp\\source.png"],
+      prompts: ["Back view", "Side view"],
+      masterPrompt: ""
+    };
+    const first = artifact("prompt-out-1", 0, "C:\\tmp\\source.png");
+    first.metadata = {
+      source: "chatgpt-extension",
+      workflowKind: "image-sequence",
+      promptIndex: 0,
+      pairId: "prompt-1",
+      inputImage: "C:\\tmp\\source.png"
+    };
+    const second = artifact("prompt-out-2", 1, "C:\\tmp\\prompt-out-1.png");
+    second.metadata = {
+      source: "chatgpt-extension",
+      workflowKind: "image-sequence",
+      promptIndex: 1,
+      pairId: "prompt-2",
+      inputImage: "C:\\tmp\\prompt-out-1.png"
+    };
+
+    const pairing = buildChatGptArtifactPairing(sequenceInput, [first, second, manifestArtifact()]);
+
+    expect(pairing.pairs.map((pair) => ({ prompt: pair.prompt, outputId: pair.primaryOutput?.id }))).toEqual([
+      { prompt: "Back view", outputId: "prompt-out-1" },
+      { prompt: "Side view", outputId: "prompt-out-2" }
+    ]);
     expect(pairing.otherArtifacts.map((item) => item.id)).toEqual(["manifest"]);
   });
 });

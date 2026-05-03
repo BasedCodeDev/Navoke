@@ -26,6 +26,11 @@ export interface RuntimePaths {
 export interface RunRecord {
   id: string;
   workflowId: string;
+  workflowVersion?: string | null;
+  pluginId?: string | null;
+  pluginVersion?: string | null;
+  pluginApiVersion?: string | null;
+  pluginSource?: PluginSource | "unknown" | null;
   name: string;
   runDir: string | null;
   status: RunStatus;
@@ -70,6 +75,12 @@ export interface WorkflowInputField {
   options?: Array<{ label: string; value: string }>;
 }
 
+export type WorkflowUiCapability =
+  | "chatgpt.tabRouting"
+  | "chatgpt.focusTarget"
+  | "chatgpt.artifactPairs"
+  | "browser.profile";
+
 export interface WorkflowManifest {
   id: string;
   title: string;
@@ -81,6 +92,7 @@ export interface WorkflowManifest {
   outputKinds: ArtifactKind[];
   requiresBrowser: boolean;
   targetUrl?: string;
+  uiCapabilities?: WorkflowUiCapability[];
 }
 
 export interface WorkflowContext {
@@ -114,6 +126,31 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
   run(input: TInput, ctx: WorkflowContext): Promise<TOutput>;
 }
 
+export type PluginSource = "builtin" | "user";
+
+export type WorkflowPluginCapability = "filesystem.artifacts" | "browser" | "extension.chatgpt";
+
+export interface WorkflowPluginMetadata {
+  id: string;
+  name: string;
+  version: string;
+  source: PluginSource;
+  apiVersion: string;
+  installPath?: string;
+  capabilities: WorkflowPluginCapability[];
+}
+
+export interface WorkflowRegistration {
+  definition: WorkflowDefinition;
+  plugin: WorkflowPluginMetadata;
+}
+
+export type WorkflowRegistry = Map<string, WorkflowRegistration>;
+
 export interface PublicWorkflow {
   manifest: WorkflowManifest;
+  plugin: WorkflowPluginMetadata;
+  availability: {
+    status: "available";
+  };
 }

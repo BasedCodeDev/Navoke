@@ -51,7 +51,27 @@ describe("LocalWorkflowRunner", () => {
         return { ok: true };
       }
     };
-    const runner = new LocalWorkflowRunner(new Map([[workflow.manifest.id, workflow]]), store, paths, new RuntimeEventBus());
+    const runner = new LocalWorkflowRunner(
+      new Map([
+        [
+          workflow.manifest.id,
+          {
+            definition: workflow,
+            plugin: {
+              id: "test.plugin",
+              name: "Test Plugin",
+              version: "1.2.3",
+              source: "user",
+              apiVersion: "1",
+              capabilities: ["filesystem.artifacts"]
+            }
+          }
+        ]
+      ]),
+      store,
+      paths,
+      new RuntimeEventBus()
+    );
 
     const run = runner.enqueue({
       workflowId: "test.workflow",
@@ -61,6 +81,9 @@ describe("LocalWorkflowRunner", () => {
 
     expect(path.basename(run.runDir!)).toMatch(/^Runner-test-[\w]{8}$/);
     expect(path.basename(run.runDir!)).not.toContain(" ");
+    expect(run.workflowVersion).toBe("0.0.0");
+    expect(run.pluginId).toBe("test.plugin");
+    expect(run.pluginVersion).toBe("1.2.3");
     expect(fs.existsSync(path.join(run.runDir!, "prompts.json"))).toBe(true);
 
     await waitFor(() => store.getRun(run.id)?.status === "completed");
