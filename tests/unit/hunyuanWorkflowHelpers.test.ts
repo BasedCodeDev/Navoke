@@ -7,7 +7,7 @@ import {
   inferHunyuanArtifactKind,
   mergeHunyuanSelectorConfig,
   missingHunyuanSelectorKeys
-} from "../../plugins/workflows/based-blink-hunyuan/src";
+} from "../../plugins/based-blink-hunyuan/src";
 
 describe("Hunyuan workflow helpers", () => {
   it("orders front, back, side, top, bottom, and 45-degree upload slots", () => {
@@ -53,9 +53,12 @@ describe("Hunyuan workflow helpers", () => {
     expect(selectors.modelTypeGeometryTexturePhased).not.toContain(">> text=");
     expect(selectors.generateButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.geometryReadySelector).toContain(":not(.t-is-disabled):not([disabled])");
-    expect(selectors.retopologyTypeButtons?.quad).toContain(".topology-panel .topo-type-select");
+    expect(selectors.retopologyTypeButtons?.quad).toContain(".model-dialog__content__operation__heading");
+    expect(selectors.retopologyTypeButtons?.quad).toContain(".topology-panel .qaUJkqcCF813NIqHGF3U");
     expect(selectors.retopologyTypeButtons?.quad).toContain(".qaUJkqcCF813NIqHGF3U:visible:has-text(\"四边面\")");
     expect(selectors.retopologyTypeButtons?.quad).not.toContain(":is(button, .t-button)");
+    expect(selectors.exportFormatDropdown).toBe("button.download__dropdown__btn");
+    expect(selectors.exportFormatOptions?.obj).toBe('.download__dropdown li.t-dropdown__item:has-text("OBJ")');
     expect(selectors.smartRetopologyButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.generateTextureButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.downloadButton).toContain(":not(.t-is-disabled):not([disabled])");

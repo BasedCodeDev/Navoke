@@ -21,7 +21,7 @@ afterEach(() => {
 describe("workflow plugin packages", () => {
   it("loads the Hunyuan workflow package with the renamed workflow id", async () => {
     const manager = new PluginManager(tempDir());
-    await manager.installFromPath(path.join(repoRoot, "plugins", "workflows", "based-blink-hunyuan"));
+    await manager.installFromPath(path.join(repoRoot, "plugins", "based-blink-hunyuan"));
 
     expect(manager.listPlugins()[0]).toMatchObject({
       pluginId: "based-blink.hunyuan",
@@ -94,7 +94,7 @@ describe("workflow plugin packages", () => {
     const userDataDir = tempDir();
     const projectDir = tempDir();
     const manager = new PluginManager(userDataDir);
-    await manager.installFromPath(path.join(repoRoot, "plugins", "workflows", "based-blink-hunyuan"));
+    await manager.installFromPath(path.join(repoRoot, "plugins", "based-blink-hunyuan"));
 
     const paths = createRuntimePaths(projectDir);
     const store = await SqliteStore.open(paths.dbPath);

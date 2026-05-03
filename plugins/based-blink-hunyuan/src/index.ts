@@ -161,8 +161,8 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG: HunyuanSelectorConfig = {
   geometryRunningText: HUNYUAN_TEXT.generating,
   geometryReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.smartRetopology),
   retopologyTypeButtons: {
-    triangle: `.topology-panel .topo-type-select .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_TEXT.triangle}")`,
-    quad: `.topology-panel .topo-type-select .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_TEXT.quad}")`
+    triangle: `.model-dialog__content__operation:has(.model-dialog__content__operation__heading:has-text("${HUNYUAN_TEXT.smartRetopology}")) .topology-panel .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_TEXT.triangle}")`,
+    quad: `.model-dialog__content__operation:has(.model-dialog__content__operation__heading:has-text("${HUNYUAN_TEXT.smartRetopology}")) .topology-panel .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_TEXT.quad}")`
   },
   smartRetopologyButton: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.smartRetopology),
   retopologyRunningText: HUNYUAN_TEXT.generating,
@@ -173,10 +173,10 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG: HunyuanSelectorConfig = {
   autoRigButton: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.autoRig),
   autoRigRunningText: HUNYUAN_TEXT.generating,
   autoRigReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download),
-  exportFormatDropdown: 'div.t-select:has-text("OBJ")',
+  exportFormatDropdown: "button.download__dropdown__btn",
   exportFormatOptions: {
-    obj: 'li.t-select-option:has-text("OBJ")',
-    glb: 'li.t-select-option:has-text("GLB")'
+    obj: '.download__dropdown li.t-dropdown__item:has-text("OBJ")',
+    glb: '.download__dropdown li.t-dropdown__item:has-text("GLB")'
   },
   downloadReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download),
   downloadButton: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download)
