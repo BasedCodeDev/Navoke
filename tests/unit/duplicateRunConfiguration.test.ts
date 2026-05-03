@@ -114,26 +114,49 @@ describe("duplicate run configuration", () => {
     expect(duplicate.filePaths).toEqual(["C:\\runs\\inputs\\source.png"]);
   });
 
-  it("copies Hunyuan image, prompt, and profile settings", () => {
+  it("copies Hunyuan views, settings, profile, pause flag, and selectors", () => {
     const duplicate = buildDuplicateRunConfiguration(
       run({
         workflowId: "based-blink.hunyuan.image-to-model",
         input: {
-          images: ["C:\\runs\\inputs\\model-source.png"],
+          frontImage: "C:\\runs\\inputs\\front.png",
+          backImage: "C:\\runs\\inputs\\back.png",
+          left45Image: "C:\\runs\\inputs\\left45.png",
           prompt: "Make a model",
           profileName: "artist",
-          pauseForManualLogin: false
+          pauseForManualLogin: false,
+          modelFaceCount: "500k",
+          retopologyType: "triangle",
+          generateTexture: false,
+          autoRig: true,
+          exportFormat: "glb",
+          selectors: { imageTo3dTab: "button.image-to-3d" }
         }
       }),
       { workflow: hunyuanWorkflow, compatibleClients: [], newChatGptTabValue: "__new__" }
     );
 
     expect(duplicate).toMatchObject({
-      selectedFiles: ["C:\\runs\\inputs\\model-source.png"],
+      hunyuanViewFiles: {
+        frontImage: ["C:\\runs\\inputs\\front.png"],
+        backImage: ["C:\\runs\\inputs\\back.png"],
+        left45Image: ["C:\\runs\\inputs\\left45.png"]
+      },
       prompt: "Make a model",
       profileName: "artist",
-      pauseForManualLogin: false
+      pauseForManualLogin: false,
+      hunyuanModelFaceCount: "500k",
+      hunyuanRetopologyType: "triangle",
+      hunyuanGenerateTexture: false,
+      hunyuanAutoRig: true,
+      hunyuanExportFormat: "glb"
     });
+    expect(JSON.parse(duplicate.hunyuanSelectorsJson)).toEqual({ imageTo3dTab: "button.image-to-3d" });
+    expect(duplicate.filePaths).toEqual([
+      "C:\\runs\\inputs\\front.png",
+      "C:\\runs\\inputs\\back.png",
+      "C:\\runs\\inputs\\left45.png"
+    ]);
   });
 
   it("collects unique input file paths across supported file fields", () => {
@@ -142,8 +165,10 @@ describe("duplicate run configuration", () => {
         images: ["C:\\a.png", "C:\\b.png"],
         referenceImages: ["C:\\a.png"],
         subjectImages: ["C:\\c.png"],
-        sourceImages: ["C:\\d.png"]
+        sourceImages: ["C:\\d.png"],
+        frontImage: "C:\\front.png",
+        backImage: "C:\\b.png"
       })
-    ).toEqual(["C:\\a.png", "C:\\b.png", "C:\\c.png", "C:\\d.png"]);
+    ).toEqual(["C:\\a.png", "C:\\b.png", "C:\\c.png", "C:\\d.png", "C:\\front.png"]);
   });
 });

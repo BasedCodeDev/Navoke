@@ -17,6 +17,7 @@ export interface WorkflowManifest {
     placeholder?: string;
     help?: string;
     defaultValue?: unknown;
+    options?: Array<{ label: string; value: string }>;
   }>;
 }
 
@@ -154,6 +155,7 @@ export interface SystemInfo {
 export type AppConfig = BasedBlinkConfig;
 
 export type WorkflowLabSessionMode = "playwright" | "extension";
+export type WorkflowLabProfileWorkflowId = "workflow-lab" | "hunyuan";
 
 export interface LabSelectorCandidate {
   selector: string;
@@ -207,6 +209,7 @@ export interface WorkflowLabSessionSummary {
   id: string;
   mode: WorkflowLabSessionMode;
   targetUrl: string;
+  profileWorkflowId?: WorkflowLabProfileWorkflowId;
   profileName?: string;
   clientId?: string;
   status: "ready" | "closed";
@@ -335,6 +338,7 @@ export async function listLabSessions(): Promise<WorkflowLabSessionSummary[]> {
 export async function createLabSession(input: {
   mode: WorkflowLabSessionMode;
   targetUrl?: string;
+  profileWorkflowId?: WorkflowLabProfileWorkflowId;
   profileName?: string;
   clientId?: string;
 }): Promise<WorkflowLabSessionSummary> {
@@ -400,7 +404,23 @@ export async function artifactDownloadUrl(id: string): Promise<string> {
   return `${config.apiBaseUrl}/api/artifacts/${id}/download`;
 }
 
-export async function runInputFileUrl(runId: string, field: "images" | "referenceImages" | "subjectImages" | "sourceImages", index: number): Promise<string> {
+export async function runInputFileUrl(
+  runId: string,
+  field:
+    | "images"
+    | "referenceImages"
+    | "subjectImages"
+    | "sourceImages"
+    | "frontImage"
+    | "backImage"
+    | "leftImage"
+    | "rightImage"
+    | "topImage"
+    | "bottomImage"
+    | "left45Image"
+    | "right45Image",
+  index: number
+): Promise<string> {
   const config = await getConfig();
   return `${config.apiBaseUrl}/api/runs/${runId}/input-files/${field}/${index}`;
 }

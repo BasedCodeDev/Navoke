@@ -25,6 +25,7 @@ import {
 } from "./waitConditions";
 
 export type WorkflowLabSessionMode = "playwright" | "extension";
+export type WorkflowLabProfileWorkflowId = "workflow-lab" | "hunyuan";
 
 export type WorkflowLabAction =
   | { kind: "click"; selector: string }
@@ -43,6 +44,7 @@ interface WorkflowLabStagedFile {
 export interface WorkflowLabSessionCreateInput {
   mode: WorkflowLabSessionMode;
   targetUrl?: string;
+  profileWorkflowId?: string;
   profileName?: string;
   clientId?: string;
 }
@@ -66,6 +68,7 @@ export interface WorkflowLabSessionSummary {
   id: string;
   mode: WorkflowLabSessionMode;
   targetUrl: string;
+  profileWorkflowId?: WorkflowLabProfileWorkflowId;
   profileName?: string;
   clientId?: string;
   status: "ready" | "closed";
@@ -103,6 +106,7 @@ interface WorkflowLabSessionState {
   id: string;
   mode: WorkflowLabSessionMode;
   targetUrl: string;
+  profileWorkflowId?: WorkflowLabProfileWorkflowId;
   profileName?: string;
   clientId?: string;
   context?: BrowserContext;
@@ -132,11 +136,14 @@ export class WorkflowLab {
     const id = randomUUID();
     const now = new Date().toISOString();
     const targetUrl = input.targetUrl?.trim() || (input.mode === "extension" ? "" : "about:blank");
+    const profileWorkflowId =
+      input.mode === "playwright" ? resolveWorkflowLabProfileWorkflowId(input.profileWorkflowId) : undefined;
     const session: WorkflowLabSessionState = {
       id,
       mode: input.mode,
       targetUrl,
-      profileName: input.profileName?.trim() || "lab",
+      ...(profileWorkflowId ? { profileWorkflowId } : {}),
+      profileName: input.profileName?.trim() || defaultLabProfileName(profileWorkflowId),
       clientId: input.clientId?.trim() || undefined,
       status: "ready",
       createdAt: now,
@@ -151,7 +158,7 @@ export class WorkflowLab {
     if (input.mode === "playwright") {
       session.context = await launchPersistentProfile({
         paths: this.paths,
-        workflowId: "workflow-lab",
+        workflowId: session.profileWorkflowId ?? "workflow-lab",
         profileName: session.profileName ?? "lab"
       });
       session.page = session.context.pages()[0] ?? (await session.context.newPage());
@@ -432,6 +439,7 @@ export class WorkflowLab {
       id: session.id,
       mode: session.mode,
       targetUrl: session.targetUrl,
+      ...(session.profileWorkflowId ? { profileWorkflowId: session.profileWorkflowId } : {}),
       ...(session.profileName ? { profileName: session.profileName } : {}),
       ...(session.clientId ? { clientId: session.clientId } : {}),
       status: session.status,
@@ -484,6 +492,16 @@ function describeAction(action: WorkflowLabAction): string {
   if (action.kind === "fill") return `Filled ${action.selector}`;
   if (action.kind === "submit") return `Submitted ${action.selector}`;
   return `Attached ${action.filePaths.length} file(s) to ${action.selector}`;
+}
+
+function resolveWorkflowLabProfileWorkflowId(value: string | undefined): WorkflowLabProfileWorkflowId {
+  if (!value) return "workflow-lab";
+  if (value === "workflow-lab" || value === "hunyuan") return value;
+  throw new Error("Workflow Lab profile owner must be workflow-lab or hunyuan.");
+}
+
+function defaultLabProfileName(profileWorkflowId: WorkflowLabProfileWorkflowId | undefined): string {
+  return profileWorkflowId === "hunyuan" ? "default" : "lab";
 }
 
 function assertLabAction(action: WorkflowLabAction): void {

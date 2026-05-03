@@ -62,6 +62,7 @@ import {
   type RunRecord,
   type RuntimeEvent,
   type SystemInfo,
+  type WorkflowLabProfileWorkflowId,
   type WorkflowLabInspectionResult,
   type WorkflowSummary
 } from "@/lib/api";
@@ -92,6 +93,20 @@ import {
   getChatGptRunInput,
   type ChatGptRunInputModel
 } from "@/lib/chatGptArtifactPairing";
+import {
+  DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
+  HUNYUAN_EXPORT_FORMATS,
+  HUNYUAN_FACE_COUNTS,
+  HUNYUAN_VIEW_FIELDS,
+  HUNYUAN_WORKFLOW_ID,
+  buildHunyuanRunInput,
+  emptyHunyuanViewFiles,
+  type HunyuanExportFormat,
+  type HunyuanFaceCount,
+  type HunyuanRetopologyType,
+  type HunyuanViewField,
+  type HunyuanViewFiles
+} from "@/lib/hunyuanWorkflow";
 import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "@/lib/duplicateRunConfiguration";
 import { isRecoverableFailedChatGptRun, resolveChatGptFocusTarget } from "@/lib/chatGptTabFocus";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
@@ -126,6 +141,7 @@ function workflowHasField(workflow: WorkflowSummary | undefined, fieldName: stri
 const NEW_CHATGPT_TAB_VALUE = "__new_chatgpt_tab__";
 const CHATGPT_NEW_TAB_URL = "https://chatgpt.com/";
 const CHATGPT_TAB_ROUTING_PARAM = "based-blink-tab";
+const HUNYUAN_LAB_TARGET_URL = "https://3d.hunyuan.tencent.com/";
 const APP_ICON_SRC = "/assets/app-icon.png";
 
 type ChatGptTabInput =
@@ -226,6 +242,13 @@ export default function App(): JSX.Element {
   const [modelName, setModelName] = useState("Demo model");
   const [profileName, setProfileName] = useState("default");
   const [pauseForManualLogin, setPauseForManualLogin] = useState(true);
+  const [hunyuanViewFiles, setHunyuanViewFiles] = useState<HunyuanViewFiles>(() => emptyHunyuanViewFiles());
+  const [hunyuanModelFaceCount, setHunyuanModelFaceCount] = useState<HunyuanFaceCount>("50k");
+  const [hunyuanRetopologyType, setHunyuanRetopologyType] = useState<HunyuanRetopologyType>("quad");
+  const [hunyuanGenerateTexture, setHunyuanGenerateTexture] = useState(true);
+  const [hunyuanAutoRig, setHunyuanAutoRig] = useState(false);
+  const [hunyuanExportFormat, setHunyuanExportFormat] = useState<HunyuanExportFormat>("obj");
+  const [hunyuanSelectorsJson, setHunyuanSelectorsJson] = useState(DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON);
   const [chatGptTabSelection, setChatGptTabSelection] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
@@ -299,6 +322,7 @@ export default function App(): JSX.Element {
   const selectedWorkflow = workflows.find((workflow) => workflow.manifest.id === selectedWorkflowId);
   const isChatGptExtensionWorkflow = workflowHasCapability(selectedWorkflow, "chatgpt.tabRouting");
   const isChatGptSequenceWorkflow = selectedWorkflow?.manifest.id === "based-blink.chatgpt.extension-image-sequence";
+  const isHunyuanWorkflow = selectedWorkflow?.manifest.id === HUNYUAN_WORKFLOW_ID;
   const usesBrowserProfile = workflowHasCapability(selectedWorkflow, "browser.profile");
 
   useEffect(() => {
@@ -330,7 +354,20 @@ export default function App(): JSX.Element {
         await window.basedBlink.openExternal(chatGptTab.url ?? buildNewChatGptTabUrl(chatGptTab.routingToken));
       }
       const workflowInput =
-        workflowHasCapability(selectedWorkflow, "browser.profile")
+        isHunyuanWorkflow
+          ? buildHunyuanRunInput({
+              viewFiles: hunyuanViewFiles,
+              prompt,
+              profileName,
+              pauseForManualLogin,
+              modelFaceCount: hunyuanModelFaceCount,
+              retopologyType: hunyuanRetopologyType,
+              generateTexture: hunyuanGenerateTexture,
+              autoRig: hunyuanAutoRig,
+              exportFormat: hunyuanExportFormat,
+              selectorsJson: hunyuanSelectorsJson
+            })
+          : workflowHasCapability(selectedWorkflow, "browser.profile")
           ? { images: selectedFiles, prompt, profileName, pauseForManualLogin }
           : workflowHasCapability(selectedWorkflow, "chatgpt.tabRouting")
               ? isChatGptSequenceWorkflow
@@ -455,6 +492,10 @@ export default function App(): JSX.Element {
     if (files.length > 0) setFiles(files);
   }
 
+  function setHunyuanViewField(field: HunyuanViewField, files: string[]): void {
+    setHunyuanViewFiles((current) => ({ ...current, [field]: files.slice(0, 1) }));
+  }
+
   async function openProjectAndRefresh(projectPath?: string): Promise<BasedBlinkConfig> {
     const previousProjectDir = configQuery.data?.projectDir ?? null;
     const config = await openProject(projectPath);
@@ -505,6 +546,13 @@ export default function App(): JSX.Element {
     setModelName(duplicate.modelName);
     setProfileName(duplicate.profileName);
     setPauseForManualLogin(duplicate.pauseForManualLogin);
+    setHunyuanViewFiles(duplicate.hunyuanViewFiles);
+    setHunyuanModelFaceCount(duplicate.hunyuanModelFaceCount);
+    setHunyuanRetopologyType(duplicate.hunyuanRetopologyType);
+    setHunyuanGenerateTexture(duplicate.hunyuanGenerateTexture);
+    setHunyuanAutoRig(duplicate.hunyuanAutoRig);
+    setHunyuanExportFormat(duplicate.hunyuanExportFormat);
+    setHunyuanSelectorsJson(duplicate.hunyuanSelectorsJson);
     setChatGptTabSelection(duplicate.chatGptTabSelection);
     setFormError(null);
     setNewRunFocusError(null);
@@ -733,6 +781,24 @@ export default function App(): JSX.Element {
                     </div>
                   </>
                 )
+              ) : isHunyuanWorkflow ? (
+                <HunyuanWorkflowFields
+                  viewFiles={hunyuanViewFiles}
+                  modelFaceCount={hunyuanModelFaceCount}
+                  retopologyType={hunyuanRetopologyType}
+                  generateTexture={hunyuanGenerateTexture}
+                  autoRig={hunyuanAutoRig}
+                  exportFormat={hunyuanExportFormat}
+                  selectorsJson={hunyuanSelectorsJson}
+                  onChooseView={(field, title) => void chooseImages((files) => setHunyuanViewField(field, files), title)}
+                  onClearView={(field) => setHunyuanViewField(field, [])}
+                  onModelFaceCountChange={setHunyuanModelFaceCount}
+                  onRetopologyTypeChange={setHunyuanRetopologyType}
+                  onGenerateTextureChange={setHunyuanGenerateTexture}
+                  onAutoRigChange={setHunyuanAutoRig}
+                  onExportFormatChange={setHunyuanExportFormat}
+                  onSelectorsJsonChange={setHunyuanSelectorsJson}
+                />
               ) : (
                 <ImagePicker
                   label="Images"
@@ -750,10 +816,12 @@ export default function App(): JSX.Element {
                     <Label>Prompt</Label>
                     <Textarea className="min-h-12 py-1.5" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Optional model prompt" />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label>Model name</Label>
-                    <Input className="h-9" value={modelName} onChange={(event) => setModelName(event.target.value)} />
-                  </div>
+                  {!isHunyuanWorkflow ? (
+                    <div className="space-y-1.5">
+                      <Label>Model name</Label>
+                      <Input className="h-9" value={modelName} onChange={(event) => setModelName(event.target.value)} />
+                    </div>
+                  ) : null}
                 </>
               ) : null}
 
@@ -2169,6 +2237,118 @@ function OutputImagePreview({ artifact }: { artifact: ArtifactRecord }): JSX.Ele
   );
 }
 
+function HunyuanWorkflowFields({
+  viewFiles,
+  modelFaceCount,
+  retopologyType,
+  generateTexture,
+  autoRig,
+  exportFormat,
+  selectorsJson,
+  onChooseView,
+  onClearView,
+  onModelFaceCountChange,
+  onRetopologyTypeChange,
+  onGenerateTextureChange,
+  onAutoRigChange,
+  onExportFormatChange,
+  onSelectorsJsonChange
+}: {
+  viewFiles: HunyuanViewFiles;
+  modelFaceCount: HunyuanFaceCount;
+  retopologyType: HunyuanRetopologyType;
+  generateTexture: boolean;
+  autoRig: boolean;
+  exportFormat: HunyuanExportFormat;
+  selectorsJson: string;
+  onChooseView(field: HunyuanViewField, title: string): void;
+  onClearView(field: HunyuanViewField): void;
+  onModelFaceCountChange(value: HunyuanFaceCount): void;
+  onRetopologyTypeChange(value: HunyuanRetopologyType): void;
+  onGenerateTextureChange(value: boolean): void;
+  onAutoRigChange(value: boolean): void;
+  onExportFormatChange(value: HunyuanExportFormat): void;
+  onSelectorsJsonChange(value: string): void;
+}): JSX.Element {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2">
+        {HUNYUAN_VIEW_FIELDS.map((field) => (
+          <ImagePicker
+            key={field.field}
+            label={`${field.label}${field.required ? " *" : ""}`}
+            chooseLabel={field.chooseLabel}
+            files={viewFiles[field.field]}
+            emptyText="No file"
+            onChoose={() => onChooseView(field.field, `Choose ${field.label.toLowerCase()}`)}
+            onClear={() => onClearView(field.field)}
+          />
+        ))}
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div className="space-y-1.5">
+          <Label>Faces</Label>
+          <select
+            value={modelFaceCount}
+            onChange={(event) => onModelFaceCountChange(event.target.value as HunyuanFaceCount)}
+            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+          >
+            {HUNYUAN_FACE_COUNTS.map((count) => (
+              <option key={count} value={count}>
+                {count}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Retopology</Label>
+          <select
+            value={retopologyType}
+            onChange={(event) => onRetopologyTypeChange(event.target.value as HunyuanRetopologyType)}
+            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+          >
+            <option value="quad">Quad</option>
+            <option value="triangle">Triangle</option>
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Export</Label>
+          <select
+            value={exportFormat}
+            onChange={(event) => onExportFormatChange(event.target.value as HunyuanExportFormat)}
+            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+          >
+            {HUNYUAN_EXPORT_FORMATS.map((format) => (
+              <option key={format} value={format}>
+                {format.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div className="flex items-center gap-4 text-sm">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={generateTexture} onChange={(event) => onGenerateTextureChange(event.target.checked)} />
+          Generate texture
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={autoRig} onChange={(event) => onAutoRigChange(event.target.checked)} />
+          Auto-rig
+        </label>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Hunyuan selector config</Label>
+        <Textarea
+          className="min-h-32 font-mono text-xs"
+          value={selectorsJson}
+          onChange={(event) => onSelectorsJsonChange(event.target.value)}
+          spellCheck={false}
+        />
+      </div>
+    </>
+  );
+}
+
 function WorkflowLabPanel({
   extensionClients,
   hasProject,
@@ -2181,6 +2361,7 @@ function WorkflowLabPanel({
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<"playwright" | "extension">("extension");
   const [targetUrl, setTargetUrl] = useState("https://chatgpt.com/");
+  const [profileWorkflowId, setProfileWorkflowId] = useState<WorkflowLabProfileWorkflowId>("workflow-lab");
   const [profileName, setProfileName] = useState("lab");
   const [clientId, setClientId] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -2216,12 +2397,23 @@ function WorkflowLabPanel({
     setClientId(compatibleClients[0]?.id ?? "");
   }, [clientId, compatibleClients]);
 
+  useEffect(() => {
+    if (mode !== "playwright") return;
+    if (profileWorkflowId === "hunyuan") {
+      if (!targetUrl.trim() || targetUrl === CHATGPT_NEW_TAB_URL || targetUrl === "about:blank") setTargetUrl(HUNYUAN_LAB_TARGET_URL);
+      if (!profileName.trim() || profileName === "lab") setProfileName("default");
+      return;
+    }
+    if (!profileName.trim() || profileName === "default") setProfileName("lab");
+  }, [mode, profileWorkflowId]);
+
   const createSessionMutation = useMutation({
     mutationFn: () =>
       createLabSession({
         mode,
         targetUrl: targetUrl.trim(),
-        profileName,
+        profileWorkflowId: mode === "playwright" ? profileWorkflowId : undefined,
+        profileName: mode === "playwright" ? profileName : undefined,
         clientId: mode === "extension" ? clientId : undefined
       }),
     onSuccess: (session) => {
@@ -2368,7 +2560,7 @@ function WorkflowLabPanel({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-[150px_1fr_120px_auto] gap-3">
+        <div className={cn("grid gap-3", mode === "playwright" ? "grid-cols-[150px_1fr_140px_120px_auto]" : "grid-cols-[150px_1fr_120px_auto]")}>
           <div className="space-y-2">
             <Label>Bridge</Label>
             <select
@@ -2403,6 +2595,19 @@ function WorkflowLabPanel({
             <Label>Profile</Label>
             <Input value={profileName} onChange={(event) => setProfileName(event.target.value)} disabled={mode === "extension"} />
           </div>
+          {mode === "playwright" ? (
+            <div className="space-y-2">
+              <Label>Profile owner</Label>
+              <select
+                value={profileWorkflowId}
+                onChange={(event) => setProfileWorkflowId(event.target.value as WorkflowLabProfileWorkflowId)}
+                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+              >
+                <option value="workflow-lab">Workflow Lab</option>
+                <option value="hunyuan">Hunyuan</option>
+              </select>
+            </div>
+          ) : null}
           <div className="flex items-end">
             <Button
               type="button"
@@ -2431,6 +2636,11 @@ function WorkflowLabPanel({
               >
                 <div className="font-medium">{session.title || session.mode}</div>
                 <div className="max-w-56 truncate text-muted-foreground">{session.url || session.targetUrl}</div>
+                {session.mode === "playwright" ? (
+                  <div className="max-w-56 truncate text-muted-foreground">
+                    {(session.profileWorkflowId ?? "workflow-lab")}/{session.profileName ?? "lab"}
+                  </div>
+                ) : null}
               </button>
             ))}
           </div>

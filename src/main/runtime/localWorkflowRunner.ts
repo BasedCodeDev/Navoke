@@ -537,6 +537,18 @@ function copyWorkflowInputFiles(
 
   for (const field of fileFields) {
     const value = input[field.name];
+    if (typeof value === "string" && value.trim()) {
+      const copiedPath = copyFileToDir(value, path.join(inputDir, field.name), "01-");
+      fileMappings.push({
+        field: field.name,
+        index: 0,
+        name: path.basename(copiedPath),
+        originalPath: value,
+        copiedPath
+      });
+      copiedInput[field.name] = copiedPath;
+      continue;
+    }
     if (!Array.isArray(value)) continue;
 
     const copiedPaths = value.map((filePath, index) => {
@@ -596,7 +608,15 @@ function buildPromptsDocument(input: {
       images: mappedPathsForField(input.fileMappings, "images"),
       referenceImages: mappedPathsForField(input.fileMappings, "referenceImages"),
       subjectImages: mappedPathsForField(input.fileMappings, "subjectImages"),
-      sourceImages: mappedPathsForField(input.fileMappings, "sourceImages")
+      sourceImages: mappedPathsForField(input.fileMappings, "sourceImages"),
+      frontImage: mappedPathsForField(input.fileMappings, "frontImage"),
+      backImage: mappedPathsForField(input.fileMappings, "backImage"),
+      leftImage: mappedPathsForField(input.fileMappings, "leftImage"),
+      rightImage: mappedPathsForField(input.fileMappings, "rightImage"),
+      topImage: mappedPathsForField(input.fileMappings, "topImage"),
+      bottomImage: mappedPathsForField(input.fileMappings, "bottomImage"),
+      left45Image: mappedPathsForField(input.fileMappings, "left45Image"),
+      right45Image: mappedPathsForField(input.fileMappings, "right45Image")
     },
     chatGptTab: original.chatGptTab ?? copied.chatGptTab ?? null,
     selectors: original.selectors ?? copied.selectors ?? null,

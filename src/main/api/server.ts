@@ -84,6 +84,7 @@ export class ApiServer {
         .createSession({
           mode: req.body?.mode,
           targetUrl: req.body?.targetUrl,
+          profileWorkflowId: req.body?.profileWorkflowId,
           profileName: req.body?.profileName,
           clientId: req.body?.clientId
         })
@@ -490,9 +491,27 @@ export class ApiServer {
 
 function getRunInputFilePath(input: unknown, field: string, index: number): string | undefined {
   if (!Number.isInteger(index) || index < 0) return undefined;
-  if (!["images", "referenceImages", "subjectImages", "sourceImages"].includes(field)) return undefined;
+  if (
+    ![
+      "images",
+      "referenceImages",
+      "subjectImages",
+      "sourceImages",
+      "frontImage",
+      "backImage",
+      "leftImage",
+      "rightImage",
+      "topImage",
+      "bottomImage",
+      "left45Image",
+      "right45Image"
+    ].includes(field)
+  ) {
+    return undefined;
+  }
   if (!input || typeof input !== "object") return undefined;
   const value = (input as Record<string, unknown>)[field];
+  if (typeof value === "string") return index === 0 ? value : undefined;
   if (!Array.isArray(value)) return undefined;
   const filePath = value[index];
   return typeof filePath === "string" ? filePath : undefined;

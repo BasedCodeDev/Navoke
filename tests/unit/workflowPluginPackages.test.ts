@@ -31,7 +31,8 @@ describe("workflow plugin packages", () => {
     expect(manager.listWorkflowRegistrations().map((registration) => registration.definition.manifest.id)).toEqual([
       "based-blink.hunyuan.image-to-model"
     ]);
-    expect(manager.listWorkflowRegistrations()[0].definition.inputSchema.safeParse({ images: [] }).success).toBe(false);
+    expect(manager.listWorkflowRegistrations()[0].definition.inputSchema.safeParse({ frontImage: "front.png" }).success).toBe(false);
+    expect(manager.listWorkflowRegistrations()[0].definition.inputSchema.safeParse({ frontImage: "front.png", backImage: "back.png" }).success).toBe(true);
   });
 
   it("loads the ChatGPT workflow package with image transform and image sequence workflows", async () => {
@@ -95,7 +96,7 @@ describe("workflow plugin packages", () => {
     const run = runner.enqueue({
       workflowId: "based-blink.hunyuan.image-to-model",
       name: "Hunyuan plugin snapshot",
-      workflowInput: { images: [imagePath], prompt: "", profileName: "default", pauseForManualLogin: true }
+      workflowInput: { frontImage: imagePath, backImage: imagePath, prompt: "", profileName: "default", pauseForManualLogin: true }
     });
 
     expect(run.workflowId).toBe("based-blink.hunyuan.image-to-model");

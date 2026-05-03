@@ -6,7 +6,7 @@ export interface WorkflowContext {
   step(message: string, progress?: number, data?: unknown): Promise<void>;
   waitForManualAction(message: string, data?: unknown): Promise<void>;
   addArtifact(input: {
-    kind: "model" | "download" | "trace" | "screenshot";
+    kind: "model" | "download" | "trace" | "screenshot" | "json";
     name: string;
     path: string;
     mimeType?: string | null;
@@ -24,7 +24,7 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
     concurrency: number;
     requiresBrowser: boolean;
     targetUrl?: string;
-    outputKinds: Array<"model" | "download" | "trace" | "screenshot">;
+    outputKinds: Array<"model" | "download" | "trace" | "screenshot" | "json">;
     uiCapabilities?: Array<"browser.profile">;
     inputFields: Array<{
       name: string;
@@ -33,6 +33,7 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
       required?: boolean;
       defaultValue?: unknown;
       help?: string;
+      options?: Array<{ label: string; value: string }>;
     }>;
   };
   inputSchema: zod.ZodType<TInput, zod.ZodTypeDef, unknown>;
@@ -59,5 +60,6 @@ export interface WorkflowSdk {
   };
   files: {
     inferMimeType(filePath: string): string | null;
+    writeJson(filePath: string, value: unknown): void;
   };
 }

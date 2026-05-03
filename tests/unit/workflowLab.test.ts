@@ -1,15 +1,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { launchPersistentProfile } from "../../src/main/automation/browserHarness";
 import { CHATGPT_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
 import { WorkflowLab } from "../../src/main/lab/workflowLab";
 import { createRuntimePaths } from "../../src/main/runtime/paths";
+
+vi.mock("../../src/main/automation/browserHarness", () => ({
+  launchPersistentProfile: vi.fn()
+}));
 
 let tempDir = "";
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-lab-test-"));
+  vi.mocked(launchPersistentProfile).mockReset();
 });
 
 afterEach(() => {
@@ -17,6 +23,49 @@ afterEach(() => {
 });
 
 describe("WorkflowLab", () => {
+  it("uses the default Workflow Lab owner profile for Playwright sessions", async () => {
+    vi.mocked(launchPersistentProfile).mockResolvedValue(createMockContext() as any);
+    const paths = createRuntimePaths(path.join(tempDir, "app-data"));
+    const lab = new WorkflowLab(paths, new ExtensionBridge());
+
+    const session = await lab.createSession({ mode: "playwright", targetUrl: "https://example.test/" });
+
+    expect(launchPersistentProfile).toHaveBeenCalledWith({
+      paths,
+      workflowId: "workflow-lab",
+      profileName: "lab"
+    });
+    expect(session).toMatchObject({
+      mode: "playwright",
+      profileWorkflowId: "workflow-lab",
+      profileName: "lab",
+      targetUrl: "https://example.test/"
+    });
+  });
+
+  it("can share the Hunyuan default profile for Playwright calibration", async () => {
+    vi.mocked(launchPersistentProfile).mockResolvedValue(createMockContext() as any);
+    const paths = createRuntimePaths(path.join(tempDir, "app-data"));
+    const lab = new WorkflowLab(paths, new ExtensionBridge());
+
+    const session = await lab.createSession({
+      mode: "playwright",
+      targetUrl: "https://3d.hunyuan.tencent.com/",
+      profileWorkflowId: "hunyuan"
+    });
+
+    expect(launchPersistentProfile).toHaveBeenCalledWith({
+      paths,
+      workflowId: "hunyuan",
+      profileName: "default"
+    });
+    expect(session).toMatchObject({
+      mode: "playwright",
+      profileWorkflowId: "hunyuan",
+      profileName: "default"
+    });
+  });
+
   it("stages attach-file actions for extension lab sessions", async () => {
     const paths = createRuntimePaths(path.join(tempDir, "app-data"));
     const bridge = new ExtensionBridge();
@@ -71,3 +120,15 @@ describe("WorkflowLab", () => {
     });
   });
 });
+
+function createMockContext() {
+  const page = {
+    goto: vi.fn(async () => undefined),
+    url: vi.fn(() => "https://example.test/"),
+    title: vi.fn(async () => "Example")
+  };
+  return {
+    pages: vi.fn(() => [page]),
+    newPage: vi.fn(async () => page)
+  };
+}
