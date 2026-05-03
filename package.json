@@ -19,6 +19,7 @@
     "typecheck:plugins": "tsc --noEmit -p plugins/based-blink-hunyuan/tsconfig.json && tsc --noEmit -p plugins/based-blink-chatgpt/tsconfig.json",
     "test": "npm run build:plugins && vitest run",
     "test:watch": "vitest",
+    "pretest:e2e": "npm run build",
     "test:e2e": "playwright test"
   },
   "dependencies": {

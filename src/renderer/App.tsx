@@ -652,7 +652,7 @@ export default function App(): JSX.Element {
                   disabled={!currentProjectDir}
                 >
                   <ExternalLink className="h-4 w-4" />
-                  Show in File Manager
+                  File Manager
                 </Button>
               </>
             ) : null}

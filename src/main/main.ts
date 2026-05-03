@@ -39,22 +39,32 @@ let runtime: RuntimeState | null = null;
 let settingsStore: AppSettingsStore | null = null;
 let pluginManager: PluginManager | null = null;
 let workflows: WorkflowRegistry = new Map();
+let startupCanCreateWindow = false;
+let pendingWindowFocus = false;
 const APP_ICON_PNG_RELATIVE_PATH = path.join("assets", "app-icon.png");
 const APP_ICON_ICO_RELATIVE_PATH = path.join("assets", "app-icon.ico");
 const WINDOWS_APP_USER_MODEL_ID = "com.based.blink";
+const TEST_USER_DATA_DIR_ENV = "BASED_BLINK_USER_DATA_DIR";
+
+app.setName("Based BLINK");
+if (process.platform === "win32") {
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+}
+
+const singleInstanceUserDataDir = applyUserDataDirOverride();
+const gotSingleInstanceLock = app.requestSingleInstanceLock({
+  userDataDir: singleInstanceUserDataDir
+});
 
 async function bootstrap(): Promise<void> {
-  app.setName("Based BLINK");
-  if (process.platform === "win32") {
-    app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
-  }
   const appIconPath = resolveAppIconPath();
   if (process.platform === "darwin" && appIconPath && app.dock) {
     app.dock.setIcon(appIconPath);
   }
   Menu.setApplicationMenu(null);
-  settingsStore = new AppSettingsStore(app.getPath("userData"));
-  pluginManager = new PluginManager(app.getPath("userData"));
+  const userDataDir = app.getPath("userData");
+  settingsStore = new AppSettingsStore(userDataDir);
+  pluginManager = new PluginManager(userDataDir);
   await pluginManager.reload();
   replaceWorkflowRegistry(createWorkflowRegistry(pluginManager));
   registerIpc();
@@ -68,7 +78,20 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  createWindow();
+  startupCanCreateWindow = true;
+  if (pendingWindowFocus || !mainWindow) {
+    pendingWindowFocus = false;
+    focusExistingWindow();
+  }
+}
+
+function applyUserDataDirOverride(): string {
+  const override = process.env[TEST_USER_DATA_DIR_ENV]?.trim();
+  if (!override) return app.getPath("userData");
+  const userDataDir = path.resolve(override);
+  fs.mkdirSync(userDataDir, { recursive: true });
+  app.setPath("userData", userDataDir);
+  return userDataDir;
 }
 
 function getConfig(): AppConfig {
@@ -220,9 +243,11 @@ function resolveAssetPath(relativePath: string): string | undefined {
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
+
   const appIconPath = resolveAppIconPath();
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     title: "Based BLINK",
     width: 1440,
     height: 960,
@@ -238,32 +263,62 @@ function createWindow(): void {
       sandbox: false
     }
   });
+  mainWindow = window;
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
-    void mainWindow.loadURL(devServerUrl);
+    void window.loadURL(devServerUrl);
     if (process.env.OPEN_DEVTOOLS === "1") {
-      mainWindow.webContents.openDevTools({ mode: "detach" });
+      window.webContents.openDevTools({ mode: "detach" });
     }
   } else {
-    void mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+    void window.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 
-  mainWindow.on("closed", () => {
-    mainWindow = null;
+  window.on("closed", () => {
+    if (mainWindow === window) mainWindow = null;
   });
+
+  return window;
 }
 
-app.whenReady().then(() => {
-  bootstrap().catch((error) => {
-    dialog.showErrorBox("Startup failed", error instanceof Error ? error.stack ?? error.message : String(error));
-    app.quit();
-  });
-});
+function focusExistingWindow(): void {
+  if (!app.isReady()) {
+    void app.whenReady().then(() => focusExistingWindow());
+    return;
+  }
 
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
-});
+  if (!startupCanCreateWindow && (!mainWindow || mainWindow.isDestroyed())) {
+    pendingWindowFocus = true;
+    return;
+  }
+
+  const window = createWindow();
+  if (window.isMinimized()) window.restore();
+  if (!window.isVisible()) window.show();
+  window.focus();
+}
+
+function handleStartupFailure(error: unknown): void {
+  dialog.showErrorBox("Startup failed", error instanceof Error ? error.stack ?? error.message : String(error));
+  app.quit();
+}
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    focusExistingWindow();
+  });
+
+  app.whenReady().then(() => {
+    bootstrap().catch(handleStartupFailure);
+  });
+
+  app.on("activate", () => {
+    focusExistingWindow();
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
