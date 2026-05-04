@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildChatGptArtifactPairing, type ChatGptRunInputModel, type ChatGptSubjectRunInputModel } from "../../src/renderer/lib/chatGptArtifactPairing";
+import {
+  buildChatGptArtifactPairing,
+  supportsChatGptArtifactPairing,
+  type ChatGptRunInputModel,
+  type ChatGptSubjectRunInputModel
+} from "../../src/renderer/lib/chatGptArtifactPairing";
 import type { ArtifactRecord } from "../../src/renderer/lib/api";
 
 const input: ChatGptSubjectRunInputModel = {
@@ -43,6 +48,22 @@ function manifestArtifact(): ArtifactRecord {
 }
 
 describe("ChatGPT artifact pairing", () => {
+  it("enables paired rendering for ChatGPT extension image transform runs", () => {
+    expect(
+      supportsChatGptArtifactPairing("based-blink.chatgpt.extension-image-transform", {
+        referenceImages: [],
+        subjectImages: ["C:\\tmp\\subject.png"],
+        masterPrompt: "Master",
+        subjectInstruction: "Transform"
+      })
+    ).toBe(true);
+    expect(
+      supportsChatGptArtifactPairing("based-blink.hunyuan.image-to-model", {
+        subjectImages: ["C:\\tmp\\subject.png"]
+      })
+    ).toBe(false);
+  });
+
   it("renders four subjects with one output each", () => {
     const pairing = buildChatGptArtifactPairing(input, [
       artifact("out-1", 0),

@@ -61,7 +61,7 @@ describe("duplicate run configuration", () => {
 
     expect(duplicate).toMatchObject({
       workflowId: "based-blink.chatgpt.extension-image-transform",
-      name: "Copy of Source run",
+      name: "Source run (1)",
       referenceFiles: ["C:\\runs\\inputs\\reference.png"],
       subjectFiles: ["C:\\runs\\inputs\\subject-a.png", "C:\\runs\\inputs\\subject-b.png"],
       masterPrompt: "Setup prompt",
@@ -89,6 +89,85 @@ describe("duplicate run configuration", () => {
     );
 
     expect(duplicate.extensionTabSelection).toBe("__new__");
+  });
+
+  it("uses the first available resubmit suffix when a copied name exists", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({
+        workflowId: "based-blink.chatgpt.extension-image-transform",
+        input: { subjectImages: ["C:\\runs\\inputs\\subject.png"] }
+      }),
+      {
+        workflow: chatGptWorkflow,
+        compatibleClients: [],
+        existingRuns: [
+          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run", input: {} }),
+          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run (1)", input: {} })
+        ],
+        newExtensionTabValue: "__new__"
+      }
+    );
+
+    expect(duplicate.name).toBe("Source run (2)");
+  });
+
+  it("resubmits an already suffixed run from the base name", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({
+        workflowId: "based-blink.chatgpt.extension-image-transform",
+        name: "Source run (1)",
+        input: { subjectImages: ["C:\\runs\\inputs\\subject.png"] }
+      }),
+      {
+        workflow: chatGptWorkflow,
+        compatibleClients: [],
+        existingRuns: [
+          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run", input: {} }),
+          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run (1)", input: {} })
+        ],
+        newExtensionTabValue: "__new__"
+      }
+    );
+
+    expect(duplicate.name).toBe("Source run (2)");
+  });
+
+  it("reuses the first suffix gap instead of the highest suffix", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({
+        workflowId: "based-blink.chatgpt.extension-image-transform",
+        input: { subjectImages: ["C:\\runs\\inputs\\subject.png"] }
+      }),
+      {
+        workflow: chatGptWorkflow,
+        compatibleClients: [],
+        existingRuns: [
+          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run", input: {} }),
+          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run (2)", input: {} })
+        ],
+        newExtensionTabValue: "__new__"
+      }
+    );
+
+    expect(duplicate.name).toBe("Source run (1)");
+  });
+
+  it("keeps blank source run names blank", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({
+        workflowId: "based-blink.chatgpt.extension-image-transform",
+        name: "   ",
+        input: { subjectImages: ["C:\\runs\\inputs\\subject.png"] }
+      }),
+      {
+        workflow: chatGptWorkflow,
+        compatibleClients: [],
+        existingRuns: [run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Untitled (1)", input: {} })],
+        newExtensionTabValue: "__new__"
+      }
+    );
+
+    expect(duplicate.name).toBe("");
   });
 
   it("copies ChatGPT sequence source image, prompts, setup, and target tab", () => {

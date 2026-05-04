@@ -40,6 +40,15 @@ export interface ChatGptArtifactPairing {
   otherArtifacts: ArtifactRecord[];
 }
 
+const CHATGPT_PAIRABLE_WORKFLOW_IDS = new Set([
+  "based-blink.chatgpt.extension-image-transform",
+  "based-blink.chatgpt.extension-image-sequence"
+]);
+
+export function supportsChatGptArtifactPairing(workflowId: string | undefined, input: unknown): boolean {
+  return Boolean(workflowId && CHATGPT_PAIRABLE_WORKFLOW_IDS.has(workflowId) && getChatGptRunInput(input));
+}
+
 export function getChatGptRunInput(input: unknown): ChatGptRunInputModel | null {
   if (!input || typeof input !== "object") return null;
   const record = input as Record<string, unknown>;

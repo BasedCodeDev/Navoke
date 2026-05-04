@@ -40,6 +40,7 @@ export interface DuplicateRunConfiguration {
 interface DuplicateRunOptions {
   workflow?: WorkflowSummary;
   compatibleClients: SystemInfo["extension"]["connectedClients"];
+  existingRuns?: Array<Pick<RunRecord, "name">>;
   newExtensionTabValue: string;
 }
 
@@ -50,7 +51,7 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
   const input = asRecord(run.input);
   const base: DuplicateRunConfiguration = {
     workflowId: run.workflowId,
-    name: run.name.trim() ? `Copy of ${run.name}` : "",
+    name: nextResubmitRunName(run.name, options.existingRuns ?? []),
     selectedFiles: [],
     referenceFiles: [],
     subjectFiles: [],
@@ -121,6 +122,18 @@ function isBrowserProfileWorkflowInput(input: Record<string, unknown>, workflow:
 
 function isHunyuanWorkflowInput(workflowId: string, input: Record<string, unknown>, workflow: WorkflowSummary | undefined): boolean {
   return isHunyuanWorkflowId(workflowId) || isHunyuanWorkflowId(workflow?.manifest.id) || "frontImage" in input;
+}
+
+function nextResubmitRunName(name: string, existingRuns: Array<Pick<RunRecord, "name">>): string {
+  const trimmedName = name.trim();
+  if (!trimmedName) return "";
+
+  const baseName = trimmedName.replace(/\s+\(\d+\)$/, "");
+  const existingNames = new Set(existingRuns.map((run) => run.name.trim()).filter(Boolean));
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${baseName} (${suffix})`;
+    if (!existingNames.has(candidate)) return candidate;
+  }
 }
 
 export function collectRunInputFilePaths(input: unknown): string[] {

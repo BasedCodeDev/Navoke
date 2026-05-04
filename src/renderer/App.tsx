@@ -92,6 +92,7 @@ import {
   buildChatGptArtifactPairing,
   fileName,
   getChatGptRunInput,
+  supportsChatGptArtifactPairing,
   type ChatGptRunInputModel
 } from "@/lib/chatGptArtifactPairing";
 import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "@/lib/duplicateRunConfiguration";
@@ -602,6 +603,7 @@ export default function App(): JSX.Element {
     const duplicate = buildDuplicateRunConfiguration(run, {
       workflow: availability.workflow ?? undefined,
       compatibleClients: compatibleExtensionClients,
+      existingRuns: runsQuery.data ?? [],
       newExtensionTabValue: NEW_EXTENSION_TAB_VALUE
     });
 
@@ -1685,7 +1687,8 @@ function RunDetailModal({
   const workflowUsable = canUseRunWorkflow(workflowAvailability);
   const runWorkflow = workflowAvailability?.workflow ?? undefined;
   const hasExtensionFocus = workflowHasCapability(runWorkflow, "extension.focusTarget");
-  const hasChatGptArtifactPairs = false;
+  const chatGptRunInput = run ? getChatGptRunInput(run.input) : null;
+  const hasChatGptArtifactPairs = Boolean(run && chatGptRunInput && supportsChatGptArtifactPairing(run.workflowId, run.input));
   const canResumeRun = workflowUsable && (run?.status === "waiting_manual" || isRecoverableFailedExtensionRun(run, runWorkflow));
   const canRenameRun = Boolean(run && !["queued", "running", "pausing", "waiting_manual"].includes(run.status));
 
@@ -1946,11 +1949,11 @@ function RunDetailModal({
                   <h3 className="text-sm font-semibold">Artifacts</h3>
                   {artifacts.length === 0 ? (
                     <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No artifacts yet.</div>
-                  ) : hasChatGptArtifactPairs && run && getChatGptRunInput(run.input) ? (
+                  ) : hasChatGptArtifactPairs && run && chatGptRunInput ? (
                     <ChatGptArtifactPairs
                       run={run}
                       artifacts={artifacts}
-                      input={getChatGptRunInput(run.input)!}
+                      input={chatGptRunInput}
                       onOpenDataFolder={onOpenDataFolder}
                     />
                   ) : (
