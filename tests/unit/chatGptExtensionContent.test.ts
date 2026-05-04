@@ -1,506 +1,361 @@
-import { readFileSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-class MockElement {
-  tagName: string;
-  textContent: string;
-  disabled?: boolean;
-  visible: boolean;
-  attrs: Record<string, string>;
-  children: MockElement[];
-  parent: MockElement | null = null;
+describe("generic browser extension content script", () => {
+  const extensionDir = path.resolve(__dirname, "../../extension");
 
-  constructor(
-    tagName: string,
-    attrs: Record<string, string> = {},
-    options: { text?: string; disabled?: boolean; visible?: boolean; children?: MockElement[] } = {}
-  ) {
-    this.tagName = tagName.toUpperCase();
-    this.textContent = options.text ?? "";
-    this.disabled = options.disabled;
-    this.visible = options.visible ?? true;
-    this.attrs = attrs;
-    this.children = options.children ?? [];
-    for (const child of this.children) child.parent = this;
-  }
+  it("does not ship site-specific hostnames or task kinds", () => {
+    const files = ["content.js", "background.js", "popup.js", "manifest.json"].map((file) =>
+      fs.readFileSync(path.join(extensionDir, file), "utf8")
+    );
+    const combined = files.join("\n");
+    expect(combined).not.toMatch(/chatgpt\.com|chat\.openai\.com|hunyuanglobal|hunyuan\.tencent/i);
+    expect(combined).not.toMatch(/chatgpt-image-transform|hunyuan-global-login-check/i);
+  });
 
-  getAttribute(name: string): string | null {
-    return this.attrs[name] ?? null;
-  }
+  it("exposes only generic command routes", () => {
+    const content = fs.readFileSync(path.join(extensionDir, "content.js"), "utf8");
+    expect(content).toContain("/api/extension/commands/next");
+    expect(content).toContain("performAction");
+    expect(content).toContain("waitForCondition");
+    expect(content).toContain("extract");
+    expect(content).not.toContain("/api/extension/tasks/");
+  });
 
-  getBoundingClientRect(): { width: number; height: number } {
-    return this.visible ? { width: 36, height: 36 } : { width: 0, height: 0 };
-  }
+  it("uses broad manifest coverage for plugin-owned sites", () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(extensionDir, "manifest.json"), "utf8")) as {
+      name: string;
+      host_permissions: string[];
+      content_scripts: Array<{ matches: string[]; run_at?: string }>;
+    };
+    expect(manifest.name).toBe("Based BLINK Browser Controller");
+    expect(manifest.host_permissions).toEqual(["<all_urls>"]);
+    expect(manifest.content_scripts[0].matches).toEqual(["<all_urls>"]);
+    expect(manifest.content_scripts[0].run_at).toBe("document_start");
+  });
 
-  querySelectorAll(selector: string): MockElement[] {
-    return queryElements(flattenDescendants(this), selector);
-  }
-}
+  it("remembers a routed tab token after the site removes it from the URL", () => {
+    const harness = loadContentScriptHarness(createFakeElement({ isContentEditable: true }));
 
-class MockImageElement extends MockElement {
-  currentSrc: string;
-  src: string;
-  naturalWidth: number;
-  naturalHeight: number;
-  alt: string;
+    expect(harness.routingTokenForHeartbeat()).toBe("token");
+    harness.location.href = "https://example.test/conversation/123";
+    harness.location.hash = "";
 
-  constructor(src: string, options: { width?: number; height?: number; alt?: string } = {}) {
-    super("img", {});
-    this.currentSrc = src;
-    this.src = src;
-    this.naturalWidth = options.width ?? 1024;
-    this.naturalHeight = options.height ?? 1024;
-    this.alt = options.alt ?? "";
-  }
-}
+    expect(harness.routingTokenForHeartbeat()).toBe("token");
+  });
 
-function mockElement(
-  tagName: string,
-  attrs: Record<string, string> = {},
-  options: { text?: string; disabled?: boolean; visible?: boolean; children?: MockElement[] } = {}
-): MockElement {
-  return new MockElement(tagName, attrs, options);
-}
+  it("fills contenteditable elements through browser text insertion and dispatches editor events", async () => {
+    const insertedText: Array<{ command: string; value: string }> = [];
+    const events: string[] = [];
+    const element = createFakeElement({
+      isContentEditable: true,
+      dispatchEvent: (event) => events.push(event.type),
+      onExecCommand: (value) => {
+        element.textContent = value;
+      }
+    });
+    const harness = loadContentScriptHarness(element, {
+      execCommand(command, _showUi, value) {
+        insertedText.push({ command, value: String(value ?? "") });
+        element.execCommand(String(value ?? ""));
+        return true;
+      }
+    });
 
-function mockImage(src: string, options: { width?: number; height?: number; alt?: string } = {}): MockImageElement {
-  return new MockImageElement(src, options);
-}
+    const result = await harness.performAction({ kind: "fill", selector: "#composer", value: "Make this image cinematic" });
 
-function flattenElements(elements: MockElement[]): MockElement[] {
-  return elements.flatMap((element) => [element, ...flattenDescendants(element)]);
-}
+    expect(result).toMatchObject({ ok: true, action: "fill", selector: "#composer", valueLength: 25, observedLength: 25, method: "insertText" });
+    expect(insertedText).toEqual([{ command: "insertText", value: "Make this image cinematic" }]);
+    expect(events).toEqual(["input", "change"]);
+  });
 
-function flattenDescendants(element: MockElement): MockElement[] {
-  return element.children.flatMap((child) => [child, ...flattenDescendants(child)]);
-}
+  it("chooses the first visible enabled fillable element when selectors match hidden duplicates", async () => {
+    const hidden = createFakeElement({ isContentEditable: true, visible: false });
+    const visible = createFakeElement({
+      isContentEditable: true,
+      onExecCommand: (value) => {
+        visible.textContent = value;
+      }
+    });
+    const harness = loadContentScriptHarness([hidden, visible], {
+      execCommand(_command, _showUi, value) {
+        visible.execCommand(String(value ?? ""));
+        return true;
+      }
+    });
 
-function queryElements(elements: MockElement[], selector: string): MockElement[] {
-  const selectors = selector.split(",").map((part) => part.trim()).filter(Boolean);
-  const matches = selectors.flatMap((part) => elements.filter((element) => matchesSelector(element, part)));
-  return matches.filter((element, index, all) => all.indexOf(element) === index);
-}
+    const result = await harness.performAction({ kind: "fill", selector: "[contenteditable='true']", value: "Visible editor text" });
 
-function matchesSelector(element: MockElement, selector: string): boolean {
-  if (selector.includes(" ")) {
-    const [ancestorSelector, childSelector] = selector.split(/\s+/, 2);
-    return matchesSelector(element, childSelector) && hasAncestor(element, ancestorSelector);
-  }
-  if (selector === "button") return element.tagName === "BUTTON";
-  if (selector === "textarea") return element.tagName === "TEXTAREA";
-  if (selector === "img") return element.tagName === "IMG";
-  if (selector === "article") return element.tagName === "ARTICLE";
-  if (selector === "main") return element.tagName === "MAIN";
-  if (selector === "[contenteditable='true']") return element.attrs.contenteditable === "true";
-  if (selector === "[data-message-author-role='assistant']") return element.attrs["data-message-author-role"] === "assistant";
-  if (selector === "#prompt-textarea") return element.attrs.id === "prompt-textarea";
-  if (selector === "input[type='file']") return element.tagName === "INPUT" && element.attrs.type === "file";
-  if (selector === "form button[type='submit']") return element.tagName === "BUTTON" && element.attrs.type === "submit";
+    expect(result).toMatchObject({
+      ok: true,
+      selector: "[contenteditable='true']",
+      candidateCount: 2,
+      chosen: expect.objectContaining({ id: "visible-editor" }),
+      observedLength: 19
+    });
+    expect(hidden.textContent).toBe("old");
+    expect(visible.textContent).toBe("Visible editor text");
+  });
 
-  const buttonAttr = selector.match(/^button\[(data-testid|aria-label)=['"]([^'"]+)['"]\]$/);
-  if (buttonAttr) {
-    return element.tagName === "BUTTON" && element.attrs[buttonAttr[1]] === buttonAttr[2];
-  }
+  it("clears existing contenteditable text before insertion and reports the observed text length", async () => {
+    const element = createFakeElement({
+      isContentEditable: true,
+      textContent: "Existing placeholder",
+      onExecCommand: (value) => {
+        expect(element.textContent).toBe("");
+        element.textContent = value;
+      }
+    });
+    const harness = loadContentScriptHarness(element, {
+      execCommand(_command, _showUi, value) {
+        element.execCommand(String(value ?? ""));
+        return true;
+      }
+    });
 
-  return false;
-}
+    const result = await harness.performAction({ kind: "fill", selector: "#composer", value: "Replacement prompt" });
 
-function hasAncestor(element: MockElement, selector: string): boolean {
-  let current = element.parent;
-  while (current) {
-    if (matchesSelector(current, selector)) return true;
-    current = current.parent;
-  }
-  return false;
-}
+    expect(result).toMatchObject({ valueLength: 18, observedLength: 18, method: "insertText" });
+    expect(element.textContent).toBe("Replacement prompt");
+  });
 
-function loadContentScript(
-  elements: MockElement[],
-  options: {
-    fetch?: (input: string, init?: { method?: string; body?: string; headers?: Record<string, string> }) => Promise<{
-      ok: boolean;
-      status: number;
-      statusText?: string;
-      text(): Promise<string>;
-    }>;
-  } = {}
-) {
-  const testDir = path.dirname(fileURLToPath(import.meta.url));
-  const contentPath = path.resolve(testDir, "../../extension/chatgpt-controller/content.js");
-  const source = readFileSync(contentPath, "utf8").replace(/\nvoid pollLoop\(\);\s*$/, "\n");
-  const allElements = flattenElements(elements);
-  const document = {
-    body: { innerText: "" },
-    images: allElements.filter((element) => element instanceof MockImageElement),
-    querySelector(selector: string) {
-      return this.querySelectorAll(selector)[0] ?? null;
-    },
-    querySelectorAll(selector: string) {
-      return queryElements(allElements, selector);
+  it("falls back when contenteditable insertion reports success without changing observed text", async () => {
+    const events: string[] = [];
+    const element = createFakeElement({
+      isContentEditable: true,
+      textContent: "placeholder",
+      dispatchEvent: (event) => events.push(event.type)
+    });
+    const harness = loadContentScriptHarness(element, {
+      execCommand() {
+        return true;
+      }
+    });
+
+    const result = await harness.performAction({ kind: "fill", selector: "#composer", value: "Fallback prompt" });
+
+    expect(result).toMatchObject({ valueLength: 15, observedLength: 15, method: "fallback-textContent" });
+    expect(element.textContent).toBe("Fallback prompt");
+    expect(events).toEqual(["input", "change"]);
+  });
+
+  it("fills value elements through the native value setter path", async () => {
+    const nativeSetValues: string[] = [];
+    class FakeInput {
+      ownValue = "";
+      isContentEditable = false;
+      focusCount = 0;
+      events: string[] = [];
+
+      get value(): string {
+        return this.ownValue;
+      }
+
+      set value(value: string) {
+        nativeSetValues.push(value);
+        this.ownValue = value;
+      }
+
+      focus(): void {
+        this.focusCount += 1;
+      }
+
+      dispatchEvent(event: { type: string }): void {
+        this.events.push(event.type);
+      }
+
+      getBoundingClientRect(): { width: number; height: number; x: number; y: number } {
+        return { width: 120, height: 40, x: 0, y: 0 };
+      }
+
+      getAttribute(): string | null {
+        return null;
+      }
+
+      tagName = "TEXTAREA";
+      id = "textarea";
     }
-  };
-  const context = {
-    chrome: {
-      runtime: { getManifest: () => ({ version: "test" }) },
-      storage: { local: { get: (_keys: string[], callback: (value: Record<string, unknown>) => void) => callback({}) } }
-    },
-    crypto: { randomUUID: () => "test-client" },
-    sessionStorage: {
-      getItem: () => null,
-      setItem: () => undefined
-    },
-    location: { search: "", hash: "", href: "https://chatgpt.com/", pathname: "/" },
-    history: { replaceState: () => undefined, state: null },
-    URL,
-    URLSearchParams,
-    HTMLImageElement: MockImageElement,
-    document,
-    fetch: options.fetch,
-    getComputedStyle: (element: MockElement) => ({
-      visibility: element.visible ? "visible" : "hidden",
-      display: element.visible ? "block" : "none"
-    }),
-    setTimeout,
-    clearTimeout
-  };
+    const element = new FakeInput();
+    const harness = loadContentScriptHarness(element);
 
-  vm.runInNewContext(source, context);
-  return context as typeof context & {
-    findStopButton: (selectors: Record<string, string>) => MockElement | null;
-    collectChatGptSubmitReadyState: (selectors: Record<string, string>) => { stopButtonVisible: boolean; stopButtonLabel: string | null };
-    evaluateChatGptSubmitReadyState: (state: unknown) => { satisfied: boolean; reason: string };
-    collectNewOutputImageCandidates: (
-      beforeState: {
-        assistantCount: number;
-        articleCount: number;
-        imageFingerprints: Set<string>;
-        outputCandidateCount?: number;
-        generatedOutputCandidateCount?: number;
-      },
-      selectors: Record<string, string>
-    ) => MockImageElement[];
-    selectSingleOutputImage: (images: MockImageElement[], subject: { name: string }) => MockImageElement;
-    runChatGptSubjectTask: (task: unknown) => Promise<void>;
-  };
-}
+    const result = await harness.performAction({ kind: "fill", selector: "textarea", value: "Prompt that must reach the browser" });
 
-describe("ChatGPT extension content predicates", () => {
-  it("keeps heartbeat and work polling in independent loops", () => {
-    const testDir = path.dirname(fileURLToPath(import.meta.url));
-    const contentPath = path.resolve(testDir, "../../extension/chatgpt-controller/content.js");
-    const source = readFileSync(contentPath, "utf8");
-
-    expect(source).toContain("async function heartbeatLoop()");
-    expect(source).toContain("async function workLoop()");
-    expect(source).toContain("void heartbeatLoop();");
-    expect(source).toContain("void workLoop();");
+    expect(result).toMatchObject({ ok: true, action: "fill", selector: "textarea", valueLength: 34, observedLength: 34, method: "native-value-setter" });
+    expect(nativeSetValues).toEqual(["Prompt that must reach the browser"]);
+    expect(element.events).toEqual(["input", "change"]);
   });
 
-  it("does not treat historical Stopped thinking controls as active stop buttons", () => {
-    const composer = mockElement("div", { id: "prompt-textarea", contenteditable: "true" });
-    const send = mockElement("button", { "data-testid": "send-button", "aria-label": "Send prompt" });
-    const stoppedThinking = mockElement("button", {}, { text: "Stopped thinking" });
-    const fileInput = mockElement("input", { type: "file" });
-    const content = loadContentScript([composer, send, stoppedThinking, fileInput]);
+  it("reports element state from the first visible selector match", async () => {
+    const hidden = createFakeElement({ isContentEditable: false, visible: false, id: "hidden-button" });
+    const visible = createFakeElement({ isContentEditable: false, visible: true, id: "visible-button", textContent: "Send" });
+    const harness = loadContentScriptHarness([hidden, visible]);
 
-    expect(content.findStopButton({})).toBeNull();
-    expect(content.collectChatGptSubmitReadyState({})).toMatchObject({
-      stopButtonVisible: false,
-      stopButtonLabel: null
-    });
-    expect(content.evaluateChatGptSubmitReadyState(content.collectChatGptSubmitReadyState({}))).toMatchObject({
-      satisfied: true,
-      reason: "ChatGPT submit button is ready."
+    const result = await harness.extract({ kind: "element-state", selector: "button" });
+
+    expect(result).toMatchObject({
+      count: 2,
+      visibleCount: 1,
+      enabledCount: 2,
+      visible: true,
+      disabled: false,
+      text: "Send"
     });
   });
 
-  it("detects the active composer stop button by stable selector", () => {
-    const stop = mockElement("button", { "data-testid": "stop-button" });
-    const content = loadContentScript([stop]);
+  it("clicks the first visible enabled selector match", async () => {
+    const clicked: string[] = [];
+    const hidden = createFakeElement({ isContentEditable: false, visible: false, id: "hidden-button", onClick: () => clicked.push("hidden") });
+    const visible = createFakeElement({ isContentEditable: false, visible: true, id: "visible-button", onClick: () => clicked.push("visible") });
+    const harness = loadContentScriptHarness([hidden, visible]);
 
-    expect(content.findStopButton({})).toBe(stop);
-  });
+    const result = await harness.performAction({ kind: "click", selector: "button" });
 
-  it("deduplicates repeated image elements by fingerprint", () => {
-    const first = mockImage("https://chatgpt.test/output.png", { width: 512, height: 512 });
-    const duplicate = mockImage("https://chatgpt.test/output.png", { width: 512, height: 512 });
-    const assistant = mockElement("article", { "data-message-author-role": "assistant" }, { children: [first, duplicate] });
-    const content = loadContentScript([assistant]);
-
-    const candidates = content.collectNewOutputImageCandidates(
-      { assistantCount: 0, articleCount: 0, imageFingerprints: new Set() },
-      {}
-    );
-
-    expect(candidates).toEqual([first]);
-  });
-
-  it("ignores earlier assistant images when a newer assistant response exists", () => {
-    const oldImage = mockImage("https://chatgpt.test/old.png");
-    const newImage = mockImage("https://chatgpt.test/new.png");
-    const oldAssistant = mockElement("article", { "data-message-author-role": "assistant" }, { children: [oldImage] });
-    const newAssistant = mockElement("article", { "data-message-author-role": "assistant" }, { children: [newImage] });
-    const content = loadContentScript([oldAssistant, newAssistant]);
-
-    const candidates = content.collectNewOutputImageCandidates(
-      { assistantCount: 1, articleCount: 0, imageFingerprints: new Set() },
-      {}
-    );
-
-    expect(candidates).toEqual([newImage]);
-  });
-
-  it("uses candidate order when ChatGPT reuses one broad assistant container", () => {
-    const oldImage = mockImage("https://chatgpt.test/old.png", { alt: "Generated image" });
-    const newImage = mockImage("https://chatgpt.test/new.png", { alt: "Generated image" });
-    const broadAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImage, newImage] });
-    const content = loadContentScript([mockElement("main", {}, { children: [broadAssistant] })]);
-
-    const candidates = content.collectNewOutputImageCandidates(
-      {
-        assistantCount: 1,
-        articleCount: 0,
-        imageFingerprints: new Set(["https://chatgpt.test/old.png|1024x1024"]),
-        outputCandidateCount: 1,
-        generatedOutputCandidateCount: 1
-      },
-      {}
-    );
-
-    expect(candidates).toEqual([newImage]);
-  });
-
-  it("detects a generated output when the fallback candidate count is unchanged", () => {
-    const generatedImage = mockImage("https://chatgpt.test/generated.png", { alt: "Generated image" });
-    const content = loadContentScript([mockElement("main", {}, { children: [generatedImage] })]);
-
-    const candidates = content.collectNewOutputImageCandidates(
-      {
-        assistantCount: 0,
-        articleCount: 0,
-        imageFingerprints: new Set(["blob:https://chatgpt.test/subject-preview|1024x1024"]),
-        outputCandidateCount: 1,
-        generatedOutputCandidateCount: 0
-      },
-      {}
-    );
-
-    expect(candidates).toEqual([generatedImage]);
-  });
-
-  it("does not treat a volatile prior output URL as a current output candidate", () => {
-    const oldImageWithNewSignedUrl = mockImage("https://chatgpt.test/old-resigned.png", { alt: "Generated image" });
-    const newImage = mockImage("https://chatgpt.test/new.png", { alt: "Generated image" });
-    const broadAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImageWithNewSignedUrl, newImage] });
-    const content = loadContentScript([mockElement("main", {}, { children: [broadAssistant] })]);
-
-    const candidates = content.collectNewOutputImageCandidates(
-      {
-        assistantCount: 1,
-        articleCount: 0,
-        imageFingerprints: new Set(["https://chatgpt.test/old-original.png|1024x1024"]),
-        outputCandidateCount: 1,
-        generatedOutputCandidateCount: 1
-      },
-      {}
-    );
-
-    expect(candidates).toEqual([newImage]);
-  });
-
-  it("does not treat a re-signed prior generated image as current when no generated image was appended", () => {
-    const oldImageWithNewSignedUrl = mockImage("https://chatgpt.test/old-resigned.png", { alt: "Generated image" });
-    const broadAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImageWithNewSignedUrl] });
-    const content = loadContentScript([mockElement("main", {}, { children: [broadAssistant] })]);
-
-    const candidates = content.collectNewOutputImageCandidates(
-      {
-        assistantCount: 1,
-        articleCount: 0,
-        imageFingerprints: new Set(["https://chatgpt.test/old-original.png|1024x1024"]),
-        outputCandidateCount: 1,
-        generatedOutputCandidateCount: 1
-      },
-      {}
-    );
-
-    expect(candidates).toEqual([]);
-  });
-
-  it("excludes uploaded prompt images from output candidates", () => {
-    const uploadedImage = mockImage("https://chatgpt.test/uploaded.png", { alt: "Uploaded image" });
-    const generatedImage = mockImage("https://chatgpt.test/generated.png", { alt: "Generated image" });
-    const mixedArticle = mockElement("article", {}, { children: [uploadedImage, generatedImage] });
-    const content = loadContentScript([mixedArticle]);
-
-    const candidates = content.collectNewOutputImageCandidates(
-      { assistantCount: 0, articleCount: 0, imageFingerprints: new Set() },
-      {}
-    );
-
-    expect(candidates).toEqual([generatedImage]);
-  });
-
-  it("accepts exactly one output image candidate", () => {
-    const output = mockImage("https://chatgpt.test/output.png");
-    const content = loadContentScript([]);
-
-    expect(content.selectSingleOutputImage([output], { name: "subject.png" })).toBe(output);
-  });
-
-  it("accepts one generated output when an uploaded image is also present", () => {
-    const uploadedImage = mockImage("https://chatgpt.test/uploaded.png", { alt: "Uploaded image" });
-    const generatedImage = mockImage("https://chatgpt.test/generated.png", { alt: "Generated image" });
-    const content = loadContentScript([]);
-
-    expect(content.selectSingleOutputImage([uploadedImage, generatedImage], { name: "subject.png" })).toBe(generatedImage);
-  });
-
-  it("rejects multiple distinct output image candidates", () => {
-    const content = loadContentScript([]);
-
-    expect(() =>
-      content.selectSingleOutputImage(
-        [mockImage("https://chatgpt.test/first.png"), mockImage("https://chatgpt.test/second.png")],
-        { name: "subject.png" }
-      )
-    ).toThrow("exactly one result per subject");
-  });
-
-  it("rejects multiple generated images appended after the baseline", () => {
-    const oldImage = mockImage("https://chatgpt.test/old.png", { alt: "Generated image" });
-    const firstNewImage = mockImage("https://chatgpt.test/first-new.png", { alt: "Generated image" });
-    const secondNewImage = mockImage("https://chatgpt.test/second-new.png", { alt: "Generated image" });
-    const broadAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImage, firstNewImage, secondNewImage] });
-    const content = loadContentScript([mockElement("main", {}, { children: [broadAssistant] })]);
-
-    const candidates = content.collectNewOutputImageCandidates(
-      {
-        assistantCount: 1,
-        articleCount: 0,
-        imageFingerprints: new Set(["https://chatgpt.test/old.png|1024x1024"]),
-        outputCandidateCount: 1,
-        generatedOutputCandidateCount: 1
-      },
-      {}
-    );
-
-    expect(candidates).toEqual([firstNewImage, secondNewImage]);
-    expect(() => content.selectSingleOutputImage(candidates, { name: "subject.png" })).toThrow("exactly one result per subject");
-  });
-
-  it("captures an existing output without uploading or submitting in capture-existing mode", async () => {
-    const outputImage = mockImage("data:image/png;base64,b3V0cHV0", { alt: "Generated image" });
-    const requests: Array<{ url: string; body?: string }> = [];
-    const content = loadContentScript([mockElement("main", {}, { children: [outputImage] })], {
-      fetch: async (url, init) => {
-        requests.push({ url, body: init?.body });
-        return {
-          ok: true,
-          status: 200,
-          text: async () => "{}"
-        };
-      }
-    });
-
-    await content.runChatGptSubjectTask({
-      id: "task-1",
-      kind: "chatgpt-image-transform",
-      phase: "subject",
-      protocolVersion: 9,
-      runId: "run-1",
-      subjectMode: "capture-existing",
-      subjectImage: { index: 0, name: "subject.png", mimeType: "image/png", url: "/unused" },
-      subjectInstruction: "",
-      subjectBaseline: {
-        assistantCount: 0,
-        assistantText: "",
-        articleCount: 0,
-        bodyText: "",
-        imageFingerprints: [],
-        outputCandidateCount: 0,
-        generatedOutputCandidateCount: 0
-      },
-      selectors: {}
-    });
-
-    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/images/"))).toBe(false);
-    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/outputs"))).toBe(true);
-    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/complete"))).toBe(true);
-  });
-
-  it("captures an existing generated output when a subject preview polluted the fallback baseline count", async () => {
-    const outputImage = mockImage("data:image/png;base64,b3V0cHV0", { alt: "Generated image" });
-    const requests: Array<{ url: string; body?: string }> = [];
-    const content = loadContentScript([mockElement("main", {}, { children: [outputImage] })], {
-      fetch: async (url, init) => {
-        requests.push({ url, body: init?.body });
-        return {
-          ok: true,
-          status: 200,
-          text: async () => "{}"
-        };
-      }
-    });
-
-    await content.runChatGptSubjectTask({
-      id: "task-1",
-      kind: "chatgpt-image-transform",
-      phase: "subject",
-      protocolVersion: 9,
-      runId: "run-1",
-      subjectMode: "capture-existing",
-      subjectImage: { index: 0, name: "subject.png", mimeType: "image/png", url: "/unused" },
-      subjectInstruction: "",
-      subjectBaseline: {
-        assistantCount: 0,
-        assistantText: "",
-        articleCount: 0,
-        bodyText: "",
-        imageFingerprints: ["blob:https://chatgpt.test/subject-preview|1024x1024"],
-        outputCandidateCount: 1,
-        generatedOutputCandidateCount: 0
-      },
-      selectors: {}
-    });
-
-    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/images/"))).toBe(false);
-    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/outputs"))).toBe(true);
-    expect(requests.some((request) => request.url.includes("/api/extension/tasks/task-1/complete"))).toBe(true);
-  });
-
-  it("can capture the latest visible output in capture-existing mode without a saved baseline", async () => {
-    const oldImage = mockImage("data:image/png;base64,b2xk", { alt: "Generated image" });
-    const newImage = mockImage("data:image/png;base64,bmV3", { alt: "Generated image" });
-    const oldAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [oldImage] });
-    const newAssistant = mockElement("div", { "data-message-author-role": "assistant" }, { children: [newImage] });
-    const requests: Array<{ url: string; body?: string }> = [];
-    const content = loadContentScript([mockElement("main", {}, { children: [oldAssistant, newAssistant] })], {
-      fetch: async (url, init) => {
-        requests.push({ url, body: init?.body });
-        return {
-          ok: true,
-          status: 200,
-          text: async () => "{}"
-        };
-      }
-    });
-
-    await content.runChatGptSubjectTask({
-      id: "task-2",
-      kind: "chatgpt-image-transform",
-      phase: "subject",
-      protocolVersion: 9,
-      runId: "run-1",
-      subjectMode: "capture-existing",
-      subjectImage: { index: 0, name: "subject.png", mimeType: "image/png", url: "/unused" },
-      subjectInstruction: "",
-      selectors: {}
-    });
-
-    const outputRequest = requests.find((request) => request.url.includes("/api/extension/tasks/task-2/outputs"));
-    expect(outputRequest?.body).toContain("bmV3");
+    expect(result).toMatchObject({ ok: true, action: "click", selector: "button", candidateCount: 2, visibleCount: 1, enabledCount: 2 });
+    expect(clicked).toEqual(["visible"]);
   });
 });
+
+function loadContentScriptHarness(
+  elementOrElements: unknown | unknown[],
+  options: { execCommand?(command: string, showUi: boolean, value: unknown): boolean } = {}
+): {
+  performAction(action: unknown): Promise<unknown>;
+  extract(query: unknown): Promise<unknown>;
+  routingTokenForHeartbeat(): string | undefined;
+  location: { href: string; search: string; hash: string };
+} {
+  const content = fs.readFileSync(path.join(path.resolve(__dirname, "../../extension"), "content.js"), "utf8");
+  const storage = new Map<string, string>();
+  const elements = Array.isArray(elementOrElements) ? elementOrElements : [elementOrElements];
+  const context = {
+    chrome: {
+      runtime: {
+        getManifest: () => ({ version: "0.1.0" }),
+        sendMessage: async () => ({ ok: true })
+      }
+    },
+    crypto: {
+      randomUUID: () => "client-test"
+    },
+    sessionStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      }
+    },
+    location: {
+      href: "https://example.test/#based-blink-tab=token",
+      search: "",
+      hash: "#based-blink-tab=token"
+    },
+    document: {
+      title: "Test page",
+      body: { innerText: "", textContent: "" },
+      querySelector: () => elements[0] ?? null,
+      querySelectorAll: () => elements,
+      createRange: () => ({
+        selectNodeContents: (element: { textContent?: string }) => {
+          element.textContent = "";
+        }
+      }),
+      execCommand: options.execCommand ?? (() => false)
+    },
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+    InputEvent: class {
+      type: string;
+      constructor(type: string) {
+        this.type = type;
+      }
+    },
+    Event: class {
+      type: string;
+      constructor(type: string) {
+        this.type = type;
+      }
+    },
+    File: class {},
+    FileReader: class {},
+    fetch: async () => {
+      throw new Error("No API server in unit test.");
+    },
+    setInterval: () => 0,
+    getSelection: () => ({
+      removeAllRanges: () => undefined,
+      addRange: () => undefined
+    }),
+    URLSearchParams,
+    URL,
+    console
+  };
+  vm.runInNewContext(content, context);
+  const testApi = (context as unknown as {
+    __BasedBlinkBrowserControllerTest: {
+      performAction(action: unknown): Promise<unknown>;
+      extract(query: unknown): Promise<unknown>;
+      routingTokenForHeartbeat(): string | undefined;
+    };
+  }).__BasedBlinkBrowserControllerTest;
+  return {
+    ...testApi,
+    location: context.location
+  } as {
+    performAction(action: unknown): Promise<unknown>;
+    extract(query: unknown): Promise<unknown>;
+    routingTokenForHeartbeat(): string | undefined;
+    location: { href: string; search: string; hash: string };
+  };
+}
+
+function createFakeElement(input: {
+  isContentEditable: boolean;
+  visible?: boolean;
+  disabled?: boolean;
+  id?: string;
+  textContent?: string;
+  onExecCommand?(value: string): void;
+  onClick?(): void;
+  dispatchEvent?(event: { type: string }): void;
+}): {
+  isContentEditable: boolean;
+  id: string;
+  textContent: string;
+  focus(): void;
+  click(): void;
+  execCommand(value: string): void;
+  getBoundingClientRect(): { width: number; height: number; x: number; y: number };
+  getAttribute(name: string): string | null;
+  tagName: string;
+  role: string;
+  dispatchEvent(event: { type: string }): void;
+} {
+  const visible = input.visible ?? true;
+  return {
+    isContentEditable: input.isContentEditable,
+    id: input.id ?? (visible ? "visible-editor" : "hidden-editor"),
+    textContent: input.textContent ?? "old",
+    disabled: input.disabled ?? false,
+    tagName: "DIV",
+    role: "textbox",
+    focus: () => undefined,
+    click: () => input.onClick?.(),
+    execCommand: (value) => input.onExecCommand?.(value),
+    getBoundingClientRect: () => ({ width: visible ? 120 : 0, height: visible ? 40 : 0, x: 0, y: 0 }),
+    getAttribute: (name) => (name === "aria-disabled" && input.disabled ? "true" : name === "role" ? "textbox" : null),
+    dispatchEvent: input.dispatchEvent ?? (() => undefined)
+  } as {
+    isContentEditable: boolean;
+    id: string;
+    textContent: string;
+    disabled: boolean;
+    tagName: string;
+    role: string;
+    focus(): void;
+    click(): void;
+    execCommand(value: string): void;
+    getBoundingClientRect(): { width: number; height: number; x: number; y: number };
+    getAttribute(name: string): string | null;
+    dispatchEvent(event: { type: string }): void;
+  };
+}

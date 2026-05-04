@@ -44,6 +44,7 @@ import {
   listPlugins,
   listRuns,
   listWorkflows,
+  openExtensionTab,
   openProject,
   pauseRun,
   renameProject,
@@ -96,22 +97,25 @@ import {
 import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "@/lib/duplicateRunConfiguration";
 import {
   DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
+  DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG_JSON,
+  HUNYUAN_GLOBAL_WORKFLOW_ID,
   HUNYUAN_EXPORT_FORMATS,
   HUNYUAN_FACE_COUNTS,
   HUNYUAN_SELECTOR_ASSIGNMENTS,
   HUNYUAN_VIEW_FIELDS,
-  HUNYUAN_WORKFLOW_ID,
   assignHunyuanSelectorJson,
   buildHunyuanRunInput,
+  defaultHunyuanSelectorConfigJsonForWorkflow,
   emptyHunyuanViewFiles,
+  isHunyuanWorkflowId,
   type HunyuanExportFormat,
   type HunyuanFaceCount,
   type HunyuanRetopologyType,
   type HunyuanViewField,
   type HunyuanViewFiles
 } from "@/lib/hunyuanWorkflow";
-import { isRecoverableFailedChatGptRun, resolveChatGptFocusTarget } from "@/lib/chatGptTabFocus";
-import { resolveChatGptTabSelection } from "@/lib/chatGptTabRouting";
+import { isRecoverableFailedExtensionRun, resolveExtensionFocusTarget } from "@/lib/extensionTabFocus";
+import { resolveExtensionTabSelection } from "@/lib/extensionTabRouting";
 import { activeCliAgentRuns, isCliRun, runOriginCommand, runOriginLabel } from "@/lib/runOrigin";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
 import { Badge } from "@/components/ui/badge";
@@ -142,13 +146,11 @@ function workflowHasField(workflow: WorkflowSummary | undefined, fieldName: stri
   return Boolean(workflow?.manifest.inputFields.some((field) => field.name === fieldName));
 }
 
-const NEW_CHATGPT_TAB_VALUE = "__new_chatgpt_tab__";
-const CHATGPT_NEW_TAB_URL = "https://chatgpt.com/";
-const CHATGPT_TAB_ROUTING_PARAM = "based-blink-tab";
-const HUNYUAN_LAB_TARGET_URL = "https://3d.hunyuan.tencent.com/";
+const NEW_EXTENSION_TAB_VALUE = "__new_extension_tab__";
+const EXTENSION_TAB_ROUTING_PARAM = "based-blink-tab";
 const APP_ICON_SRC = "/assets/app-icon.png";
 
-type ChatGptTabInput =
+type ExtensionTabInput =
   | { mode: "existing"; clientId: string; url?: string; title?: string }
   | { mode: "new"; routingToken: string; url?: string; title?: string };
 
@@ -156,17 +158,18 @@ function createRoutingToken(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function buildNewChatGptTabUrl(routingToken: string): string {
-  const url = new URL(CHATGPT_NEW_TAB_URL);
-  url.hash = `${CHATGPT_TAB_ROUTING_PARAM}=${encodeURIComponent(routingToken)}`;
+function buildNewExtensionTabUrl(targetUrl: string | undefined, routingToken: string): string {
+  const url = new URL(targetUrl?.trim() || "about:blank");
+  url.hash = `${EXTENSION_TAB_ROUTING_PARAM}=${encodeURIComponent(routingToken)}`;
   return url.toString();
 }
 
-function buildChatGptTabInput(
+function buildExtensionTabInput(
   selection: string,
-  clients: SystemInfo["extension"]["connectedClients"] = []
-): ChatGptTabInput {
-  if (selection && selection !== NEW_CHATGPT_TAB_VALUE) {
+  clients: SystemInfo["extension"]["connectedClients"] = [],
+  targetUrl?: string
+): ExtensionTabInput {
+  if (selection && selection !== NEW_EXTENSION_TAB_VALUE) {
     const client = clients.find((candidate) => candidate.id === selection);
     return {
       mode: "existing",
@@ -176,11 +179,11 @@ function buildChatGptTabInput(
     };
   }
   const routingToken = createRoutingToken();
-  return { mode: "new", routingToken, url: buildNewChatGptTabUrl(routingToken) };
+  return { mode: "new", routingToken, url: buildNewExtensionTabUrl(targetUrl, routingToken) };
 }
 
-function chatGptTabOptionLabel(client: SystemInfo["extension"]["connectedClients"][number]): string {
-  const label = client.title || "ChatGPT tab";
+function extensionTabOptionLabel(client: SystemInfo["extension"]["connectedClients"][number]): string {
+  const label = client.title || client.url || "Browser tab";
   return `${label} (${client.status || "ready"})`;
 }
 
@@ -253,7 +256,7 @@ export default function App(): JSX.Element {
   const [hunyuanAutoRig, setHunyuanAutoRig] = useState(false);
   const [hunyuanExportFormat, setHunyuanExportFormat] = useState<HunyuanExportFormat>("obj");
   const [hunyuanSelectorsJson, setHunyuanSelectorsJson] = useState(DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON);
-  const [chatGptTabSelection, setChatGptTabSelection] = useState("");
+  const [extensionTabSelection, setExtensionTabSelection] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
   const [newRunFocusError, setNewRunFocusError] = useState<string | null>(null);
@@ -324,10 +327,18 @@ export default function App(): JSX.Element {
   const workflows = workflowsQuery.data ?? [];
   const plugins = pluginsQuery.data?.plugins ?? [];
   const selectedWorkflow = workflows.find((workflow) => workflow.manifest.id === selectedWorkflowId);
-  const isChatGptExtensionWorkflow = workflowHasCapability(selectedWorkflow, "chatgpt.tabRouting");
+  const isExtensionWorkflow = workflowHasCapability(selectedWorkflow, "extension.tabRouting");
   const isChatGptSequenceWorkflow = selectedWorkflow?.manifest.id === "based-blink.chatgpt.extension-image-sequence";
-  const isHunyuanWorkflow = selectedWorkflow?.manifest.id === HUNYUAN_WORKFLOW_ID;
+  const isHunyuanWorkflow = isHunyuanWorkflowId(selectedWorkflow?.manifest.id);
   const usesBrowserProfile = workflowHasCapability(selectedWorkflow, "browser.profile");
+
+  useEffect(() => {
+    if (!isHunyuanWorkflow) return;
+    const nextDefault = defaultHunyuanSelectorConfigJsonForWorkflow(selectedWorkflow?.manifest.id);
+    setHunyuanSelectorsJson((current) =>
+      current === DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON || current === DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG_JSON ? nextDefault : current
+    );
+  }, [isHunyuanWorkflow, selectedWorkflow?.manifest.id]);
 
   useEffect(() => {
     if (workflows.length === 0) {
@@ -350,17 +361,13 @@ export default function App(): JSX.Element {
       if (!selectedWorkflow) {
         throw new Error("Install a workflow plugin before starting a run.");
       }
-      const chatGptTab =
-        workflowHasCapability(selectedWorkflow, "chatgpt.tabRouting")
-          ? buildChatGptTabInput(chatGptTabSelection, compatibleExtensionClients)
+      const extensionTab =
+        workflowHasCapability(selectedWorkflow, "extension.tabRouting")
+          ? buildExtensionTabInput(extensionTabSelection, compatibleExtensionClients, selectedWorkflow.manifest.targetUrl)
           : null;
-      if (chatGptTab?.mode === "new") {
-        await window.basedBlink.openExternal(chatGptTab.url ?? buildNewChatGptTabUrl(chatGptTab.routingToken));
-      }
       const workflowInput =
-        workflowHasCapability(selectedWorkflow, "browser.profile")
-          ? isHunyuanWorkflow
-            ? buildHunyuanRunInput({
+        isHunyuanWorkflow
+          ? buildHunyuanRunInput({
                 viewFiles: hunyuanViewFiles,
                 prompt,
                 profileName,
@@ -370,13 +377,15 @@ export default function App(): JSX.Element {
                 generateTexture: hunyuanGenerateTexture,
                 autoRig: hunyuanAutoRig,
                 exportFormat: hunyuanExportFormat,
-                selectorsJson: hunyuanSelectorsJson
+                selectorsJson: hunyuanSelectorsJson,
+                ...(extensionTab ? { extensionTab } : {})
               })
-            : { images: selectedFiles, prompt, profileName, pauseForManualLogin }
-          : workflowHasCapability(selectedWorkflow, "chatgpt.tabRouting")
+          : workflowHasCapability(selectedWorkflow, "browser.profile")
+            ? { images: selectedFiles, prompt, profileName, pauseForManualLogin }
+          : workflowHasCapability(selectedWorkflow, "extension.tabRouting")
               ? isChatGptSequenceWorkflow
-                ? { sourceImages: sourceFiles, prompts: sequencePrompts, masterPrompt, chatGptTab }
-                : { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, chatGptTab }
+                ? { sourceImages: sourceFiles, prompts: sequencePrompts, masterPrompt, extensionTab }
+                : { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, extensionTab }
               : { images: selectedFiles, prompt, modelName, delayMs: 1_200 };
 
       return createRun({ workflowId: selectedWorkflowId, name, input: workflowInput });
@@ -481,15 +490,15 @@ export default function App(): JSX.Element {
   );
 
   useEffect(() => {
-    if (!isChatGptExtensionWorkflow) return;
-    setChatGptTabSelection((current) => {
-      return resolveChatGptTabSelection(
+    if (!isExtensionWorkflow) return;
+    setExtensionTabSelection((current) => {
+      return resolveExtensionTabSelection(
         current,
         compatibleExtensionClients.map((client) => client.id),
-        NEW_CHATGPT_TAB_VALUE
+        NEW_EXTENSION_TAB_VALUE
       );
     });
-  }, [compatibleExtensionClients, isChatGptExtensionWorkflow]);
+  }, [compatibleExtensionClients, isExtensionWorkflow]);
 
   async function chooseImages(setFiles: (files: string[]) => void, title: string): Promise<void> {
     const files = await window.basedBlink.selectFiles({
@@ -551,8 +560,8 @@ export default function App(): JSX.Element {
     setHunyuanGenerateTexture(true);
     setHunyuanAutoRig(false);
     setHunyuanExportFormat("obj");
-    setHunyuanSelectorsJson(DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON);
-    setChatGptTabSelection("");
+    setHunyuanSelectorsJson(defaultHunyuanSelectorConfigJsonForWorkflow(workflows[0]?.manifest.id));
+    setExtensionTabSelection("");
     setFormError(null);
     setNewRunFocusError(null);
     setResubmitSourceRun(null);
@@ -593,7 +602,7 @@ export default function App(): JSX.Element {
     const duplicate = buildDuplicateRunConfiguration(run, {
       workflow: availability.workflow ?? undefined,
       compatibleClients: compatibleExtensionClients,
-      newChatGptTabValue: NEW_CHATGPT_TAB_VALUE
+      newExtensionTabValue: NEW_EXTENSION_TAB_VALUE
     });
 
     setSelectedWorkflowId(duplicate.workflowId);
@@ -616,7 +625,7 @@ export default function App(): JSX.Element {
     setHunyuanAutoRig(duplicate.hunyuanAutoRig);
     setHunyuanExportFormat(duplicate.hunyuanExportFormat);
     setHunyuanSelectorsJson(duplicate.hunyuanSelectorsJson);
-    setChatGptTabSelection(duplicate.chatGptTabSelection);
+    setExtensionTabSelection(duplicate.extensionTabSelection);
     setFormError(null);
     setNewRunFocusError(null);
     setWorkspaceView("runs");
@@ -701,14 +710,14 @@ export default function App(): JSX.Element {
         <Input className="h-9" value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional" />
       </div>
 
-      {isChatGptExtensionWorkflow ? (
-        <ChatGptTabRoutingPanel
+      {isExtensionWorkflow ? (
+        <ExtensionTabRoutingPanel
           clients={extensionClients}
           requiredProtocolVersion={requiredExtensionProtocol}
-          value={chatGptTabSelection || NEW_CHATGPT_TAB_VALUE}
+          value={extensionTabSelection || NEW_EXTENSION_TAB_VALUE}
           onChange={(value) => {
             setNewRunFocusError(null);
-            setChatGptTabSelection(value);
+            setExtensionTabSelection(value);
           }}
           onRefresh={() => void queryClient.invalidateQueries({ queryKey: ["system"] })}
           onFocusSelected={(clientId) => {
@@ -720,7 +729,7 @@ export default function App(): JSX.Element {
         />
       ) : null}
 
-      {isChatGptExtensionWorkflow ? (
+      {isExtensionWorkflow ? (
         isChatGptSequenceWorkflow ? (
           <>
             <ImagePicker
@@ -1007,7 +1016,7 @@ export default function App(): JSX.Element {
               onApplyHunyuanSelectorConfig={(selectorsJson) => {
                 resetNewRunForm();
                 setHunyuanSelectorsJson(selectorsJson);
-                setSelectedWorkflowId(HUNYUAN_WORKFLOW_ID);
+                setSelectedWorkflowId(workflows.find((workflow) => isHunyuanWorkflowId(workflow.manifest.id))?.manifest.id ?? selectedWorkflowId);
                 setWorkspaceView("runs");
                 setNewRunModalMode("fresh");
               }}
@@ -1126,7 +1135,8 @@ function LocalRuntimeFooter({ config, system }: { config?: BasedBlinkConfig; sys
         <span className="shrink-0 truncate">API: {config?.apiBaseUrl || "Not running"}</span>
         <span className="shrink-0 truncate">Plugins: {system?.plugins?.installed ?? 0}</span>
         <span className="shrink-0">
-          Extension: {system?.extension.connectedClients.length ?? 0}; pending: {system?.extension.pending ?? 0}
+          Extension tabs: {system?.extension.connectedClients.length ?? 0}; compatible: {system?.extension.compatible ?? 0}; controllers:{" "}
+          {system?.extension.compatibleControllers ?? 0}
         </span>
       </div>
     </footer>
@@ -1668,15 +1678,15 @@ function RunDetailModal({
   const [editingName, setEditingName] = useState(run?.name ?? "");
   const [renameError, setRenameError] = useState<string | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
-  const chatGptFocusTarget = useMemo(
-    () => resolveChatGptFocusTarget(run, extensionClients, workflowAvailability?.workflow ?? undefined),
+  const extensionFocusTarget = useMemo(
+    () => resolveExtensionFocusTarget(run, extensionClients, workflowAvailability?.workflow ?? undefined),
     [extensionClients, run, workflowAvailability?.workflow]
   );
   const workflowUsable = canUseRunWorkflow(workflowAvailability);
   const runWorkflow = workflowAvailability?.workflow ?? undefined;
-  const hasChatGptFocus = workflowHasCapability(runWorkflow, "chatgpt.focusTarget");
-  const hasChatGptArtifactPairs = workflowHasCapability(runWorkflow, "chatgpt.artifactPairs");
-  const canResumeRun = workflowUsable && (run?.status === "waiting_manual" || isRecoverableFailedChatGptRun(run, runWorkflow));
+  const hasExtensionFocus = workflowHasCapability(runWorkflow, "extension.focusTarget");
+  const hasChatGptArtifactPairs = false;
+  const canResumeRun = workflowUsable && (run?.status === "waiting_manual" || isRecoverableFailedExtensionRun(run, runWorkflow));
   const canRenameRun = Boolean(run && !["queued", "running", "pausing", "waiting_manual"].includes(run.status));
 
   useEffect(() => {
@@ -1694,7 +1704,7 @@ function RunDetailModal({
 
   useEffect(() => {
     setFocusError(null);
-  }, [runId, chatGptFocusTarget?.clientId, chatGptFocusTarget?.url]);
+  }, [runId, extensionFocusTarget?.clientId, extensionFocusTarget?.url]);
 
   useEffect(() => {
     if (!isEditingName) {
@@ -1718,17 +1728,17 @@ function RunDetailModal({
     }
   }
 
-  async function focusChatGptTab(): Promise<void> {
-    if (!chatGptFocusTarget || chatGptFocusTarget.action === "disabled") return;
+  async function focusExtensionTab(): Promise<void> {
+    if (!extensionFocusTarget || extensionFocusTarget.action === "disabled") return;
     setFocusError(null);
     setIsFocusing(true);
     try {
-      if (chatGptFocusTarget.action === "focus" && chatGptFocusTarget.clientId) {
-        await onFocusClient(chatGptFocusTarget.clientId);
+      if (extensionFocusTarget.action === "focus" && extensionFocusTarget.clientId) {
+        await onFocusClient(extensionFocusTarget.clientId);
         return;
       }
-      if (chatGptFocusTarget.action === "open" && chatGptFocusTarget.url) {
-        await window.basedBlink.openExternal(chatGptFocusTarget.url);
+      if (extensionFocusTarget.action === "open" && extensionFocusTarget.url) {
+        await openExtensionTab(extensionFocusTarget.url);
       }
     } catch (error) {
       setFocusError(error instanceof Error ? error.message : String(error));
@@ -1851,7 +1861,7 @@ function RunDetailModal({
               )}
 
               <div className="flex flex-wrap gap-2">
-                {run && hasChatGptFocus && run.status === "running" ? (
+                {run && hasExtensionFocus && run.status === "running" ? (
                   <Button size="sm" variant="outline" onClick={() => onPause(run.id)}>
                     <PauseCircle className="h-4 w-4" />
                     Pause
@@ -1869,7 +1879,7 @@ function RunDetailModal({
                     onClick={() => onResume(run.id)}
                     title={
                       run.status === "failed"
-                        ? "Resume will inspect the current ChatGPT page before resubmitting unfinished work."
+                        ? "Resume will inspect the current browser page before resubmitting unfinished work."
                         : undefined
                     }
                   >
@@ -1901,21 +1911,21 @@ function RunDetailModal({
                   <Pencil className="h-4 w-4" />
                   Rename
                 </Button>
-                {hasChatGptFocus && chatGptFocusTarget ? (
+                {hasExtensionFocus && extensionFocusTarget ? (
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => void focusChatGptTab()}
-                    disabled={chatGptFocusTarget.action === "disabled" || isFocusing}
+                    onClick={() => void focusExtensionTab()}
+                    disabled={extensionFocusTarget.action === "disabled" || isFocusing}
                     title={
-                      chatGptFocusTarget.disabledReason ??
-                      (chatGptFocusTarget.action === "open"
-                        ? "Open the tracked ChatGPT tab URL."
-                        : `Go to ${chatGptFocusTarget.client?.title || "the selected ChatGPT tab"}`)
+                      extensionFocusTarget.disabledReason ??
+                      (extensionFocusTarget.action === "open"
+                        ? "Open the tracked URL through the BLINK browser controller."
+                        : `Go to ${extensionFocusTarget.client?.title || "the selected browser tab"}`)
                     }
                   >
                     <ExternalLink className="h-4 w-4" />
-                    {chatGptFocusTarget.buttonLabel}
+                    {extensionFocusTarget.buttonLabel}
                   </Button>
                 ) : null}
                 <Button variant="destructive" size="sm" onClick={() => onDelete(runId)} disabled={isDeleting}>
@@ -2540,7 +2550,7 @@ function WorkflowLabPanel({
 }): JSX.Element {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<"playwright" | "extension">("extension");
-  const [targetUrl, setTargetUrl] = useState("https://chatgpt.com/");
+  const [targetUrl, setTargetUrl] = useState("about:blank");
   const [profileWorkflowId, setProfileWorkflowId] = useState<WorkflowLabProfileWorkflowId>("workflow-lab");
   const [profileName, setProfileName] = useState("lab");
   const [clientId, setClientId] = useState("");
@@ -2550,7 +2560,7 @@ function WorkflowLabPanel({
   const [actionKind, setActionKind] = useState<"click" | "fill" | "submit" | "attach-file">("click");
   const [fillValue, setFillValue] = useState("");
   const [actionFiles, setActionFiles] = useState<string[]>([]);
-  const [waitKind, setWaitKind] = useState<"element" | "text" | "image-count" | "stop-button" | "chatgpt-submit-ready" | "network-idle">("element");
+  const [waitKind, setWaitKind] = useState<"element" | "text" | "image-count" | "url" | "network-idle" | "document-ready">("element");
   const [waitState, setWaitState] = useState("visible");
   const [waitText, setWaitText] = useState("");
   const [waitMinImages, setWaitMinImages] = useState(1);
@@ -2581,19 +2591,8 @@ function WorkflowLabPanel({
 
   useEffect(() => {
     if (mode !== "playwright") return;
-    if (profileWorkflowId === "hunyuan") {
-      if (!targetUrl.trim() || targetUrl === CHATGPT_NEW_TAB_URL || targetUrl === "about:blank") {
-        setTargetUrl(HUNYUAN_LAB_TARGET_URL);
-      }
-      if (!profileName.trim() || profileName === "lab") {
-        setProfileName("default");
-      }
-      return;
-    }
-    if (!profileName.trim() || profileName === "default") {
-      setProfileName("lab");
-    }
-  }, [mode, profileWorkflowId]);
+    if (!profileName.trim()) setProfileName(profileWorkflowId === "workflow-lab" ? "lab" : "default");
+  }, [mode, profileName, profileWorkflowId]);
 
   const createSessionMutation = useMutation({
     mutationFn: () =>
@@ -2673,13 +2672,8 @@ function WorkflowLabPanel({
   function buildWaitCondition(): LabWaitCondition {
     const trimmedSelector = selector.trim();
     if (waitKind === "network-idle") return { kind: "network-idle", timeoutMs: 15_000 };
-    if (waitKind === "chatgpt-submit-ready") {
-      return {
-        kind: "chatgpt-submit-ready",
-        selectors: trimmedSelector ? { submitButton: trimmedSelector } : undefined,
-        timeoutMs: 120_000
-      };
-    }
+    if (waitKind === "document-ready") return { kind: "document-ready", timeoutMs: 15_000 };
+    if (waitKind === "url") return { kind: "url", value: waitText, match: "contains", timeoutMs: 30_000 };
     if (waitKind === "text") return { kind: "text", text: waitText, state: waitState === "absent" ? "absent" : "present", timeoutMs: 30_000 };
     if (waitKind === "image-count") {
       return {
@@ -2687,14 +2681,6 @@ function WorkflowLabPanel({
         selector: trimmedSelector || undefined,
         minCount: waitMinImages,
         previousFingerprints: inspection?.inspection.imageFingerprints ?? [],
-        timeoutMs: 45_000
-      };
-    }
-    if (waitKind === "stop-button") {
-      return {
-        kind: "stop-button",
-        selector: trimmedSelector || undefined,
-        state: waitState === "hidden" ? "hidden" : "visible",
         timeoutMs: 45_000
       };
     }
@@ -2796,7 +2782,7 @@ function WorkflowLabPanel({
                 {compatibleClients.length === 0 ? <option value="">No compatible tabs</option> : null}
                 {compatibleClients.map((client) => (
                   <option key={client.id} value={client.id}>
-                    {chatGptTabOptionLabel(client)}
+                    {extensionTabOptionLabel(client)}
                   </option>
                 ))}
               </select>
@@ -2807,14 +2793,11 @@ function WorkflowLabPanel({
           {mode === "playwright" ? (
             <div className="space-y-2">
               <Label>Profile owner</Label>
-              <select
+              <Input
                 value={profileWorkflowId}
                 onChange={(event) => setProfileWorkflowId(event.target.value as WorkflowLabProfileWorkflowId)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              >
-                <option value="workflow-lab">Workflow Lab</option>
-                <option value="hunyuan">Hunyuan</option>
-              </select>
+                placeholder="workflow-lab"
+              />
             </div>
           ) : null}
           <div className="space-y-2">
@@ -2947,9 +2930,9 @@ function WorkflowLabPanel({
                 <option value="element">Element state</option>
                 <option value="text">Text state</option>
                 <option value="image-count">New images</option>
-                <option value="stop-button">Stop button</option>
-                <option value="chatgpt-submit-ready">ChatGPT submit ready</option>
+                <option value="url">URL contains</option>
                 <option value="network-idle">Network idle</option>
+                <option value="document-ready">Document ready</option>
               </select>
               {waitKind === "image-count" ? (
                 <Input
@@ -2959,15 +2942,15 @@ function WorkflowLabPanel({
                   value={waitMinImages}
                   onChange={(event) => setWaitMinImages(Number(event.target.value) || 1)}
                 />
-              ) : waitKind === "text" ? (
-                <Input className="h-9 w-60" value={waitText} onChange={(event) => setWaitText(event.target.value)} placeholder="Text to wait for" />
-              ) : waitKind !== "network-idle" && waitKind !== "chatgpt-submit-ready" ? (
+              ) : waitKind === "text" || waitKind === "url" ? (
+                <Input className="h-9 w-60" value={waitText} onChange={(event) => setWaitText(event.target.value)} placeholder={waitKind === "url" ? "URL fragment" : "Text to wait for"} />
+              ) : waitKind === "element" ? (
                 <select
                   value={waitState}
                   onChange={(event) => setWaitState(event.target.value)}
                   className="h-9 rounded-md border border-border bg-background px-3 text-sm"
                 >
-                  {(waitKind === "element" ? ["visible", "hidden", "enabled", "disabled"] : ["visible", "hidden"]).map((state) => (
+                  {["visible", "hidden", "enabled", "disabled"].map((state) => (
                     <option key={state} value={state}>
                       {state}
                     </option>
@@ -3089,7 +3072,7 @@ function WorkflowLabPanel({
   );
 }
 
-function ChatGptTabRoutingPanel({
+function ExtensionTabRoutingPanel({
   clients,
   requiredProtocolVersion,
   value,
@@ -3116,11 +3099,11 @@ function ChatGptTabRoutingPanel({
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
-          <Label htmlFor="chatgpt-tab-target">ChatGPT tab routing</Label>
+          <Label htmlFor="extension-tab-target">browser tab routing</Label>
           <div className="group relative">
             <button
               type="button"
-              aria-label="ChatGPT tab routing details"
+              aria-label="browser tab routing details"
               className="flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground outline-none ring-offset-2 transition hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary"
             >
               <Info className="h-3.5 w-3.5" />
@@ -3128,23 +3111,23 @@ function ChatGptTabRoutingPanel({
             <div className="invisible absolute left-0 top-6 z-30 w-80 max-w-[calc(100vw-3rem)] rounded-md border border-border bg-card p-3 text-xs text-foreground opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
               <div className="space-y-3">
                 <p className="leading-5 text-muted-foreground">
-                  Choose an open compatible ChatGPT tab for this run, or open a new token-routed tab. Other ChatGPT tabs keep
+                  Choose an open compatible browser tab for this run, or let the BLINK browser controller open a new token-routed tab. Other browser tabs keep
                   polling but will not receive the task.
                 </p>
                 <p className="leading-5 text-muted-foreground">
-                  New tabs open ChatGPT externally and are matched when the extension reports the run token.
+                  New tabs are opened by the installed extension profile and are matched when the extension reports the run token.
                 </p>
                 {incompatibleClients.length > 0 ? (
                   <p className={cn("font-medium leading-5", toneTextClassNames.danger)}>
                     {incompatibleClients.length} tab{incompatibleClients.length === 1 ? "" : "s"} need the unpacked extension
-                    reloaded and ChatGPT refreshed before they can run protocol {requiredProtocolVersion} workflows.
+                    reloaded and the page refreshed before they can run protocol {requiredProtocolVersion} workflows.
                   </p>
                 ) : null}
                 <div>
-                  <div className="mb-2 font-medium">Reporting ChatGPT tabs</div>
+                  <div className="mb-2 font-medium">Reporting browser tabs</div>
                   {clients.length === 0 ? (
                     <div className="rounded border border-border bg-muted p-2 text-muted-foreground">
-                      No ChatGPT extension tab has checked in yet.
+                      No BLINK extension tab has checked in yet.
                     </div>
                   ) : (
                     <div className="max-h-40 space-y-2 overflow-auto">
@@ -3155,7 +3138,7 @@ function ChatGptTabRoutingPanel({
                         >
                           <div className="flex items-center justify-between gap-2">
                             <div className="min-w-0 truncate font-medium">
-                              {client.title || "ChatGPT tab"}
+                              {client.title || "browser tab"}
                             </div>
                             <Badge
                               className={cn(
@@ -3177,7 +3160,7 @@ function ChatGptTabRoutingPanel({
                           </div>
                           {!client.compatible ? (
                             <div className={toneTextClassNames.danger}>
-                              {client.incompatibilityReason ?? "Reload the unpacked extension and refresh this ChatGPT tab."}
+                              {client.incompatibilityReason ?? "Reload the unpacked extension and refresh this browser tab."}
                             </div>
                           ) : null}
                           <div className="text-muted-foreground">Last seen {formatDate(client.lastSeenAt)}</div>
@@ -3195,15 +3178,15 @@ function ChatGptTabRoutingPanel({
 
       <div className={cn("grid gap-2", selectedCompatibleClient ? "grid-cols-[1fr_auto_auto]" : "grid-cols-[1fr_auto]")}>
         <select
-          id="chatgpt-tab-target"
+          id="extension-tab-target"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           className="h-9 min-w-0 rounded-md border border-border bg-background px-3 text-sm"
         >
-          <option value={NEW_CHATGPT_TAB_VALUE}>Open a new ChatGPT tab</option>
+          <option value={NEW_EXTENSION_TAB_VALUE}>Open via BLINK browser controller</option>
           {compatibleClients.map((client) => (
             <option key={client.id} value={client.id}>
-              {chatGptTabOptionLabel(client)}
+              {extensionTabOptionLabel(client)}
             </option>
           ))}
         </select>
@@ -3218,7 +3201,7 @@ function ChatGptTabRoutingPanel({
             size="sm"
             onClick={() => onFocusSelected?.(selectedCompatibleClient.id)}
             disabled={!onFocusSelected || isFocusingSelected}
-            title={`Go to ${selectedCompatibleClient.title || "the selected ChatGPT tab"}`}
+            title={`Go to ${selectedCompatibleClient.title || "the selected browser tab"}`}
           >
             <ExternalLink className="h-4 w-4" />
             Go to tab

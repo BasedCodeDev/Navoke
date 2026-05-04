@@ -279,6 +279,24 @@ export class ApiServer {
       res.json(this.options.extensionBridge.status());
     });
 
+    app.post("/api/extension/controller/heartbeat", (req, res, next) => {
+      try {
+        res.json(this.options.extensionBridge.controllerHeartbeat(req.body ?? {}));
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/extension/tabs/open", (req, res, next) => {
+      void this.options.extensionBridge
+        .openTabWithController({
+          url: String(req.body?.url ?? ""),
+          active: req.body?.active !== false
+        })
+        .then((result) => res.json({ ok: true, result }))
+        .catch(next);
+    });
+
     app.post("/api/extension/clients/:clientId/focus", (req, res, next) => {
       void this.options.extensionBridge
         .focusClient(req.params.clientId)
@@ -321,6 +339,89 @@ export class ApiServer {
       }
     });
 
+    app.get("/api/extension/controller/commands/next", (req, res, next) => {
+      try {
+        const controllerId = String(req.query.controllerId ?? "");
+        const command = this.options.extensionBridge.nextControllerCommand(controllerId);
+        if (!command) {
+          res.status(204).send();
+          return;
+        }
+        res.json(command);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/extension/controller/commands/:id/complete", (req, res, next) => {
+      try {
+        this.options.extensionBridge.completeControllerCommand(req.params.id, req.body?.result);
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/extension/controller/commands/:id/fail", (req, res, next) => {
+      try {
+        this.options.extensionBridge.failControllerCommand(
+          req.params.id,
+          String(req.body?.message ?? "Extension controller command failed")
+        );
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.get("/api/extension/files/:fileId", (req, res, next) => {
+      try {
+        const filePath = this.options.extensionBridge.getStagedFilePath(req.params.fileId);
+        if (!fs.existsSync(filePath)) {
+          res.status(404).json({ error: "Extension staged file not found" });
+          return;
+        }
+        res.sendFile(filePath);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.get("/api/extension/commands/next", (req, res, next) => {
+      try {
+        const clientId = String(req.query.clientId ?? "");
+        const command = this.options.extensionBridge.nextCommand(clientId);
+        if (!command) {
+          res.status(204).send();
+          return;
+        }
+        res.json(command);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/extension/commands/:id/complete", (req, res, next) => {
+      try {
+        this.options.extensionBridge.completeCommand(req.params.id, req.body?.result);
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/extension/commands/:id/fail", (req, res, next) => {
+      try {
+        this.options.extensionBridge.failCommand(
+          req.params.id,
+          String(req.body?.message ?? "Extension browser command failed")
+        );
+        res.json({ ok: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.get("/api/extension/lab/commands/next", (req, res, next) => {
       try {
         const clientId = String(req.query.clientId ?? "");
@@ -349,91 +450,6 @@ export class ApiServer {
         this.options.extensionBridge.failLabCommand(
           req.params.id,
           String(req.body?.message ?? "Extension Workflow Lab command failed")
-        );
-        res.json({ ok: true });
-      } catch (error) {
-        next(error);
-      }
-    });
-
-    app.get("/api/extension/tasks/next", (req, res, next) => {
-      try {
-        const clientId = String(req.query.clientId ?? "");
-        const task = this.options.extensionBridge.nextTask(clientId);
-        if (!task) {
-          res.status(204).send();
-          return;
-        }
-        res.json(task);
-      } catch (error) {
-        next(error);
-      }
-    });
-
-    app.get("/api/extension/tasks/:id/control", (req, res, next) => {
-      try {
-        const clientId = String(req.query.clientId ?? "");
-        res.json(this.options.extensionBridge.taskControl(req.params.id, clientId));
-      } catch (error) {
-        next(error);
-      }
-    });
-
-    app.get("/api/extension/tasks/:id/images/:group/:index", (req, res, next) => {
-      try {
-        const group = req.params.group === "reference" ? "reference" : "subject";
-        const filePath = this.options.extensionBridge.getTaskImagePath(req.params.id, group, Number(req.params.index));
-        if (!fs.existsSync(filePath)) {
-          res.status(404).json({ error: "Task image not found" });
-          return;
-        }
-        res.sendFile(filePath);
-      } catch (error) {
-        next(error);
-      }
-    });
-
-    app.post("/api/extension/tasks/:id/events", (req, res, next) => {
-      try {
-        this.options.extensionBridge.addTaskEvent(
-          req.params.id,
-          String(req.body?.type ?? "extension.event"),
-          String(req.body?.message ?? ""),
-          req.body?.data
-        );
-        res.json({ ok: true });
-      } catch (error) {
-        next(error);
-      }
-    });
-
-    app.post("/api/extension/tasks/:id/outputs", (req, res, next) => {
-      try {
-        this.options.extensionBridge.addTaskOutput(req.params.id, req.body);
-        res.json({ ok: true });
-      } catch (error) {
-        next(error);
-      }
-    });
-
-    app.post("/api/extension/tasks/:id/complete", (req, res, next) => {
-      try {
-        this.options.extensionBridge.completeTask(req.params.id, {
-          outputs: Array.isArray(req.body?.outputs) ? req.body.outputs : [],
-          metadata: req.body?.metadata
-        });
-        res.json({ ok: true });
-      } catch (error) {
-        next(error);
-      }
-    });
-
-    app.post("/api/extension/tasks/:id/fail", (req, res, next) => {
-      try {
-        this.options.extensionBridge.failTask(
-          req.params.id,
-          String(req.body?.message ?? "Extension task failed"),
-          req.body?.data
         );
         res.json({ ok: true });
       } catch (error) {

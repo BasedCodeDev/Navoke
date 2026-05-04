@@ -1,4 +1,5 @@
 export const HUNYUAN_WORKFLOW_ID = "based-blink.hunyuan.image-to-model";
+export const HUNYUAN_GLOBAL_WORKFLOW_ID = "based-blink.hunyuan.global.image-to-model";
 
 export type HunyuanViewField =
   | "frontImage"
@@ -35,7 +36,10 @@ export interface HunyuanRunFormState {
   autoRig: boolean;
   exportFormat: HunyuanExportFormat;
   selectorsJson: string;
+  extensionTab?: ExtensionTabInput;
 }
+
+export type ExtensionTabInput = { mode: "new"; routingToken: string; url?: string; title?: string } | { mode: "existing"; clientId: string; url?: string; title?: string };
 
 export interface HunyuanSelectorAssignment {
   key: string;
@@ -85,6 +89,24 @@ const HUNYUAN_TEXT = {
   generateTexture: "\u751f\u6210\u7eb9\u7406",
   autoRig: "\u81ea\u52a8\u7ed1\u9aa8",
   download: "\u4e0b\u8f7d"
+};
+
+const HUNYUAN_GLOBAL_TEXT = {
+  login: "Start Using",
+  emailLogin: "Start Using HY 3D",
+  imageTo3d: "Image to 3D",
+  multipleImages: "Multiple Images",
+  modelType: "Model Type",
+  geometryTexturePhased: "Texture",
+  generate: "Generate",
+  generating: "Generating",
+  v31: "V3.1",
+  triangle: "Triangle",
+  quad: "Quad",
+  smartRetopology: "Smart Retopology",
+  generateTexture: "Generate Texture",
+  autoRig: "Auto Rig",
+  download: "Download"
 };
 
 function hunyuanEnabledButtonSelector(label: string): string {
@@ -156,6 +178,79 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG = {
 
 export const DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON = `${JSON.stringify(DEFAULT_HUNYUAN_SELECTOR_CONFIG, null, 2)}\n`;
 
+export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG = {
+  loginReadySelector: `label.t-radio-button:has-text("${HUNYUAN_GLOBAL_TEXT.imageTo3d}")`,
+  loginReadyText: "",
+  loginRequiredSelector: `button.login-btn:has-text("${HUNYUAN_GLOBAL_TEXT.login}"), input[placeholder*="email" i]`,
+  loginRequiredText: HUNYUAN_GLOBAL_TEXT.emailLogin,
+  imageTo3dTab: `label.t-radio-button:has-text("${HUNYUAN_GLOBAL_TEXT.imageTo3d}")`,
+  multipleImagesTab: `text=/${HUNYUAN_GLOBAL_TEXT.multipleImages}/i`,
+  addMultipleViewsButton: ".hy-multiple-views-upload-v2",
+  multipleViewsConfirmButton: ".hy-multi-view-grid__header-close",
+  viewUploadInputs: {
+    front: '.hy-upload-card--front input[type="file"]',
+    back: '.hy-upload-card--back input[type="file"]',
+    left: '.hy-upload-card--left input[type="file"]',
+    right: '.hy-upload-card--right input[type="file"]',
+    top: '.hy-upload-card--top input[type="file"]',
+    bottom: '.hy-upload-card--bottom input[type="file"]',
+    left45: '.hy-upload-card--left-front input[type="file"]',
+    right45: '.hy-upload-card--right-front input[type="file"]'
+  },
+  modelDropdown: ".model-version-select:visible",
+  modelOptionV31: `li.t-select-option:has-text("${HUNYUAN_GLOBAL_TEXT.v31}")`,
+  faceCountButtons: {
+    "1.5m": `div.generation-type-select:visible .qaUJkqcCF813NIqHGF3U:visible:has-text("1.5m")`,
+    "1m": `div.generation-type-select:visible .qaUJkqcCF813NIqHGF3U:visible:has-text("1m")`,
+    "500k": `div.generation-type-select:visible .qaUJkqcCF813NIqHGF3U:visible:has-text("500k")`,
+    "50k": `div.generation-type-select:visible .qaUJkqcCF813NIqHGF3U:visible:has-text("50k")`
+  },
+  modelTypeGeometryTexturePhased: `div.generation-type-select:visible:has(.generation-type-select-title:has-text("${HUNYUAN_GLOBAL_TEXT.modelType}")) .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_GLOBAL_TEXT.geometryTexturePhased}")`,
+  promptTextbox: "",
+  generateButton: `.sideBarLeft-generateBtn:not(.t-is-disabled):not([disabled]):has-text("${HUNYUAN_GLOBAL_TEXT.generate}")`,
+  geometryRunningSelector: "",
+  geometryRunningText: HUNYUAN_GLOBAL_TEXT.generating,
+  geometryReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.smartRetopology),
+  geometryReadyText: "",
+  retopologyTypeButtons: {
+    triangle: `.model-dialog__content__operation:has(.model-dialog__content__operation__heading:has-text("${HUNYUAN_GLOBAL_TEXT.smartRetopology}")) .topology-panel .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_GLOBAL_TEXT.triangle}")`,
+    quad: `.model-dialog__content__operation:has(.model-dialog__content__operation__heading:has-text("${HUNYUAN_GLOBAL_TEXT.smartRetopology}")) .topology-panel .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_GLOBAL_TEXT.quad}")`
+  },
+  smartRetopologyButton: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.smartRetopology),
+  retopologyRunningSelector: "",
+  retopologyRunningText: HUNYUAN_GLOBAL_TEXT.generating,
+  retopologyReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.generateTexture),
+  retopologyReadyText: "",
+  generateTextureButton: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.generateTexture),
+  textureRunningSelector: "",
+  textureRunningText: HUNYUAN_GLOBAL_TEXT.generating,
+  textureReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download),
+  textureReadyText: "",
+  autoRigButton: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.autoRig),
+  autoRigRunningSelector: "",
+  autoRigRunningText: HUNYUAN_GLOBAL_TEXT.generating,
+  autoRigReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download),
+  autoRigReadyText: "",
+  exportFormatDropdown: "button.download__dropdown__btn",
+  exportFormatOptions: {
+    obj: '.download__dropdown li.t-dropdown__item:has-text("OBJ")',
+    glb: '.download__dropdown li.t-dropdown__item:has-text("GLB")'
+  },
+  downloadReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download),
+  downloadReadyText: "",
+  downloadButton: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download)
+};
+
+export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG_JSON = `${JSON.stringify(DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG, null, 2)}\n`;
+
+export function isHunyuanWorkflowId(workflowId: string | undefined): boolean {
+  return workflowId === HUNYUAN_WORKFLOW_ID || workflowId === HUNYUAN_GLOBAL_WORKFLOW_ID;
+}
+
+export function defaultHunyuanSelectorConfigJsonForWorkflow(workflowId: string | undefined): string {
+  return workflowId === HUNYUAN_GLOBAL_WORKFLOW_ID ? DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG_JSON : DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON;
+}
+
 export const HUNYUAN_SELECTOR_ASSIGNMENTS: HunyuanSelectorAssignment[] = [
   { key: "loginReadySelector", label: "Login ready selector", path: ["loginReadySelector"] },
   { key: "loginReadyText", label: "Login ready text", path: ["loginReadyText"] },
@@ -226,6 +321,7 @@ export function buildHunyuanRunInput(state: HunyuanRunFormState): Record<string,
     generateTexture: state.generateTexture,
     autoRig: state.autoRig,
     exportFormat: state.exportFormat,
+    extensionTab: state.extensionTab,
     selectors: parseHunyuanSelectorsJson(state.selectorsJson)
   });
 }

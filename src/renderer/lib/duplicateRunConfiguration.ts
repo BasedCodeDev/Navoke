@@ -2,9 +2,10 @@ import type { RunRecord, SystemInfo, WorkflowSummary } from "./api";
 import {
   DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
   HUNYUAN_VIEW_FIELDS,
-  HUNYUAN_WORKFLOW_ID,
   collectHunyuanInputFilePaths,
+  defaultHunyuanSelectorConfigJsonForWorkflow,
   emptyHunyuanViewFiles,
+  isHunyuanWorkflowId,
   type HunyuanExportFormat,
   type HunyuanFaceCount,
   type HunyuanRetopologyType,
@@ -32,14 +33,14 @@ export interface DuplicateRunConfiguration {
   hunyuanAutoRig: boolean;
   hunyuanExportFormat: HunyuanExportFormat;
   hunyuanSelectorsJson: string;
-  chatGptTabSelection: string;
+  extensionTabSelection: string;
   filePaths: string[];
 }
 
 interface DuplicateRunOptions {
   workflow?: WorkflowSummary;
   compatibleClients: SystemInfo["extension"]["connectedClients"];
-  newChatGptTabValue: string;
+  newExtensionTabValue: string;
 }
 
 const DEFAULT_MODEL_NAME = "Demo model";
@@ -67,8 +68,8 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     hunyuanGenerateTexture: true,
     hunyuanAutoRig: false,
     hunyuanExportFormat: "obj",
-    hunyuanSelectorsJson: DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
-    chatGptTabSelection: options.newChatGptTabValue,
+    hunyuanSelectorsJson: defaultHunyuanSelectorConfigJsonForWorkflow(run.workflowId),
+    extensionTabSelection: options.newExtensionTabValue,
     filePaths: []
   };
 
@@ -82,7 +83,7 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
       base.subjectInstruction = stringField(input, "subjectInstruction");
     }
     base.masterPrompt = stringField(input, "masterPrompt");
-    base.chatGptTabSelection = resolveDuplicateChatGptTabSelection(input, options);
+    base.extensionTabSelection = resolveDuplicateExtensionTabSelection(input, options);
   } else if (isHunyuanWorkflowInput(run.workflowId, input, options.workflow)) {
     base.hunyuanViewFiles = readHunyuanViewFiles(input);
     base.selectedFiles = Object.values(base.hunyuanViewFiles).flat();
@@ -94,7 +95,7 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     base.hunyuanGenerateTexture = booleanField(input, "generateTexture", true);
     base.hunyuanAutoRig = booleanField(input, "autoRig", false);
     base.hunyuanExportFormat = enumField(input, "exportFormat", ["obj", "glb"], "obj");
-    base.hunyuanSelectorsJson = selectorsJsonField(input);
+    base.hunyuanSelectorsJson = selectorsJsonField(input, run.workflowId);
   } else if (isBrowserProfileWorkflowInput(input, options.workflow)) {
     base.selectedFiles = stringArrayField(input, "images");
     base.prompt = stringField(input, "prompt");
@@ -111,7 +112,7 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
 }
 
 function isChatGptWorkflowInput(input: Record<string, unknown>, workflow: WorkflowSummary | undefined): boolean {
-  return Boolean(workflow?.manifest.uiCapabilities?.includes("chatgpt.tabRouting")) || "masterPrompt" in input || "subjectImages" in input || "sourceImages" in input;
+  return Boolean(workflow?.manifest.uiCapabilities?.includes("extension.tabRouting")) || "masterPrompt" in input || "subjectImages" in input || "sourceImages" in input;
 }
 
 function isBrowserProfileWorkflowInput(input: Record<string, unknown>, workflow: WorkflowSummary | undefined): boolean {
@@ -119,7 +120,7 @@ function isBrowserProfileWorkflowInput(input: Record<string, unknown>, workflow:
 }
 
 function isHunyuanWorkflowInput(workflowId: string, input: Record<string, unknown>, workflow: WorkflowSummary | undefined): boolean {
-  return workflowId === HUNYUAN_WORKFLOW_ID || workflow?.manifest.id === HUNYUAN_WORKFLOW_ID || "frontImage" in input;
+  return isHunyuanWorkflowId(workflowId) || isHunyuanWorkflowId(workflow?.manifest.id) || "frontImage" in input;
 }
 
 export function collectRunInputFilePaths(input: unknown): string[] {
@@ -133,12 +134,12 @@ export function collectRunInputFilePaths(input: unknown): string[] {
   ]);
 }
 
-function resolveDuplicateChatGptTabSelection(input: Record<string, unknown>, options: DuplicateRunOptions): string {
-  const chatGptTab = asRecord(input.chatGptTab);
-  const mode = stringField(chatGptTab, "mode");
-  const clientId = stringField(chatGptTab, "clientId");
-  const routingToken = stringField(chatGptTab, "routingToken");
-  const url = stringField(chatGptTab, "url");
+function resolveDuplicateExtensionTabSelection(input: Record<string, unknown>, options: DuplicateRunOptions): string {
+  const extensionTab = asRecord(input.extensionTab);
+  const mode = stringField(extensionTab, "mode");
+  const clientId = stringField(extensionTab, "clientId");
+  const routingToken = stringField(extensionTab, "routingToken");
+  const url = stringField(extensionTab, "url");
 
   if (mode === "existing" && clientId) {
     const connectedClient = options.compatibleClients.find((client) => client.id === clientId);
@@ -155,7 +156,7 @@ function resolveDuplicateChatGptTabSelection(input: Record<string, unknown>, opt
     if (urlClient) return urlClient.id;
   }
 
-  return options.newChatGptTabValue;
+  return options.newExtensionTabValue;
 }
 
 function stringArrayField(record: Record<string, unknown>, field: string): string[] {
@@ -178,9 +179,9 @@ function enumField<T extends string>(record: Record<string, unknown>, field: str
   return typeof value === "string" && values.includes(value as T) ? (value as T) : fallback;
 }
 
-function selectorsJsonField(record: Record<string, unknown>): string {
+function selectorsJsonField(record: Record<string, unknown>, workflowId: string): string {
   const selectors = record.selectors;
-  if (!selectors || typeof selectors !== "object" || Array.isArray(selectors)) return DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON;
+  if (!selectors || typeof selectors !== "object" || Array.isArray(selectors)) return defaultHunyuanSelectorConfigJsonForWorkflow(workflowId);
   return `${JSON.stringify(selectors, null, 2)}\n`;
 }
 

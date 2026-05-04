@@ -4,10 +4,14 @@ import {
   clickHunyuanActionButton,
   clickHunyuanGenerateButton,
   clickVisibleHunyuanControl,
+  DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG,
+  HUNYUAN_GLOBAL_WORKFLOW_ID,
   inferHunyuanArtifactKind,
   mergeHunyuanSelectorConfig,
-  missingHunyuanSelectorKeys
+  missingHunyuanSelectorKeys,
+  createWorkflows
 } from "../../plugins/based-blink-hunyuan/src";
+import { createWorkflowSdk } from "../../src/main/workflowSdk";
 
 describe("Hunyuan workflow helpers", () => {
   it("orders front, back, side, top, bottom, and 45-degree upload slots", () => {
@@ -62,6 +66,130 @@ describe("Hunyuan workflow helpers", () => {
     expect(selectors.smartRetopologyButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.generateTextureButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.downloadButton).toContain(":not(.t-is-disabled):not([disabled])");
+  });
+
+  it("provides English defaults for the Hunyuan Global source", () => {
+    const selectors = mergeHunyuanSelectorConfig({}, DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG);
+
+    expect(
+      missingHunyuanSelectorKeys({
+        frontImage: "front.png",
+        backImage: "back.png",
+        modelFaceCount: "50k",
+        retopologyType: "quad",
+        exportFormat: "obj",
+        generateTexture: true,
+        selectors
+      })
+    ).toEqual([]);
+    expect(selectors.loginRequiredSelector).toContain("Start Using");
+    expect(selectors.loginRequiredSelector).toContain("email");
+    expect(selectors.imageTo3dTab).toContain("Image to 3D");
+    expect(selectors.multipleImagesTab).toContain("Multiple Images");
+    expect(selectors.faceCountButtons?.["50k"]).toContain(".qaUJkqcCF813NIqHGF3U:visible:has-text(\"50k\")");
+    expect(selectors.modelTypeGeometryTexturePhased).toContain("Texture");
+    expect(selectors.generateButton).toContain("Generate");
+    expect(selectors.retopologyTypeButtons?.quad).toContain("Quad");
+    expect(selectors.downloadButton).toContain("Download");
+  });
+
+  it("registers Hunyuan Global as an extension-routed workflow with a default new tab target", () => {
+    const workflow = createWorkflows(createWorkflowSdk() as any).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+    if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+
+    expect(workflow.manifest).toMatchObject({
+      requiresBrowser: false,
+      outputKinds: ["json"],
+      uiCapabilities: ["extension.tabRouting"],
+      targetUrl: "https://3d.hunyuanglobal.com/"
+    });
+    const parsed = workflow.inputSchema.safeParse({
+      frontImage: "C:\\tmp\\front.png",
+      backImage: "C:\\tmp\\back.png"
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).toMatchObject({
+      modelFaceCount: "50k",
+      retopologyType: "quad",
+      generateTexture: true,
+      autoRig: false,
+      exportFormat: "obj",
+      extensionTab: {
+        mode: "new",
+        routingToken: expect.any(String),
+        url: expect.stringContaining("https://3d.hunyuanglobal.com/#based-blink-tab=")
+      }
+    });
+  });
+
+  it("pauses Hunyuan Global at the login checkpoint without requiring generation selectors", async () => {
+    const sdk = createWorkflowSdk() as any;
+    let inspectCount = 0;
+    let manualWaits = 0;
+    sdk.extension.browser = {
+      ...sdk.extension.browser,
+      findCompatibleClientForTarget: () => ({
+        id: "tab-1",
+        url: "https://3d.hunyuanglobal.com/",
+        title: "Hunyuan Global",
+        status: "connected",
+        protocolVersion: 1,
+        extensionVersion: "0.1.0",
+        compatible: true,
+        lastSeenAt: new Date().toISOString()
+      }),
+      ensureRoutedTab: async () => ({
+        id: "tab-1",
+        url: "https://3d.hunyuanglobal.com/",
+        title: "Hunyuan Global",
+        status: "connected",
+        protocolVersion: 1,
+        extensionVersion: "0.1.0",
+        compatible: true,
+        lastSeenAt: new Date().toISOString()
+      }),
+      openTab: async () => ({ ok: true }),
+      inspect: async () => {
+        inspectCount += 1;
+        return inspectCount === 1
+          ? { url: "https://3d.hunyuanglobal.com/login-email", title: "Login" }
+          : { url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" };
+      },
+      extract: async (_target: unknown, query: any) => {
+        if (query.kind === "element-state") return { visible: inspectCount > 1 };
+        if (query.kind === "text") return { text: inspectCount === 1 ? "Email Login" : "Image to 3D" };
+        return {};
+      },
+      action: async () => ({ ok: true })
+    };
+
+    const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+    if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+    const input = workflow.inputSchema.parse({
+      frontImage: "C:\\tmp\\front.png",
+      backImage: "C:\\tmp\\back.png",
+      selectors: {}
+    });
+
+    const result = await workflow.run(input, {
+      runId: "run-hunyuan",
+      signal: new AbortController().signal,
+      paths: {},
+      artifactDir: "C:\\tmp",
+      step: async () => undefined,
+      event: async () => undefined,
+      waitForManualAction: async () => {
+        manualWaits += 1;
+      },
+      addArtifact: async () => ({ id: "unused" })
+    });
+
+    expect(manualWaits).toBe(1);
+    expect(result).toMatchObject({
+      artifactIds: [],
+      summary: expect.stringContaining("authenticated")
+    });
   });
 
   it("clicks a visible later candidate when the first matching setting candidate is hidden", async () => {

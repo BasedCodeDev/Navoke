@@ -52,24 +52,24 @@ describe("WorkflowLab Playwright profile owner", () => {
     });
   });
 
-  it("can launch Playwright Lab with the shared Hunyuan default profile", async () => {
+  it("can launch Playwright Lab with a plugin-owned default profile", async () => {
     const paths = createRuntimePaths(path.join(tempDir, "app-data"));
-    const targetUrl = "https://3d.hunyuan.tencent.com/";
-    const { context, page } = createMockBrowserContext("about:blank", "Hunyuan");
+    const targetUrl = "https://example.test/";
+    const { context, page } = createMockBrowserContext("about:blank", "Plugin");
     launchPersistentProfileMock.mockResolvedValue(context);
 
     const lab = new WorkflowLab(paths, new ExtensionBridge());
     const session = await lab.createSession({
       mode: "playwright",
       targetUrl,
-      profileWorkflowId: "hunyuan",
+      profileWorkflowId: "example-plugin",
       profileName: "default"
     });
 
     expect(launchPersistentProfileMock).toHaveBeenCalledWith(
       expect.objectContaining({
         paths,
-        workflowId: "hunyuan",
+        workflowId: "example-plugin",
         profileName: "default"
       })
     );
@@ -83,19 +83,19 @@ describe("WorkflowLab Playwright profile owner", () => {
     expect(session).toMatchObject({
       mode: "playwright",
       targetUrl,
-      profileWorkflowId: "hunyuan",
+      profileWorkflowId: "example-plugin",
       profileName: "default",
-      title: "Hunyuan",
+      title: "Plugin",
       url: targetUrl
     });
   });
 
-  it("rejects unsupported Playwright profile owners", async () => {
+  it("rejects invalid Playwright profile owners", async () => {
     const paths = createRuntimePaths(path.join(tempDir, "app-data"));
     const lab = new WorkflowLab(paths, new ExtensionBridge());
 
-    await expect(lab.createSession({ mode: "playwright", profileWorkflowId: "other" })).rejects.toThrow(
-      "Workflow Lab profile owner must be workflow-lab or hunyuan."
+    await expect(lab.createSession({ mode: "playwright", profileWorkflowId: "../other" })).rejects.toThrow(
+      "Workflow Lab profile owner can contain only letters, numbers, dot, underscore, and dash."
     );
     expect(launchPersistentProfileMock).not.toHaveBeenCalled();
   });

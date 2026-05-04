@@ -25,7 +25,7 @@ import {
 } from "./waitConditions";
 
 export type WorkflowLabSessionMode = "playwright" | "extension";
-export type WorkflowLabProfileWorkflowId = "workflow-lab" | "hunyuan";
+export type WorkflowLabProfileWorkflowId = string;
 
 export type WorkflowLabAction =
   | { kind: "click"; selector: string }
@@ -498,12 +498,13 @@ function describeAction(action: WorkflowLabAction): string {
 
 function resolveWorkflowLabProfileWorkflowId(value: string | undefined): WorkflowLabProfileWorkflowId {
   if (!value) return "workflow-lab";
-  if (value === "workflow-lab" || value === "hunyuan") return value;
-  throw new Error("Workflow Lab profile owner must be workflow-lab or hunyuan.");
+  const normalized = value.trim();
+  if (/^[\w.-]+$/.test(normalized)) return normalized;
+  throw new Error("Workflow Lab profile owner can contain only letters, numbers, dot, underscore, and dash.");
 }
 
 function defaultLabProfileName(profileWorkflowId: WorkflowLabProfileWorkflowId | undefined): string {
-  return profileWorkflowId === "hunyuan" ? "default" : "lab";
+  return profileWorkflowId && profileWorkflowId !== "workflow-lab" ? "default" : "lab";
 }
 
 function assertLabAction(action: WorkflowLabAction): void {
@@ -521,7 +522,7 @@ function assertLabAction(action: WorkflowLabAction): void {
 
 function assertWaitCondition(condition: LabWaitCondition): void {
   if (!condition || typeof condition !== "object") throw new Error("Workflow Lab wait condition is required.");
-  if (!["element", "text", "image-count", "stop-button", "chatgpt-submit-ready", "network-idle"].includes(condition.kind)) {
+  if (!["element", "text", "image-count", "url", "network-idle", "document-ready"].includes(condition.kind)) {
     throw new Error("Unsupported Workflow Lab wait condition kind.");
   }
 }
@@ -669,8 +670,6 @@ function collectBrowserPageState(): LabRawPageState {
 }
 
 function collectWaitPageState(condition: LabWaitCondition): LabWaitPageState {
-  type ChatGptSelectors = Extract<LabWaitCondition, { kind: "chatgpt-submit-ready" }>["selectors"];
-
   function isVisible(element: Element | null): boolean {
     if (!element) return false;
     const rect = element.getBoundingClientRect();
@@ -682,90 +681,6 @@ function collectWaitPageState(condition: LabWaitCondition): LabWaitPageState {
     if (!element) return false;
     const candidate = element as HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
     return Boolean("disabled" in candidate && candidate.disabled) || element.getAttribute("aria-disabled") === "true";
-  }
-
-  function getButtonLabel(button: Element | null): string {
-    return `${button?.getAttribute("aria-label") || ""} ${button?.getAttribute("title") || ""} ${button?.textContent || ""}`
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  function isChatGptActiveStopButtonLabel(label: string): boolean {
-    const normalized = String(label || "").trim();
-    if (!normalized || /\bstopped\b/i.test(normalized)) return false;
-    return (
-      /^(stop|cancel)$/i.test(normalized) ||
-      /^stop (generating|generation|streaming|response|thinking|request)$/i.test(normalized) ||
-      /^cancel (generating|generation|streaming|response|request)$/i.test(normalized)
-    );
-  }
-
-  function findVisibleElement(selectors: Array<string | undefined>): Element | null {
-    for (const selector of selectors) {
-      if (!selector) continue;
-      const visible = Array.from(document.querySelectorAll(selector)).find((element) => isVisible(element));
-      if (visible) return visible;
-    }
-    return null;
-  }
-
-  function findStopButton(selector?: string): Element | null {
-    if (selector) {
-      const configured = document.querySelector(selector);
-      if (configured && isVisible(configured)) return configured;
-    }
-    const knownStopButton = findVisibleElement([
-      "button[data-testid='stop-button']",
-      "button[data-testid='composer-stop-button']",
-      "button[aria-label='Stop']",
-      "button[aria-label='Stop generating']",
-      "button[aria-label='Stop generation']",
-      "button[aria-label='Stop streaming']",
-      "button[aria-label='Stop response']",
-      "button[aria-label='Stop thinking']",
-      "button[aria-label='Cancel generation']",
-      "button[aria-label='Cancel response']",
-      "button[aria-label='Cancel request']"
-    ]);
-    if (knownStopButton) return knownStopButton;
-
-    const buttons = Array.from(document.querySelectorAll("button"));
-    return (
-      buttons.find((button) => {
-        return isVisible(button) && isChatGptActiveStopButtonLabel(getButtonLabel(button));
-      }) ?? null
-    );
-  }
-
-  function findFirst(selectors: Array<string | undefined>): Element | null {
-    for (const selector of selectors) {
-      if (!selector) continue;
-      const element = document.querySelector(selector);
-      if (element) return element;
-    }
-    return null;
-  }
-
-  function findComposer(selectors?: ChatGptSelectors): Element | null {
-    return findFirst([selectors?.composer, "#prompt-textarea", "textarea[data-id='root']", "textarea", "[contenteditable='true']"]);
-  }
-
-  function findSubmitButton(selectors?: ChatGptSelectors): Element | null {
-    return findFirst([
-      selectors?.submitButton,
-      "button[data-testid='send-button']",
-      "button[aria-label='Send prompt']",
-      "button[aria-label='Send message']",
-      "form button[type='submit']"
-    ]);
-  }
-
-  function visibleButtonLabels(): string[] {
-    return Array.from(document.querySelectorAll("button"))
-      .filter((button) => isVisible(button))
-      .slice(0, 12)
-      .map((button) => getButtonLabel(button))
-      .filter(Boolean);
   }
 
   function imageFingerprint(image: HTMLImageElement): string {
@@ -782,15 +697,10 @@ function collectWaitPageState(condition: LabWaitCondition): LabWaitPageState {
       image.naturalHeight > 0 &&
       Boolean(image.currentSrc || image.src)
   );
-  const stopButton = findStopButton(condition.kind === "stop-button" ? condition.selector : undefined);
-  const chatGptSelectors = condition.kind === "chatgpt-submit-ready" ? condition.selectors : undefined;
-  const chatGptComposer = condition.kind === "chatgpt-submit-ready" ? findComposer(chatGptSelectors) : null;
-  const chatGptSubmit = condition.kind === "chatgpt-submit-ready" ? findSubmitButton(chatGptSelectors) : null;
-  const chatGptStop = condition.kind === "chatgpt-submit-ready" ? findStopButton(chatGptSelectors?.stopButton) : null;
-  const chatGptFileInput =
-    condition.kind === "chatgpt-submit-ready" ? findFirst([chatGptSelectors?.fileInput, "input[type='file']"]) : null;
 
   return {
+    url: location.href,
+    readyState: document.readyState,
     bodyText: document.body?.innerText || "",
     ...(selector
       ? {
@@ -802,23 +712,6 @@ function collectWaitPageState(condition: LabWaitCondition): LabWaitPageState {
           }
         }
       : {}),
-    imageFingerprints: images.map(imageFingerprint),
-    stopButtonVisible: Boolean(stopButton),
-    ...(condition.kind === "chatgpt-submit-ready"
-      ? {
-          chatGptSubmit: {
-            composerFound: Boolean(chatGptComposer),
-            composerVisible: isVisible(chatGptComposer),
-            submitFound: Boolean(chatGptSubmit),
-            submitVisible: isVisible(chatGptSubmit),
-            submitEnabled: Boolean(chatGptSubmit) && isVisible(chatGptSubmit) && !isDisabled(chatGptSubmit),
-            stopButtonVisible: Boolean(chatGptStop),
-            stopButtonLabel: chatGptStop ? getButtonLabel(chatGptStop) : null,
-            fileInputFound: Boolean(chatGptFileInput),
-            visibleButtons: visibleButtonLabels(),
-            imageCount: images.length
-          }
-        }
-      : {})
+    imageFingerprints: images.map(imageFingerprint)
   };
 }

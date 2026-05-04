@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { launchPersistentProfile } from "../../src/main/automation/browserHarness";
-import { CHATGPT_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
+import { BLINK_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
 import { WorkflowLab } from "../../src/main/lab/workflowLab";
 import { createRuntimePaths } from "../../src/main/runtime/paths";
 
@@ -43,25 +43,25 @@ describe("WorkflowLab", () => {
     });
   });
 
-  it("can share the Hunyuan default profile for Playwright calibration", async () => {
+  it("can share a custom owner profile for Playwright calibration", async () => {
     vi.mocked(launchPersistentProfile).mockResolvedValue(createMockContext() as any);
     const paths = createRuntimePaths(path.join(tempDir, "app-data"));
     const lab = new WorkflowLab(paths, new ExtensionBridge());
 
     const session = await lab.createSession({
       mode: "playwright",
-      targetUrl: "https://3d.hunyuan.tencent.com/",
-      profileWorkflowId: "hunyuan"
+      targetUrl: "https://example.test/",
+      profileWorkflowId: "custom-plugin"
     });
 
     expect(launchPersistentProfile).toHaveBeenCalledWith({
       paths,
-      workflowId: "hunyuan",
+      workflowId: "custom-plugin",
       profileName: "default"
     });
     expect(session).toMatchObject({
       mode: "playwright",
-      profileWorkflowId: "hunyuan",
+      profileWorkflowId: "custom-plugin",
       profileName: "default"
     });
   });
@@ -71,10 +71,10 @@ describe("WorkflowLab", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       id: "lab-tab",
-      url: "https://chatgpt.com/",
-      title: "ChatGPT",
+      url: "https://BLINK.com/",
+      title: "BLINK",
       status: "ready",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.5.0"
     });
     const lab = new WorkflowLab(paths, bridge);
@@ -90,8 +90,8 @@ describe("WorkflowLab", () => {
     const command = bridge.nextLabCommand("lab-tab");
 
     expect(command).toMatchObject({
-      kind: "workflow-lab",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      kind: "browser-command",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       command: {
         kind: "action",
         action: {

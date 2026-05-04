@@ -2,13 +2,13 @@ export interface WorkflowManifest {
   id: string;
   title: string;
   description: string;
-  category: "demo" | "hunyuan" | "chatgpt" | "utility";
+  category: string;
   version: string;
   concurrency: number;
   requiresBrowser: boolean;
   targetUrl?: string;
   outputKinds: string[];
-  uiCapabilities?: Array<"chatgpt.tabRouting" | "chatgpt.focusTarget" | "chatgpt.artifactPairs" | "browser.profile">;
+  uiCapabilities?: Array<"extension.tabRouting" | "extension.focusTarget" | "browser.profile">;
   inputFields: Array<{
     name: string;
     label: string;
@@ -23,7 +23,7 @@ export interface WorkflowManifest {
 
 export type PluginSource = "builtin" | "user";
 
-export type WorkflowPluginCapability = "filesystem.artifacts" | "browser" | "extension.chatgpt";
+export type WorkflowPluginCapability = "filesystem.artifacts" | "browser" | "extension.browser";
 
 export type RunOrigin =
   | { source: "ui" }
@@ -142,13 +142,10 @@ export interface SystemInfo {
     installed: number;
   };
   extension: {
-    pending: number;
-    running: number;
-    labPending: number;
-    labRunning: number;
-    focusPending: number;
-    focusRunning: number;
     requiredProtocolVersion: number;
+    connected: number;
+    compatible: number;
+    incompatible: number;
     connectedClients: Array<{
       id: string;
       url: string;
@@ -161,13 +158,25 @@ export interface SystemInfo {
       incompatibilityReason?: string;
       lastSeenAt: string;
     }>;
+    connectedControllers: Array<{
+      id: string;
+      status: string;
+      protocolVersion: number | null;
+      extensionVersion: string;
+      compatible: boolean;
+      incompatibilityReason?: string;
+      lastSeenAt: string;
+      capabilities?: string[];
+    }>;
+    compatibleControllers: number;
+    incompatibleControllers: number;
   };
 }
 
 export type AppConfig = BasedBlinkConfig;
 
 export type WorkflowLabSessionMode = "playwright" | "extension";
-export type WorkflowLabProfileWorkflowId = "workflow-lab" | "hunyuan";
+export type WorkflowLabProfileWorkflowId = string;
 
 export interface LabSelectorCandidate {
   selector: string;
@@ -243,13 +252,9 @@ export type LabWaitCondition =
   | { kind: "element"; selector: string; state: "visible" | "hidden" | "enabled" | "disabled"; timeoutMs?: number }
   | { kind: "text"; text: string; state: "present" | "absent"; timeoutMs?: number }
   | { kind: "image-count"; selector?: string; minCount: number; previousFingerprints?: string[]; timeoutMs?: number }
-  | { kind: "stop-button"; selector?: string; state: "visible" | "hidden"; timeoutMs?: number }
-  | {
-      kind: "chatgpt-submit-ready";
-      selectors?: { composer?: string; submitButton?: string; stopButton?: string; fileInput?: string };
-      timeoutMs?: number;
-    }
-  | { kind: "network-idle"; timeoutMs?: number };
+  | { kind: "url"; value: string; match: "contains" | "equals" | "regex"; timeoutMs?: number }
+  | { kind: "network-idle"; timeoutMs?: number }
+  | { kind: "document-ready"; timeoutMs?: number };
 
 export interface WorkflowLabInspectionResult {
   session: WorkflowLabSessionSummary;
@@ -337,6 +342,10 @@ export async function getSystemInfo(): Promise<SystemInfo> {
 
 export async function focusExtensionClient(clientId: string): Promise<{ ok: true; result?: unknown }> {
   return apiFetch(`/api/extension/clients/${encodeURIComponent(clientId)}/focus`, { method: "POST", body: "{}" });
+}
+
+export async function openExtensionTab(url: string): Promise<{ ok: true; result?: unknown }> {
+  return apiFetch("/api/extension/tabs/open", { method: "POST", body: JSON.stringify({ url }) });
 }
 
 export async function validateFilePaths(paths: string[]): Promise<FileValidationResult> {

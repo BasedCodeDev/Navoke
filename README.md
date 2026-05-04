@@ -9,7 +9,7 @@ Local Electron app for durable browser-driven workflows. The first implementatio
 - SQLite-compatible local metadata store via `sql.js`.
 - SQLite-backed local workflow runner.
 - Playwright browser harness with persistent profiles, traces, screenshots, uploads, downloads, and manual-resume checkpoints.
-- Code-first workflow registry with Hunyuan browser automation and ChatGPT Chrome-extension automation using configurable selectors.
+- Code-first workflow registry with Playwright workflows and generic browser-extension-backed plugin workflows using configurable selectors.
 
 ## Run
 
@@ -122,26 +122,26 @@ blink --project <project-dir> watch <runId>
 blink --project <project-dir> get <runId>
 ```
 
-Use Workflow Lab or the run trace to inspect the exact failed page state, update plugin defaults and tests, reload the installed plugin, then rerun until the workflow produces the intended artifact. ChatGPT account-based work uses the Chrome extension described below rather than Playwright.
+Use Workflow Lab or the run trace to inspect the exact failed page state, update plugin defaults and tests, reload the installed plugin, then rerun until the workflow produces the intended artifact. Account-session work can use the generic Chrome extension described below rather than Playwright.
 
 ## Adding Workflows
 
 See `AGENTS.md` for the workflow authoring contract, registration steps, artifact rules, extension bridge pattern, and verification checklist.
 
-## ChatGPT Chrome Extension
+## Browser Controller Extension
 
-For ChatGPT account-based workflows, install the companion extension into the Chrome profile where you normally use ChatGPT:
+For workflows that need the user's normal Chrome account session, install the companion browser-controller extension into that Chrome profile:
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
-4. Select this repo's `extension\chatgpt-controller` folder.
+4. Select this repo's `extension` folder.
 5. Run the Electron app with `npm.cmd run dev`.
-6. Open `https://chatgpt.com/` in that Chrome profile and keep the tab open.
-7. In the app, choose **ChatGPT Extension Image Transform**.
+6. Open or let BLINK route the target site in that Chrome profile.
+7. In the app, choose a workflow that declares the generic browser-extension capability.
 
-This workflow sends the master prompt and optional reference images once, waits for ChatGPT to respond, then sends subject images one at a time. Each subject image is saved as a separate output artifact using the subject filename.
+The extension is site-agnostic. Plugins own target URLs, selectors, waits, upload sequencing, extraction rules, and manual-action handling, then drive the page through generic browser commands.
 
 The extension defaults to `http://127.0.0.1:39201`. If the app falls back to another API port, copy the API URL shown in the app's Local Runtime panel into the extension popup.
 
-This extension does not bypass human verification. If ChatGPT asks you to verify, complete that manually in the same Chrome tab and retry or resume the workflow.
+This extension does not bypass human verification. If a site asks you to verify, complete that manually in the same Chrome tab and retry or resume the workflow.

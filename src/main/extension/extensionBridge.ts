@@ -1,20 +1,27 @@
-import { EventEmitter } from "node:events";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { inferMimeType } from "../utils/files";
 
-export type ExtensionTaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
-export type ExtensionImageGroup = "reference" | "subject";
+export const BLINK_EXTENSION_PROTOCOL_VERSION = 1;
+export const BLINK_ROUTING_TOKEN_PARAM = "based-blink-tab";
 
-export const CHATGPT_EXTENSION_PROTOCOL_VERSION = 9;
 const CLIENT_TTL_MS = 30_000;
-const LAB_COMMAND_LEASE_MS = 60_000;
+const CONTROLLER_TTL_MS = 30_000;
+const COMMAND_LEASE_MS = 60_000;
 const FOCUS_COMMAND_LEASE_MS = 15_000;
+const CONTROLLER_COMMAND_LEASE_MS = 15_000;
+const COMMAND_CLIENT_COOLDOWN_MS = 120_000;
+const ROUTED_TAB_CONNECT_TIMEOUT_MS = 45_000;
 
-export type ChatGptExtensionTaskTarget =
+export type ExtensionCommandStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+export type ExtensionBrowserTarget =
   | { mode: "any" }
   | { mode: "existing"; clientId: string; url?: string; title?: string }
   | { mode: "new"; routingToken: string; url?: string; title?: string };
+
+export type ExtensionTaskTarget = ExtensionBrowserTarget;
 
 export interface ExtensionClientStatus {
   id: string;
@@ -27,80 +34,76 @@ export interface ExtensionClientStatus {
   compatible: boolean;
   incompatibilityReason?: string;
   lastSeenAt: string;
+  capabilities: string[];
 }
 
-export type ChatGptExtensionTaskPhase = "setup" | "subject";
-export type ChatGptSubjectTaskMode = "submit-and-capture" | "capture-existing";
-
-export interface ChatGptExtensionTaskInput {
-  runId: string;
-  phase: ChatGptExtensionTaskPhase;
-  subjectMode?: ChatGptSubjectTaskMode;
-  masterPrompt?: string;
-  referenceImagePaths?: string[];
-  subjectImagePath?: string;
-  subjectIndex?: number;
-  subjectInstruction?: string;
-  subjectBaseline?: unknown;
-  selectors?: Record<string, unknown>;
-  target?: ChatGptExtensionTaskTarget;
+export interface ExtensionControllerStatus {
+  id: string;
+  status: string;
+  protocolVersion: number | null;
+  extensionVersion: string;
+  compatible: boolean;
+  incompatibilityReason?: string;
+  lastSeenAt: string;
+  capabilities: string[];
 }
 
-export interface ExtensionTaskImagePayload {
-  index: number;
+export type ExtensionControllerCommandInput = { kind: "open-tab"; url: string; active?: boolean };
+
+export interface ExtensionControllerCommandPayload {
+  id: string;
+  kind: "controller-command";
+  protocolVersion: number;
+  command: ExtensionControllerCommandInput;
+  createdAt: string;
+}
+
+export interface ExtensionCommandFilePayload {
+  id: string;
   name: string;
   mimeType: string;
   url: string;
 }
 
-export interface ExtensionTaskPayload {
-  id: string;
-  kind: "chatgpt-image-transform";
-  phase: ChatGptExtensionTaskPhase;
-  protocolVersion: number;
-  runId: string;
-  masterPrompt?: string;
-  referenceImages?: ExtensionTaskImagePayload[];
-  subjectMode?: ChatGptSubjectTaskMode;
-  subjectImage?: ExtensionTaskImagePayload;
-  subjectInstruction: string;
-  subjectBaseline?: unknown;
-  selectors: Record<string, unknown>;
-  createdAt: string;
-}
+export type ExtensionBrowserAction =
+  | { kind: "click"; selector: string }
+  | { kind: "fill"; selector: string; value: string }
+  | { kind: "submit"; selector: string }
+  | { kind: "select"; selector: string; value?: string; label?: string; index?: number }
+  | { kind: "attach-file"; selector: string; files: ExtensionCommandFilePayload[] };
 
-export interface ExtensionTaskOutput {
-  subjectIndex: number;
-  subjectName?: string;
-  name?: string;
-  mimeType?: string;
-  base64: string;
-  metadata?: unknown;
-}
+export type ExtensionBrowserExtractQuery =
+  | {
+      kind: "element-state";
+      selector: string;
+    }
+  | {
+      kind: "images";
+      selector?: string;
+      minWidth?: number;
+      minHeight?: number;
+      includeBase64?: boolean;
+      excludeFingerprints?: string[];
+      latestFirst?: boolean;
+      maxImages?: number;
+      fetchTimeoutMs?: number;
+    }
+  | {
+      kind: "text";
+      selector?: string;
+    };
 
-export interface ExtensionTaskResult {
-  outputs: ExtensionTaskOutput[];
-  metadata?: unknown;
-}
-
-export interface ExtensionTaskEvent {
-  taskId: string;
-  type: string;
-  message: string;
-  data?: unknown;
-  createdAt: string;
-}
-
-export type ExtensionLabCommandInput =
+export type ExtensionCommandInput =
   | { kind: "inspect" }
-  | { kind: "action"; action: unknown }
-  | { kind: "wait"; condition: unknown };
+  | { kind: "action"; action: ExtensionBrowserAction }
+  | { kind: "wait"; condition: unknown }
+  | { kind: "extract"; query: ExtensionBrowserExtractQuery };
 
-export interface ExtensionLabCommandPayload {
+export interface ExtensionCommandPayload {
   id: string;
-  kind: "workflow-lab";
+  kind: "browser-command";
   protocolVersion: number;
-  command: ExtensionLabCommandInput;
+  command: ExtensionCommandInput;
   createdAt: string;
 }
 
@@ -111,729 +114,682 @@ export interface ExtensionFocusCommandPayload {
   createdAt: string;
 }
 
-export interface ExtensionTaskControlPayload {
-  id: string;
-  kind: "task-control";
-  protocolVersion: number;
-  status: ExtensionTaskStatus;
-  pauseRequested: boolean;
-  cancelled: boolean;
-  updatedAt: string;
-}
-
-interface ExtensionTask {
-  id: string;
-  kind: "chatgpt-image-transform";
-  phase: ChatGptExtensionTaskPhase;
-  runId: string;
-  subjectMode: ChatGptSubjectTaskMode;
-  masterPrompt?: string;
-  referenceImagePaths: string[];
-  subjectImagePath?: string;
-  subjectIndex?: number;
-  subjectInstruction: string;
-  subjectBaseline?: unknown;
-  selectors: Record<string, unknown>;
-  target: ExtensionTaskTargetState;
-  status: ExtensionTaskStatus;
-  leasedClientId?: string;
-  pauseRequested: boolean;
-  outputs: ExtensionTaskOutput[];
-  result?: ExtensionTaskResult;
-  error?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface ExtensionTaskTargetState {
-  mode: "any" | "existing" | "new";
-  clientId?: string;
-  routingToken?: string;
-  url?: string;
-}
-
-interface Waiter {
-  resolve(result: ExtensionTaskResult): void;
-  reject(error: Error): void;
-}
-
-type ExtensionLabCommandStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
-type ExtensionFocusCommandStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
-
-interface ExtensionLabCommand {
+interface ExtensionCommand {
   id: string;
   clientId: string;
-  command: ExtensionLabCommandInput;
-  status: ExtensionLabCommandStatus;
+  command: ExtensionCommandInput;
+  status: ExtensionCommandStatus;
   result?: unknown;
   error?: string;
   createdAt: string;
   updatedAt: string;
-}
-
-interface LabWaiter {
-  resolve(result: unknown): void;
-  reject(error: Error): void;
 }
 
 interface ExtensionFocusCommand {
   id: string;
   clientId: string;
-  status: ExtensionFocusCommandStatus;
+  status: ExtensionCommandStatus;
   result?: unknown;
   error?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-interface FocusWaiter {
+interface ExtensionControllerCommand {
+  id: string;
+  controllerId: string;
+  command: ExtensionControllerCommandInput;
+  status: ExtensionCommandStatus;
+  result?: unknown;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface CommandWaiter {
   resolve(result: unknown): void;
   reject(error: Error): void;
+  timer: NodeJS.Timeout;
+  abort?: () => void;
+}
+
+interface StagedExtensionFile {
+  id: string;
+  filePath: string;
+  name: string;
+  mimeType: string;
+  createdAt: number;
 }
 
 export class ExtensionBridge {
-  private readonly tasks = new Map<string, ExtensionTask>();
-  private readonly waiters = new Map<string, Waiter>();
-  private readonly labCommands = new Map<string, ExtensionLabCommand>();
-  private readonly labWaiters = new Map<string, LabWaiter>();
+  private readonly commands = new Map<string, ExtensionCommand>();
+  private readonly commandWaiters = new Map<string, CommandWaiter>();
   private readonly focusCommands = new Map<string, ExtensionFocusCommand>();
-  private readonly focusWaiters = new Map<string, FocusWaiter>();
+  private readonly focusWaiters = new Map<string, CommandWaiter>();
+  private readonly controllerCommands = new Map<string, ExtensionControllerCommand>();
+  private readonly controllerWaiters = new Map<string, CommandWaiter>();
   private readonly clients = new Map<string, ExtensionClientStatus>();
-  private readonly events = new EventEmitter();
+  private readonly controllers = new Map<string, ExtensionControllerStatus>();
+  private readonly stagedFiles = new Map<string, StagedExtensionFile>();
+  private readonly commandUnhealthySince = new Map<string, number>();
 
-  createChatGptConversationTask(input: ChatGptExtensionTaskInput): ExtensionTaskPayload {
-    const now = new Date().toISOString();
-    const task: ExtensionTask = {
-      id: randomUUID(),
-      kind: "chatgpt-image-transform",
-      phase: input.phase,
-      runId: input.runId,
-      subjectMode: input.subjectMode ?? "submit-and-capture",
-      masterPrompt: input.masterPrompt,
-      referenceImagePaths: input.referenceImagePaths ?? [],
-      subjectImagePath: input.subjectImagePath,
-      subjectIndex: input.subjectIndex,
-      subjectInstruction: input.subjectInstruction?.trim() ?? "",
-      subjectBaseline: input.subjectBaseline,
-      selectors: input.selectors ?? {},
-      target: normalizeTaskTarget(input.target),
-      status: "pending",
-      pauseRequested: false,
-      outputs: [],
-      createdAt: now,
-      updatedAt: now
+  heartbeat(payload: unknown): { ok: true; requiredProtocolVersion: number; compatible: boolean; clientId: string } {
+    if (!payload || typeof payload !== "object") throw new Error("Extension heartbeat payload is required.");
+    const record = payload as Record<string, unknown>;
+    const clientId = firstNonEmptyString(record.clientId, record.id) ?? "browser-tab";
+    const protocolVersion = typeof record.protocolVersion === "number" ? record.protocolVersion : null;
+    const url = typeof record.url === "string" ? record.url : "";
+    const title = typeof record.title === "string" ? record.title : "";
+    const extensionVersion = typeof record.extensionVersion === "string" ? record.extensionVersion : "";
+    const capabilities = Array.isArray(record.capabilities)
+      ? record.capabilities.filter((capability): capability is string => typeof capability === "string")
+      : [];
+    const previous = this.clients.get(clientId);
+    const routingToken =
+      firstNonEmptyString(record.routingToken) ?? routingTokenFromUrl(url) ?? previous?.routingToken ?? undefined;
+    const compatible = protocolVersion === BLINK_EXTENSION_PROTOCOL_VERSION;
+
+    const status: ExtensionClientStatus = {
+      id: clientId,
+      url,
+      title,
+      status: compatible ? "connected" : "incompatible",
+      protocolVersion,
+      extensionVersion,
+      ...(routingToken ? { routingToken } : {}),
+      compatible,
+      ...(compatible
+        ? {}
+        : {
+            incompatibilityReason: `Reload the unpacked BLINK browser extension and refresh browser tabs. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION}.`
+          }),
+      lastSeenAt: new Date().toISOString(),
+      capabilities
     };
-    validateTaskShape(task);
-    this.tasks.set(task.id, task);
-    this.emitTaskEvent(task.id, "task.created", describeTaskTarget(task));
-    return this.toPayload(task);
+    this.clients.set(clientId, status);
+    this.prune();
+    return { ok: true, requiredProtocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION, compatible, clientId };
   }
 
-  nextTask(clientId: string): ExtensionTaskPayload | null {
-    const client = this.assertCompatibleClient(clientId);
-    const now = Date.now();
-    for (const task of this.tasks.values()) {
-      if (task.status === "running" && now - Date.parse(task.updatedAt) > 120_000) {
-        task.status = "pending";
-        task.leasedClientId = undefined;
-        task.updatedAt = new Date().toISOString();
-        this.emitTaskEvent(task.id, "task.requeued", "Extension task lease expired; requeued");
+  controllerHeartbeat(payload: unknown): {
+    ok: true;
+    requiredProtocolVersion: number;
+    compatible: boolean;
+    controllerId: string;
+  } {
+    if (!payload || typeof payload !== "object") throw new Error("Extension controller heartbeat payload is required.");
+    const record = payload as Record<string, unknown>;
+    const controllerId = firstNonEmptyString(record.controllerId, record.id) ?? "browser-controller";
+    const protocolVersion = typeof record.protocolVersion === "number" ? record.protocolVersion : null;
+    const extensionVersion = typeof record.extensionVersion === "string" ? record.extensionVersion : "";
+    const capabilities = Array.isArray(record.capabilities)
+      ? record.capabilities.filter((capability): capability is string => typeof capability === "string")
+      : [];
+    const compatible = protocolVersion === BLINK_EXTENSION_PROTOCOL_VERSION && capabilities.includes("open-tab");
+    const status: ExtensionControllerStatus = {
+      id: controllerId,
+      status: compatible ? "connected" : "incompatible",
+      protocolVersion,
+      extensionVersion,
+      compatible,
+      ...(compatible
+        ? {}
+        : {
+            incompatibilityReason: `Reload the unpacked BLINK browser extension. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION} with open-tab support.`
+          }),
+      lastSeenAt: new Date().toISOString(),
+      capabilities
+    };
+    this.controllers.set(controllerId, status);
+    this.prune();
+    return { ok: true, requiredProtocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION, compatible, controllerId };
+  }
+
+  status(): {
+    requiredProtocolVersion: number;
+    connected: number;
+    compatible: number;
+    incompatible: number;
+    connectedClients: ExtensionClientStatus[];
+    clients: ExtensionClientStatus[];
+    connectedControllers: ExtensionControllerStatus[];
+    controllers: ExtensionControllerStatus[];
+    compatibleControllers: number;
+    incompatibleControllers: number;
+  } {
+    this.prune();
+    const clients = [...this.clients.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+    const controllers = [...this.controllers.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+    return {
+      requiredProtocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      connected: clients.length,
+      compatible: clients.filter((client) => client.compatible).length,
+      incompatible: clients.filter((client) => !client.compatible).length,
+      connectedClients: clients,
+      clients,
+      connectedControllers: controllers,
+      controllers,
+      compatibleControllers: controllers.filter((controller) => controller.compatible).length,
+      incompatibleControllers: controllers.filter((controller) => !controller.compatible).length
+    };
+  }
+
+  findCompatibleClientForTarget(target: ExtensionBrowserTarget): ExtensionClientStatus | undefined {
+    this.prune();
+    const clients = [...this.clients.values()]
+      .filter((client) => client.compatible && this.isCommandHealthy(client.id))
+      .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+    if (target.mode === "any") return clients[0];
+
+    if (target.mode === "existing") {
+      if (target.url) {
+        const sameUrlClient = clients.find((client) => sameUrl(client.url, target.url));
+        if (sameUrlClient) return sameUrlClient;
       }
-      if (task.status === "pending" && this.matchesTaskTarget(task, client)) {
-        if (task.target.mode === "new" && !task.target.clientId) {
-          task.target.clientId = client.id;
-        }
-        task.status = "running";
-        task.leasedClientId = client.id;
-        task.updatedAt = new Date().toISOString();
-        this.emitTaskEvent(task.id, "task.started", "Extension picked up task", {
-          clientId,
-          targetMode: task.target.mode,
-          phase: task.phase
-        });
-        return this.toPayload(task);
-      }
+      const exact = clients.find((client) => client.id === target.clientId);
+      if (exact) return exact;
+      return undefined;
     }
-    return null;
+
+    const byToken = clients.find((client) => client.routingToken === target.routingToken);
+    if (byToken) return byToken;
+    if (target.url) return clients.find((client) => sameUrl(client.url, target.url));
+    return undefined;
   }
 
-  executeLabCommand(input: {
-    clientId: string;
-    command: ExtensionLabCommandInput;
-    timeoutMs: number;
+  findCompatibleController(): ExtensionControllerStatus | undefined {
+    this.prune();
+    return [...this.controllers.values()]
+      .filter((controller) => controller.compatible)
+      .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))[0];
+  }
+
+  async openTabWithController(input: {
+    url: string;
+    active?: boolean;
+    timeoutMs?: number;
+    signal?: AbortSignal;
   }): Promise<unknown> {
-    const client = this.assertCompatibleClient(input.clientId);
+    const url = safeExtensionTabUrl(input.url);
+    const controller = this.findCompatibleController();
+    if (!controller) {
+      throw new Error(
+        "No compatible BLINK browser controller is connected. Reload the unpacked extension, open any page in that browser profile, then retry."
+      );
+    }
+    return this.executeControllerCommand({
+      controllerId: controller.id,
+      command: { kind: "open-tab", url, active: input.active ?? true },
+      timeoutMs: input.timeoutMs,
+      signal: input.signal
+    });
+  }
+
+  async ensureRoutedTab(input: {
+    target: ExtensionBrowserTarget;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<ExtensionClientStatus> {
+    const existing = this.findCompatibleClientForTarget(input.target);
+    if (existing) return existing;
+
+    const url = openableTargetUrl(input.target);
+    if (!url) {
+      throw new Error("No compatible BLINK browser extension tab is connected for the requested target.");
+    }
+
+    await this.openTabWithController({
+      url,
+      active: true,
+      timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
+      signal: input.signal
+    });
+
+    const timeoutMs = input.timeoutMs ?? ROUTED_TAB_CONNECT_TIMEOUT_MS;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const client = this.findCompatibleClientForTarget(input.target);
+      if (client) return client;
+      await wait(750, input.signal);
+    }
+
+    throw new Error(
+      "Opened a routed BLINK browser tab, but no compatible page client connected. Reload the unpacked extension and refresh the opened tab."
+    );
+  }
+
+  stageFiles(filePaths: string[]): ExtensionCommandFilePayload[] {
+    return filePaths.map((filePath) => {
+      if (!fs.existsSync(filePath)) throw new Error(`Extension file not found: ${filePath}`);
+      const id = randomUUID();
+      const staged: StagedExtensionFile = {
+        id,
+        filePath,
+        name: path.basename(filePath),
+        mimeType: inferMimeType(filePath) ?? "application/octet-stream",
+        createdAt: Date.now()
+      };
+      this.stagedFiles.set(id, staged);
+      return {
+        id,
+        name: staged.name,
+        mimeType: staged.mimeType,
+        url: `/api/extension/files/${encodeURIComponent(id)}`
+      };
+    });
+  }
+
+  getStagedFilePath(fileId: string): string {
+    const staged = this.stagedFiles.get(fileId);
+    if (!staged) throw new Error(`Extension staged file not found: ${fileId}`);
+    return staged.filePath;
+  }
+
+  async executeCommandForTarget(input: {
+    target: ExtensionBrowserTarget;
+    command: ExtensionCommandInput;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<unknown> {
+    const client = this.findCompatibleClientForTarget(input.target);
+    if (!client) throw new Error("No compatible BLINK browser extension tab is connected for the requested target.");
+    return this.executeCommand({ clientId: client.id, command: input.command, timeoutMs: input.timeoutMs, signal: input.signal });
+  }
+
+  async executeCommand(input: {
+    clientId: string;
+    command: ExtensionCommandInput;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<unknown> {
+    const client = this.clients.get(input.clientId);
+    if (!client?.compatible) {
+      throw new Error("Selected browser extension tab is not connected or is running an incompatible extension.");
+    }
     const now = new Date().toISOString();
-    const command: ExtensionLabCommand = {
+    const command: ExtensionCommand = {
       id: randomUUID(),
-      clientId: client.id,
+      clientId: input.clientId,
       command: input.command,
       status: "pending",
       createdAt: now,
       updatedAt: now
     };
-    this.labCommands.set(command.id, command);
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        const current = this.labCommands.get(command.id);
-        if (current && ["pending", "running"].includes(current.status)) {
-          current.status = "cancelled";
-          current.updatedAt = new Date().toISOString();
-        }
-        this.labWaiters.delete(command.id);
-        reject(new Error("Timed out waiting for the Chrome extension Workflow Lab command."));
-      }, input.timeoutMs);
-
-      this.labWaiters.set(command.id, {
-        resolve: (result) => {
-          clearTimeout(timeout);
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        }
-      });
-    });
+    this.commands.set(command.id, command);
+    return this.waitForCommand(this.commands, this.commandWaiters, command.id, input.timeoutMs ?? COMMAND_LEASE_MS, input.signal);
   }
 
-  nextLabCommand(clientId: string): ExtensionLabCommandPayload | null {
-    const client = this.assertCompatibleClient(clientId);
-    const now = Date.now();
-    for (const command of this.labCommands.values()) {
-      if (command.status === "running" && now - Date.parse(command.updatedAt) > LAB_COMMAND_LEASE_MS) {
-        command.status = "pending";
-        command.updatedAt = new Date().toISOString();
-      }
-      if (command.status === "pending" && command.clientId === client.id) {
-        command.status = "running";
-        command.updatedAt = new Date().toISOString();
-        return {
-          id: command.id,
-          kind: "workflow-lab",
-          protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-          command: command.command,
-          createdAt: command.createdAt
-        };
-      }
-    }
-    return null;
+  nextCommand(clientId: string): ExtensionCommandPayload | null {
+    const normalizedClientId = clientId.trim();
+    this.requireCompatibleClient(normalizedClientId);
+    this.expireCommands(this.commands, this.commandWaiters, COMMAND_LEASE_MS);
+
+    const command = [...this.commands.values()].find(
+      (candidate) => candidate.clientId === normalizedClientId && candidate.status === "pending"
+    );
+    if (!command) return null;
+    command.status = "running";
+    command.updatedAt = new Date().toISOString();
+    return {
+      id: command.id,
+      kind: "browser-command",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      command: command.command,
+      createdAt: command.createdAt
+    };
+  }
+
+  completeCommand(commandId: string, result: unknown): void {
+    this.resolveCommand(this.commands, this.commandWaiters, commandId, "completed", result);
+  }
+
+  failCommand(commandId: string, message: string): void {
+    this.rejectCommand(this.commands, this.commandWaiters, commandId, message);
+  }
+
+  executeControllerCommand(input: {
+    controllerId: string;
+    command: ExtensionControllerCommandInput;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<unknown> {
+    this.requireCompatibleController(input.controllerId);
+    const now = new Date().toISOString();
+    const command: ExtensionControllerCommand = {
+      id: randomUUID(),
+      controllerId: input.controllerId,
+      command: {
+        ...input.command,
+        ...(input.command.kind === "open-tab" ? { url: safeExtensionTabUrl(input.command.url) } : {})
+      },
+      status: "pending",
+      createdAt: now,
+      updatedAt: now
+    };
+    this.controllerCommands.set(command.id, command);
+    return this.waitForCommand(
+      this.controllerCommands,
+      this.controllerWaiters,
+      command.id,
+      input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS,
+      input.signal
+    );
+  }
+
+  nextControllerCommand(controllerId: string): ExtensionControllerCommandPayload | null {
+    const normalizedControllerId = controllerId.trim();
+    this.requireCompatibleController(normalizedControllerId);
+    this.expireCommands(this.controllerCommands, this.controllerWaiters, CONTROLLER_COMMAND_LEASE_MS);
+    const command = [...this.controllerCommands.values()].find(
+      (candidate) => candidate.controllerId === normalizedControllerId && candidate.status === "pending"
+    );
+    if (!command) return null;
+    command.status = "running";
+    command.updatedAt = new Date().toISOString();
+    return {
+      id: command.id,
+      kind: "controller-command",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      command: command.command,
+      createdAt: command.createdAt
+    };
+  }
+
+  completeControllerCommand(commandId: string, result: unknown): void {
+    this.resolveCommand(this.controllerCommands, this.controllerWaiters, commandId, "completed", result);
+  }
+
+  failControllerCommand(commandId: string, message: string): void {
+    this.rejectCommand(this.controllerCommands, this.controllerWaiters, commandId, message);
+  }
+
+  executeLabCommand(input: { clientId: string; command: ExtensionCommandInput; timeoutMs?: number }): Promise<unknown> {
+    return this.executeCommand(input);
+  }
+
+  nextLabCommand(clientId: string): ExtensionCommandPayload | null {
+    return this.nextCommand(clientId);
   }
 
   completeLabCommand(commandId: string, result: unknown): void {
-    const command = this.getLabCommand(commandId);
-    command.status = "completed";
-    command.result = result;
-    command.updatedAt = new Date().toISOString();
-    this.labWaiters.get(commandId)?.resolve(result);
-    this.labWaiters.delete(commandId);
+    this.completeCommand(commandId, result);
   }
 
   failLabCommand(commandId: string, message: string): void {
-    const command = this.getLabCommand(commandId);
-    command.status = "failed";
-    command.error = message;
-    command.updatedAt = new Date().toISOString();
-    this.labWaiters.get(commandId)?.reject(new Error(message));
-    this.labWaiters.delete(commandId);
+    this.failCommand(commandId, message);
   }
 
-  focusClient(clientId: string, options: { timeoutMs?: number } = {}): Promise<unknown> {
-    const client = this.assertCompatibleClient(clientId);
+  async focusClient(clientId: string): Promise<unknown> {
+    this.requireCompatibleClient(clientId);
     const now = new Date().toISOString();
     const command: ExtensionFocusCommand = {
       id: randomUUID(),
-      clientId: client.id,
+      clientId,
       status: "pending",
       createdAt: now,
       updatedAt: now
     };
     this.focusCommands.set(command.id, command);
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        const current = this.focusCommands.get(command.id);
-        if (current && ["pending", "running"].includes(current.status)) {
-          current.status = "cancelled";
-          current.updatedAt = new Date().toISOString();
-        }
-        this.focusWaiters.delete(command.id);
-        reject(new Error("Timed out waiting for the Chrome extension to focus the selected tab."));
-      }, options.timeoutMs ?? 10_000);
-
-      this.focusWaiters.set(command.id, {
-        resolve: (result) => {
-          clearTimeout(timeout);
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        }
-      });
-    });
+    return this.waitForCommand(this.focusCommands, this.focusWaiters, command.id, FOCUS_COMMAND_LEASE_MS);
   }
 
   nextFocusCommand(clientId: string): ExtensionFocusCommandPayload | null {
-    const client = this.assertCompatibleClient(clientId);
-    const now = Date.now();
-    for (const command of this.focusCommands.values()) {
-      if (command.status === "running" && now - Date.parse(command.updatedAt) > FOCUS_COMMAND_LEASE_MS) {
-        command.status = "pending";
-        command.updatedAt = new Date().toISOString();
-      }
-      if (command.status === "pending" && command.clientId === client.id) {
-        command.status = "running";
-        command.updatedAt = new Date().toISOString();
-        return {
-          id: command.id,
-          kind: "focus-tab",
-          protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-          createdAt: command.createdAt
-        };
-      }
-    }
-    return null;
+    const normalizedClientId = clientId.trim();
+    this.requireCompatibleClient(normalizedClientId);
+    this.expireCommands(this.focusCommands, this.focusWaiters, FOCUS_COMMAND_LEASE_MS);
+    const command = [...this.focusCommands.values()].find(
+      (candidate) => candidate.clientId === normalizedClientId && candidate.status === "pending"
+    );
+    if (!command) return null;
+    command.status = "running";
+    command.updatedAt = new Date().toISOString();
+    return {
+      id: command.id,
+      kind: "focus-tab",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      createdAt: command.createdAt
+    };
   }
 
   completeFocusCommand(commandId: string, result: unknown): void {
-    const command = this.getFocusCommand(commandId);
-    command.status = "completed";
-    command.result = result;
-    command.updatedAt = new Date().toISOString();
-    this.focusWaiters.get(commandId)?.resolve(result);
-    this.focusWaiters.delete(commandId);
+    this.resolveCommand(this.focusCommands, this.focusWaiters, commandId, "completed", result);
   }
 
   failFocusCommand(commandId: string, message: string): void {
-    const command = this.getFocusCommand(commandId);
+    this.rejectCommand(this.focusCommands, this.focusWaiters, commandId, message);
+  }
+
+  private waitForCommand<T extends { id: string; clientId?: string; status: ExtensionCommandStatus; result?: unknown; error?: string }>(
+    commands: Map<string, T>,
+    waiters: Map<string, CommandWaiter>,
+    commandId: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<unknown> {
+    const existing = commands.get(commandId);
+    if (!existing) throw new Error(`Extension command not found: ${commandId}`);
+    if (existing.status === "completed") return Promise.resolve(existing.result);
+    if (existing.status === "failed") return Promise.reject(new Error(existing.error ?? "Extension command failed"));
+
+    return new Promise((resolve, reject) => {
+      const finish = (fn: () => void) => {
+        clearTimeout(timer);
+        if (signal && abort) signal.removeEventListener("abort", abort);
+        waiters.delete(commandId);
+        fn();
+      };
+      const timer = setTimeout(() => {
+        const command = commands.get(commandId);
+        if (command && command.status !== "completed" && command.status !== "failed") {
+          command.status = "failed";
+          command.error = `Timed out waiting for browser extension command ${commandId}.`;
+          if (command.clientId) this.markCommandUnhealthy(command.clientId);
+        }
+        finish(() => reject(new Error(`Timed out waiting for browser extension command ${commandId}.`)));
+      }, timeoutMs);
+      const abort = signal
+        ? () => {
+            const command = commands.get(commandId);
+            if (command && command.status !== "completed" && command.status !== "failed") {
+              command.status = "cancelled";
+              command.error = "Operation cancelled.";
+            }
+            finish(() => reject(new Error("Operation cancelled")));
+          }
+        : undefined;
+      if (signal) signal.addEventListener("abort", abort!, { once: true });
+      waiters.set(commandId, { resolve, reject, timer, ...(abort ? { abort } : {}) });
+    });
+  }
+
+  private resolveCommand<T extends { id: string; status: ExtensionCommandStatus; result?: unknown; updatedAt: string }>(
+    commands: Map<string, T>,
+    waiters: Map<string, CommandWaiter>,
+    commandId: string,
+    status: "completed",
+    result: unknown
+  ): void {
+    const command = commands.get(commandId);
+    if (!command) throw new Error(`Extension command not found: ${commandId}`);
+    if (command.status === "failed" || command.status === "cancelled") return;
+    command.status = status;
+    command.result = result;
+    command.updatedAt = new Date().toISOString();
+    if ("clientId" in command && typeof command.clientId === "string") this.markCommandHealthy(command.clientId);
+    const waiter = waiters.get(commandId);
+    if (waiter) {
+      clearTimeout(waiter.timer);
+      if (waiter.abort) waiter.abort = undefined;
+      waiters.delete(commandId);
+      waiter.resolve(result);
+    }
+  }
+
+  private rejectCommand<T extends { id: string; status: ExtensionCommandStatus; error?: string; updatedAt: string }>(
+    commands: Map<string, T>,
+    waiters: Map<string, CommandWaiter>,
+    commandId: string,
+    message: string
+  ): void {
+    const command = commands.get(commandId);
+    if (!command) throw new Error(`Extension command not found: ${commandId}`);
+    if (command.status === "failed" || command.status === "cancelled") return;
     command.status = "failed";
     command.error = message;
     command.updatedAt = new Date().toISOString();
-    this.focusWaiters.get(commandId)?.reject(new Error(message));
-    this.focusWaiters.delete(commandId);
-  }
-
-  requestTaskPause(taskId: string): void {
-    const task = this.getTask(taskId);
-    if (["completed", "failed", "cancelled"].includes(task.status)) return;
-    if (!task.pauseRequested) {
-      task.pauseRequested = true;
-      this.emitTaskEvent(task.id, "task.pause_requested", "Pause requested for active extension task", {
-        phase: task.phase,
-        subjectIndex: task.subjectIndex
-      });
+    const waiter = waiters.get(commandId);
+    if (waiter) {
+      clearTimeout(waiter.timer);
+      waiters.delete(commandId);
+      waiter.reject(new Error(message));
     }
-    task.updatedAt = new Date().toISOString();
   }
 
-  taskControl(taskId: string, clientId: string): ExtensionTaskControlPayload {
-    const task = this.getTask(taskId);
-    const client = this.assertCompatibleClient(clientId);
-    if (task.leasedClientId && task.leasedClientId !== client.id) {
-      throw new Error(`Extension task ${taskId} is leased to a different ChatGPT tab.`);
-    }
-    if (task.status === "running") {
-      task.updatedAt = new Date().toISOString();
-    }
-    return {
-      id: task.id,
-      kind: "task-control",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      status: task.status,
-      pauseRequested: task.pauseRequested,
-      cancelled: task.status === "cancelled",
-      updatedAt: task.updatedAt
-    };
-  }
-
-  getTaskImagePath(taskId: string, group: ExtensionImageGroup, imageIndex: number): string {
-    const task = this.getTask(taskId);
-    const imagePath =
-      group === "reference"
-        ? task.referenceImagePaths[imageIndex]
-        : task.subjectImagePath && imageIndex === task.subjectIndex
-          ? task.subjectImagePath
-          : undefined;
-    if (!imagePath) throw new Error(`Image not found: ${group}/${imageIndex}`);
-    return imagePath;
-  }
-
-  heartbeat(input: {
-    id?: string;
-    url?: string;
-    title?: string;
-    status?: string;
-    protocolVersion?: unknown;
-    extensionVersion?: unknown;
-    routingToken?: unknown;
-  }): ExtensionClientStatus {
-    const id = input.id?.trim() || "chatgpt-tab";
-    const protocolVersion = parseProtocolVersion(input.protocolVersion);
-    const compatible = protocolVersion === CHATGPT_EXTENSION_PROTOCOL_VERSION;
-    const routingToken = normalizeRoutingToken(input.routingToken);
-    const client: ExtensionClientStatus = {
-      id,
-      url: input.url ?? "",
-      title: input.title ?? "",
-      status: input.status ?? "ready",
-      protocolVersion,
-      extensionVersion: typeof input.extensionVersion === "string" ? input.extensionVersion : "unknown",
-      ...(routingToken ? { routingToken } : {}),
-      compatible,
-      incompatibilityReason: compatible
-        ? undefined
-        : `Reload the unpacked Chrome extension and refresh ChatGPT tabs. App requires extension protocol ${CHATGPT_EXTENSION_PROTOCOL_VERSION}.`,
-      lastSeenAt: new Date().toISOString()
-    };
-    this.clients.set(id, client);
-    return client;
-  }
-
-  listClients(): ExtensionClientStatus[] {
-    this.pruneStaleClients();
-    return [...this.clients.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
-  }
-
-  status(): {
-    connectedClients: ExtensionClientStatus[];
-    pending: number;
-    running: number;
-    labPending: number;
-    labRunning: number;
-    focusPending: number;
-    focusRunning: number;
-    requiredProtocolVersion: number;
-  } {
-    const counts = [...this.tasks.values()].reduce(
-      (acc, task) => {
-        if (task.status === "pending") acc.pending += 1;
-        if (task.status === "running") acc.running += 1;
-        return acc;
-      },
-      { pending: 0, running: 0 }
-    );
-    const labCounts = [...this.labCommands.values()].reduce(
-      (acc, command) => {
-        if (command.status === "pending") acc.labPending += 1;
-        if (command.status === "running") acc.labRunning += 1;
-        return acc;
-      },
-      { labPending: 0, labRunning: 0 }
-    );
-    const focusCounts = [...this.focusCommands.values()].reduce(
-      (acc, command) => {
-        if (command.status === "pending") acc.focusPending += 1;
-        if (command.status === "running") acc.focusRunning += 1;
-        return acc;
-      },
-      { focusPending: 0, focusRunning: 0 }
-    );
-    return {
-      connectedClients: this.listClients(),
-      requiredProtocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      ...counts,
-      ...labCounts,
-      ...focusCounts
-    };
-  }
-
-  findCompatibleClientForTarget(target: ChatGptExtensionTaskTarget): ExtensionClientStatus | undefined {
-    const normalizedTarget = normalizeTaskTarget(target);
-    this.pruneStaleClients();
-    const compatibleClients = [...this.clients.values()].filter((client) => client.compatible);
-    if (normalizedTarget.mode === "existing" && normalizedTarget.clientId) {
-      const exactClient = compatibleClients.find(
-        (client) => client.id === normalizedTarget.clientId && this.matchesTarget(normalizedTarget, client)
-      );
-      if (exactClient) return exactClient;
-    }
-    return compatibleClients.find((client) => this.matchesTarget(normalizedTarget, client));
-  }
-
-  completeTask(taskId: string, result: ExtensionTaskResult): void {
-    const task = this.getTask(taskId);
-    if (task.status === "cancelled") return;
-    task.status = "completed";
-    task.result = {
-      ...result,
-      outputs: mergeTaskOutputs(task.outputs, result.outputs)
-    };
-    task.updatedAt = new Date().toISOString();
-    this.emitTaskEvent(task.id, "task.completed", "Extension completed task", result.metadata);
-    this.waiters.get(taskId)?.resolve(task.result);
-    this.waiters.delete(taskId);
-  }
-
-  addTaskOutput(taskId: string, output: ExtensionTaskOutput): void {
-    const task = this.getTask(taskId);
-    if (task.status === "cancelled") return;
-    task.outputs = mergeTaskOutputs(task.outputs, [output]);
-    task.updatedAt = new Date().toISOString();
-    this.emitTaskEvent(taskId, "task.output", `Extension streamed output for subject ${output.subjectIndex + 1}`, {
-      subjectIndex: output.subjectIndex,
-      subjectName: output.subjectName,
-      name: output.name,
-      mimeType: output.mimeType,
-      metadata: output.metadata
-    });
-    this.events.emit(`task-output:${taskId}`, output);
-  }
-
-  failTask(taskId: string, message: string, data?: unknown): void {
-    const task = this.getTask(taskId);
-    if (task.status === "cancelled") return;
-    task.status = "failed";
-    task.error = message;
-    task.updatedAt = new Date().toISOString();
-    this.emitTaskEvent(task.id, "task.failed", message, data);
-    this.waiters.get(taskId)?.reject(new Error(message));
-    this.waiters.delete(taskId);
-  }
-
-  cancelTask(taskId: string): void {
-    const task = this.getTask(taskId);
-    task.status = "cancelled";
-    task.updatedAt = new Date().toISOString();
-    this.emitTaskEvent(task.id, "task.cancelled", "Task cancelled");
-    this.waiters.get(taskId)?.reject(new Error("Task cancelled"));
-    this.waiters.delete(taskId);
-  }
-
-  addTaskEvent(taskId: string, type: string, message: string, data?: unknown): void {
-    const task = this.getTask(taskId);
-    if (task.status === "cancelled") return;
-    task.updatedAt = new Date().toISOString();
-    this.emitTaskEvent(taskId, type, message, data);
-  }
-
-  waitForTask(taskId: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<ExtensionTaskResult> {
-    const task = this.getTask(taskId);
-    if (task.status === "completed" && task.result) return Promise.resolve(task.result);
-    if (task.status === "failed") return Promise.reject(new Error(task.error ?? "Extension task failed"));
-    if (task.status === "cancelled") return Promise.reject(new Error("Task cancelled"));
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.cancelTask(taskId);
-        reject(new Error("Timed out waiting for the Chrome extension to complete the task."));
-      }, options.timeoutMs);
-
-      const onAbort = () => {
-        clearTimeout(timeout);
-        this.cancelTask(taskId);
-        reject(new Error("Operation cancelled"));
-      };
-
-      this.waiters.set(taskId, {
-        resolve: (result) => {
-          clearTimeout(timeout);
-          options.signal.removeEventListener("abort", onAbort);
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timeout);
-          options.signal.removeEventListener("abort", onAbort);
-          reject(error);
-        }
-      });
-      options.signal.addEventListener("abort", onAbort, { once: true });
-    });
-  }
-
-  subscribeTask(taskId: string, listener: (event: ExtensionTaskEvent) => void): () => void {
-    const eventName = `task:${taskId}`;
-    this.events.on(eventName, listener);
-    return () => this.events.off(eventName, listener);
-  }
-
-  subscribeTaskOutput(taskId: string, listener: (output: ExtensionTaskOutput) => void): () => void {
-    const eventName = `task-output:${taskId}`;
-    this.events.on(eventName, listener);
-    return () => this.events.off(eventName, listener);
-  }
-
-  private getTask(taskId: string): ExtensionTask {
-    const task = this.tasks.get(taskId);
-    if (!task) throw new Error(`Extension task not found: ${taskId}`);
-    return task;
-  }
-
-  private getLabCommand(commandId: string): ExtensionLabCommand {
-    const command = this.labCommands.get(commandId);
-    if (!command) throw new Error(`Extension Workflow Lab command not found: ${commandId}`);
-    return command;
-  }
-
-  private getFocusCommand(commandId: string): ExtensionFocusCommand {
-    const command = this.focusCommands.get(commandId);
-    if (!command) throw new Error(`Extension focus command not found: ${commandId}`);
-    return command;
-  }
-
-  private assertCompatibleClient(clientId: string): ExtensionClientStatus {
-    this.pruneStaleClients();
-    const normalizedClientId = clientId.trim();
-    if (!normalizedClientId) {
-      throw new Error(
-        `ChatGPT extension task polling requires a client id. Reload the unpacked Chrome extension and refresh ChatGPT tabs. App requires extension protocol ${CHATGPT_EXTENSION_PROTOCOL_VERSION}.`
-      );
-    }
-
-    const client = this.clients.get(normalizedClientId);
-    if (!client) {
-      throw new Error(
-        `ChatGPT extension client ${normalizedClientId} has not checked in. Reload the unpacked Chrome extension and refresh ChatGPT tabs.`
-      );
-    }
-
-    if (!client.compatible) {
-      throw new Error(
-        client.incompatibilityReason ??
-          `Reload the unpacked Chrome extension and refresh ChatGPT tabs. App requires extension protocol ${CHATGPT_EXTENSION_PROTOCOL_VERSION}.`
-      );
-    }
-
-    return client;
-  }
-
-  private matchesTaskTarget(task: ExtensionTask, client: ExtensionClientStatus): boolean {
-    return this.matchesTarget(task.target, client);
-  }
-
-  private matchesTarget(target: ExtensionTaskTargetState, client: ExtensionClientStatus): boolean {
-    if (target.mode === "any") return true;
-    if (target.mode === "existing") return target.clientId === client.id || sameUrl(target.url, client.url);
-    if (target.clientId) return target.clientId === client.id;
-    return Boolean((target.routingToken && client.routingToken === target.routingToken) || sameUrl(target.url, client.url));
-  }
-
-  private pruneStaleClients(now = Date.now()): void {
-    for (const [id, client] of this.clients) {
-      if (now - Date.parse(client.lastSeenAt) > CLIENT_TTL_MS) {
-        this.clients.delete(id);
+  private expireCommands<T extends { id: string; status: ExtensionCommandStatus; createdAt: string; error?: string }>(
+    commands: Map<string, T>,
+    waiters: Map<string, CommandWaiter>,
+    timeoutMs: number
+  ): void {
+    const now = Date.now();
+    for (const command of commands.values()) {
+      if (command.status !== "pending") continue;
+      if (now - Date.parse(command.createdAt) <= timeoutMs) continue;
+      command.status = "failed";
+      command.error = `Timed out waiting for browser extension command ${command.id} to be picked up.`;
+      if ("clientId" in command && typeof command.clientId === "string") this.markCommandUnhealthy(command.clientId);
+      const waiter = waiters.get(command.id);
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        waiters.delete(command.id);
+        waiter.reject(new Error(command.error));
       }
     }
   }
 
-  private emitTaskEvent(taskId: string, type: string, message: string, data?: unknown): void {
-    const event: ExtensionTaskEvent = {
-      taskId,
-      type,
-      message,
-      data,
-      createdAt: new Date().toISOString()
-    };
-    this.events.emit(`task:${taskId}`, event);
+  private requireCompatibleClient(clientId: string): ExtensionClientStatus {
+    this.prune();
+    const client = this.clients.get(clientId);
+    if (!client) throw new Error("Browser extension client has not checked in. Reload the unpacked extension and refresh the tab.");
+    if (!client.compatible) {
+      throw new Error(
+        client.incompatibilityReason ??
+          `Reload the unpacked BLINK browser extension and refresh browser tabs. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION}.`
+      );
+    }
+    return client;
   }
 
-  private toPayload(task: ExtensionTask): ExtensionTaskPayload {
-    return {
-      id: task.id,
-      kind: task.kind,
-      phase: task.phase,
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      runId: task.runId,
-      ...(task.masterPrompt ? { masterPrompt: task.masterPrompt } : {}),
-      ...(task.referenceImagePaths.length > 0
-        ? {
-            referenceImages: task.referenceImagePaths.map((imagePath, index) =>
-              this.toImagePayload(task.id, "reference", imagePath, index)
-            )
-          }
-        : {}),
-      ...(task.subjectImagePath !== undefined && task.subjectIndex !== undefined
-        ? {
-            subjectMode: task.subjectMode,
-            subjectImage: this.toImagePayload(task.id, "subject", task.subjectImagePath, task.subjectIndex)
-          }
-        : {}),
-      subjectInstruction: task.subjectInstruction,
-      ...(task.subjectBaseline !== undefined ? { subjectBaseline: task.subjectBaseline } : {}),
-      selectors: task.selectors,
-      createdAt: task.createdAt
-    };
+  private requireCompatibleController(controllerId: string): ExtensionControllerStatus {
+    this.prune();
+    const controller = this.controllers.get(controllerId);
+    if (!controller) {
+      throw new Error("BLINK browser controller has not checked in. Reload the unpacked extension and open any page in that browser profile.");
+    }
+    if (!controller.compatible) {
+      throw new Error(
+        controller.incompatibilityReason ??
+          `Reload the unpacked BLINK browser extension. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION}.`
+      );
+    }
+    return controller;
   }
 
-  private toImagePayload(
-    taskId: string,
-    group: ExtensionImageGroup,
-    imagePath: string,
-    index: number
-  ): ExtensionTaskImagePayload {
-    return {
-      index,
-      name: path.basename(imagePath),
-      mimeType: inferMimeType(imagePath) ?? "application/octet-stream",
-      url: `/api/extension/tasks/${taskId}/images/${group}/${index}`
-    };
+  private prune(): void {
+    const cutoff = Date.now() - CLIENT_TTL_MS;
+    for (const [clientId, client] of this.clients.entries()) {
+      if (Date.parse(client.lastSeenAt) < cutoff) this.clients.delete(clientId);
+    }
+    const controllerCutoff = Date.now() - CONTROLLER_TTL_MS;
+    for (const [controllerId, controller] of this.controllers.entries()) {
+      if (Date.parse(controller.lastSeenAt) < controllerCutoff) this.controllers.delete(controllerId);
+    }
+    const unhealthyCutoff = Date.now() - COMMAND_CLIENT_COOLDOWN_MS;
+    for (const [clientId, unhealthySince] of this.commandUnhealthySince.entries()) {
+      if (unhealthySince < unhealthyCutoff || !this.clients.has(clientId)) this.commandUnhealthySince.delete(clientId);
+    }
+    const fileCutoff = Date.now() - 60 * 60_000;
+    for (const [fileId, file] of this.stagedFiles.entries()) {
+      if (file.createdAt < fileCutoff) this.stagedFiles.delete(fileId);
+    }
+  }
+
+  private isCommandHealthy(clientId: string): boolean {
+    const unhealthySince = this.commandUnhealthySince.get(clientId);
+    if (!unhealthySince) return true;
+    if (Date.now() - unhealthySince > COMMAND_CLIENT_COOLDOWN_MS) {
+      this.commandUnhealthySince.delete(clientId);
+      return true;
+    }
+    return false;
+  }
+
+  private markCommandUnhealthy(clientId: string): void {
+    this.commandUnhealthySince.set(clientId, Date.now());
+  }
+
+  private markCommandHealthy(clientId: string): void {
+    this.commandUnhealthySince.delete(clientId);
   }
 }
 
 export const extensionBridge = new ExtensionBridge();
 
-function parseProtocolVersion(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
   }
-  return null;
+  return undefined;
 }
 
-function normalizeRoutingToken(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+function routingTokenFromUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    const searchToken = url.searchParams.get(BLINK_ROUTING_TOKEN_PARAM)?.trim();
+    if (searchToken) return searchToken;
+    const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+    return hash.get(BLINK_ROUTING_TOKEN_PARAM)?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function openableTargetUrl(target: ExtensionBrowserTarget): string | undefined {
+  if (target.mode === "any") return undefined;
+  const rawUrl = target.url?.trim();
+  if (!rawUrl) return undefined;
+  const url = new URL(safeExtensionTabUrl(rawUrl));
+  if (target.mode === "new" && target.routingToken) {
+    const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+    if (!hash.get(BLINK_ROUTING_TOKEN_PARAM)) {
+      hash.set(BLINK_ROUTING_TOKEN_PARAM, target.routingToken);
+      url.hash = hash.toString();
+    }
+  }
+  return url.toString();
+}
+
+function safeExtensionTabUrl(value: string): string {
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  if (!trimmed) throw new Error("Extension tab URL is required.");
+  const url = new URL(trimmed);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Extension tab URL must use http or https: ${value}`);
+  }
+  return url.toString();
 }
 
-function normalizeTaskTarget(target?: ChatGptExtensionTaskTarget): ExtensionTaskTargetState {
-  if (!target || target.mode === "any") return { mode: "any" };
-  if (target.mode === "existing") {
-    const clientId = target.clientId.trim();
-    if (!clientId) throw new Error("ChatGPT extension target client id is required.");
-    return { mode: "existing", clientId, url: normalizeComparableUrl(target.url) };
-  }
-
-  const routingToken = normalizeRoutingToken(target.routingToken);
-  if (!routingToken) throw new Error("ChatGPT extension new-tab routing token is required.");
-  return { mode: "new", routingToken, url: normalizeComparableUrl(target.url) };
-}
-
-function describeTaskTarget(task: ExtensionTask): string {
-  const phase = task.phase === "setup" ? "setup" : `subject ${Number(task.subjectIndex ?? 0) + 1}`;
-  const target = task.target;
-  if (target.mode === "existing") return "Queued task for selected ChatGPT tab";
-  if (target.mode === "new") return `Queued ${phase} task for new ChatGPT tab`;
-  return `Queued ${phase} task for ChatGPT extension`;
-}
-
-function mergeTaskOutputs(existing: ExtensionTaskOutput[], incoming: ExtensionTaskOutput[] = []): ExtensionTaskOutput[] {
-  const merged = new Map<string, ExtensionTaskOutput>();
-  for (const output of [...existing, ...incoming]) {
-    merged.set(outputKey(output), output);
-  }
-  return [...merged.values()];
-}
-
-function outputKey(output: ExtensionTaskOutput): string {
-  return `${output.subjectIndex}:${output.mimeType ?? "image/png"}:${output.base64}`;
-}
-
-function validateTaskShape(task: ExtensionTask): void {
-  if (task.phase === "setup") {
-    if (!task.masterPrompt?.trim()) throw new Error("ChatGPT setup task requires masterPrompt.");
-    return;
-  }
-
-  if (task.subjectMode !== "submit-and-capture" && task.subjectMode !== "capture-existing") {
-    throw new Error("ChatGPT subject task mode is invalid.");
-  }
-  if (!Number.isInteger(task.subjectIndex) || (task.subjectIndex ?? -1) < 0) {
-    throw new Error("ChatGPT subject task requires subjectIndex.");
-  }
-  if (!task.subjectImagePath) throw new Error("ChatGPT subject task requires subjectImagePath.");
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error("Operation cancelled"));
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(resolve, ms);
+    const abort = () => {
+      clearTimeout(timeout);
+      reject(new Error("Operation cancelled"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function normalizeComparableUrl(value: string | undefined): string | undefined {
@@ -857,12 +813,12 @@ function sameUrl(left: string | undefined, right: string | undefined): boolean {
 function removeRoutingToken(url: URL): void {
   const search = new URLSearchParams(url.search);
   const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-  if (search.has("based-blink-tab")) {
-    search.delete("based-blink-tab");
+  if (search.has(BLINK_ROUTING_TOKEN_PARAM)) {
+    search.delete(BLINK_ROUTING_TOKEN_PARAM);
     url.search = search.toString();
   }
-  if (hash.has("based-blink-tab")) {
-    hash.delete("based-blink-tab");
+  if (hash.has(BLINK_ROUTING_TOKEN_PARAM)) {
+    hash.delete(BLINK_ROUTING_TOKEN_PARAM);
     url.hash = hash.toString();
   }
 }

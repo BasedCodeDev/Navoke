@@ -9,7 +9,7 @@ This repo is a local Electron app for browser-based automation workflows. New au
 - Workflows live in `src/main/workflows`.
 - Shared workflow contracts live in `src/main/runtime/types.ts`.
 - Artifacts are files on disk registered through `ctx.addArtifact()`.
-- The unpacked ChatGPT Chrome extension lives in `extension/chatgpt-controller` and communicates with Electron through `http://127.0.0.1:39201` by default.
+- The unpacked BLINK browser controller extension lives in `extension` and communicates with Electron through `http://127.0.0.1:39201` by default.
 
 ## Adding a Workflow
 
@@ -100,16 +100,16 @@ Use Playwright workflows for sites where a separate automation browser is accept
 
 Use the Chrome extension path when the workflow must run inside the user's normal browser account session.
 
-- Use `src/main/extension/extensionBridge.ts` for queued extension tasks.
-- The extension polls `/api/extension/tasks/next`, fetches input images from `/api/extension/tasks/:id/images/:index`, then posts progress, completion, or failure back to the app.
-- Main-process workflows should create extension tasks, subscribe to bridge events, wait for completion, and register returned files as artifacts.
-- Extension scripts are plain JavaScript under `extension/chatgpt-controller`; run `node --check` on changed files.
-- Keep extension selectors configurable where the target UI may change.
+- Use `src/main/extension/extensionBridge.ts` for queued generic browser commands.
+- The extension polls `/api/extension/commands/next`, fetches staged files from `/api/extension/files/:fileId`, then posts command completion or failure back to the app.
+- Plugins own target-site URLs, selectors, waits, and sequencing. They should drive the browser through `sdk.extension.browser` commands instead of adding site logic to the extension.
+- Extension scripts are plain JavaScript under `extension`; run `node --check` on changed files.
+- Keep selectors configurable in plugin code where the target UI may change.
 - Never add logic intended to evade human verification. If the site asks for verification, report it and let the user handle it manually in the normal browser tab.
 
 ## Workflow Lab
 
-Detailed Workflow Lab guidance lives in `.agents/skills/workflow-lab/SKILL.md`. Use that skill when inspecting pages, calibrating selectors, debugging ChatGPT tab states, adding Lab actions, adding Lab wait conditions, or turning Lab observations into workflow code.
+Detailed Workflow Lab guidance lives in `.agents/skills/workflow-lab/SKILL.md`. Use that skill when inspecting pages, calibrating selectors, debugging extension-backed tab states, adding Lab actions, adding Lab wait conditions, or turning Lab observations into workflow code.
 
 For browser plugin workflows, pair Workflow Lab with the BLINK CLI skill. Run the installed plugin with real inputs, capture exact failures and trace artifacts through `blink`, inspect the page state with Workflow Lab or trace snapshots, patch the plugin and tests, reload the installed plugin copy, and rerun until the intended artifact is produced. The durable loop is documented in `Docs/workflow-lab-cli-plugin-calibration.md`.
 
@@ -138,8 +138,9 @@ Run these before handing off changes:
 npm.cmd run typecheck
 npm.cmd test
 npm.cmd run build
-node --check extension\chatgpt-controller\content.js
-node --check extension\chatgpt-controller\popup.js
+node --check extension\content.js
+node --check extension\popup.js
+node --check extension\background.js
 ```
 
 When adding a workflow:

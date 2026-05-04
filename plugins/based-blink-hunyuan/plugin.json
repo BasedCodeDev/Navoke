@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "pluginApiVersion": "1",
   "entrypoint": "dist/index.js",
-  "workflows": ["based-blink.hunyuan.image-to-model"],
-  "capabilities": ["filesystem.artifacts", "browser"]
+  "workflows": ["based-blink.hunyuan.image-to-model", "based-blink.hunyuan.global.image-to-model"],
+  "capabilities": ["filesystem.artifacts", "browser", "extension.browser"]
 }

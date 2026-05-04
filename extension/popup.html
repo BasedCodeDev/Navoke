@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Based BLINK</title>
+    <style>
+      body {
+        min-width: 260px;
+        margin: 0;
+        padding: 14px;
+        background: #111827;
+        color: #e5e7eb;
+        font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 15px;
+      }
+      .status {
+        border: 1px solid #374151;
+        border-radius: 6px;
+        padding: 10px;
+        line-height: 1.35;
+      }
+      .muted {
+        color: #9ca3af;
+      }
+      .ok {
+        color: #86efac;
+      }
+      .warn {
+        color: #fbbf24;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Based BLINK Browser Controller</h1>
+    <div id="status" class="status muted">Checking local BLINK app...</div>
+    <script src="popup.js"></script>
+  </body>
+</html>

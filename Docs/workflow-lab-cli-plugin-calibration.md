@@ -104,8 +104,9 @@ Good selector fixes are scoped to a stable nearby panel or workflow phase. Avoid
 npm.cmd run typecheck
 npm.cmd test
 npm.cmd run build
-node --check extension\chatgpt-controller\content.js
-node --check extension\chatgpt-controller\popup.js
+node --check extension\content.js
+node --check extension\popup.js
+node --check extension\background.js
 ```
 
 If Vitest or Vite fails with `spawn EPERM` under sandboxing, rerun that same command with the required escalation so esbuild can spawn its helper process.

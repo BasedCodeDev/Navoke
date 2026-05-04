@@ -144,16 +144,16 @@ describe("LocalWorkflowRunner", () => {
     store.close();
   });
 
-  it("opens safe routed ChatGPT tabs for CLI-origin runs only", async () => {
+  it("does not open routed extension tabs through the OS for CLI-origin runs", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
     tempDirs.push(dir);
     const paths = createRuntimePaths(dir);
     const store = await SqliteStore.open(paths.dbPath);
-    const workflow: WorkflowDefinition<{ chatGptTab?: unknown }, { ok: boolean }> = {
+    const workflow: WorkflowDefinition<{ extensionTab?: unknown }, { ok: boolean }> = {
       manifest: {
-        id: "test.chatgpt-cli-open",
-        title: "ChatGPT CLI Open Workflow",
-        description: "Runtime ChatGPT tab opener test workflow",
+        id: "test.extension-cli-open",
+        title: "Extension CLI Open Workflow",
+        description: "Runtime extension tab opener test workflow",
         category: "chatgpt",
         version: "0.0.0",
         concurrency: 1,
@@ -161,49 +161,43 @@ describe("LocalWorkflowRunner", () => {
         outputKinds: ["json"],
         requiresBrowser: false
       },
-      inputSchema: z.object({ chatGptTab: z.unknown().optional() }),
+      inputSchema: z.object({ extensionTab: z.unknown().optional() }),
       outputSchema: z.object({ ok: z.boolean() }),
       async run() {
         return { ok: true };
       }
     };
-    const openedUrls: string[] = [];
     const runner = new LocalWorkflowRunner(
       new Map([[workflow.manifest.id, workflow]]),
       store,
       paths,
-      new RuntimeEventBus(),
-      {
-        openExternalUrl: (url) => {
-          openedUrls.push(url);
-        }
-      }
+      new RuntimeEventBus()
     );
 
-    const safeUrl = "https://chatgpt.com/#based-blink-tab=run-token-1";
-    const chatGptTab = { mode: "new", routingToken: "run-token-1", url: safeUrl };
+    const safeUrl = "https://example.test/#based-blink-tab=run-token-1";
+    const extensionTab = { mode: "new", routingToken: "run-token-1", url: safeUrl };
     runner.enqueue({
       workflowId: workflow.manifest.id,
-      workflowInput: { chatGptTab },
+      workflowInput: { extensionTab },
       origin: { source: "cli" }
     });
     runner.enqueue({
       workflowId: workflow.manifest.id,
-      workflowInput: { chatGptTab },
+      workflowInput: { extensionTab },
       origin: { source: "ui" }
     });
     runner.enqueue({
       workflowId: workflow.manifest.id,
-      workflowInput: { chatGptTab: { mode: "existing", clientId: "tab-1" } },
+      workflowInput: { extensionTab: { mode: "existing", clientId: "tab-1" } },
       origin: { source: "cli" }
     });
     runner.enqueue({
       workflowId: workflow.manifest.id,
       workflowInput: {
-        chatGptTab: {
+        extensionTab: {
           mode: "new",
           routingToken: "run-token-2",
-          url: "https://example.test/#based-blink-tab=run-token-2"
+          url: "https://another.example/#based-blink-tab=run-token-2"
         }
       },
       origin: { source: "cli" }
@@ -211,16 +205,15 @@ describe("LocalWorkflowRunner", () => {
     runner.enqueue({
       workflowId: workflow.manifest.id,
       workflowInput: {
-        chatGptTab: {
+        extensionTab: {
           mode: "new",
           routingToken: "run-token-3",
-          url: "https://chatgpt.com/#based-blink-tab=other-token"
+          url: "https://example.test/#based-blink-tab=other-token"
         }
       },
       origin: { source: "cli" }
     });
 
-    expect(openedUrls).toEqual([safeUrl]);
     await waitFor(() => store.listRuns().filter((run) => run.status === "completed").length === 5);
     store.close();
   });

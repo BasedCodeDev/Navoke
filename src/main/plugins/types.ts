@@ -10,7 +10,7 @@ const relativeEntrypointSchema = z.string().min(1).refine((value) => !value.star
   message: "Entrypoint must be a relative path."
 });
 
-export const workflowPluginCapabilitySchema = z.enum(["filesystem.artifacts", "browser", "extension.chatgpt"]);
+export const workflowPluginCapabilitySchema = z.enum(["filesystem.artifacts", "browser", "extension.browser"]);
 
 export const pluginManifestSchema = z.object({
   id: pluginIdSchema,

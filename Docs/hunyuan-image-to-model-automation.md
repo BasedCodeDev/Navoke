@@ -74,8 +74,9 @@ The following checks have been run repeatedly after the Hunyuan workflow changes
 npm.cmd run typecheck
 npm.cmd test
 npm.cmd run build
-node --check extension\chatgpt-controller\content.js
-node --check extension\chatgpt-controller\popup.js
+node --check extension\content.js
+node --check extension\popup.js
+node --check extension\background.js
 ```
 
 Additional local Playwright probes were used to confirm that calibrated selectors resolve and click against representative HTML before applying them back to the workflow.

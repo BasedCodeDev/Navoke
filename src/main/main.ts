@@ -123,9 +123,7 @@ async function openProject(projectDir: string): Promise<AppConfig> {
   const paths = createRuntimePaths(projectDir);
   const eventBus = new RuntimeEventBus();
   const store = await SqliteStore.open(paths.dbPath);
-  const runner = new LocalWorkflowRunner(workflows, store, paths, eventBus, {
-    openExternalUrl: (url) => shell.openExternal(url)
-  });
+  const runner = new LocalWorkflowRunner(workflows, store, paths, eventBus);
   const workflowLab = new WorkflowLab(paths, extensionBridge);
   const apiServer = new ApiServer({
     store,

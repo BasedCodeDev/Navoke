@@ -11,19 +11,19 @@ const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const node_crypto_1 = require("node:crypto");
 const CHATGPT_NEW_TAB_URL = "https://chatgpt.com/";
-const CHATGPT_TAB_ROUTING_PARAM = "based-blink-tab";
-function buildNewChatGptTabUrl(routingToken) {
+const EXTENSION_TAB_ROUTING_PARAM = "based-blink-tab";
+function buildNewExtensionTabUrl(routingToken) {
     const url = new URL(CHATGPT_NEW_TAB_URL);
-    url.hash = `${CHATGPT_TAB_ROUTING_PARAM}=${encodeURIComponent(routingToken)}`;
+    url.hash = `${EXTENSION_TAB_ROUTING_PARAM}=${encodeURIComponent(routingToken)}`;
     return url.toString();
 }
-function createDefaultChatGptTabTarget() {
+function createDefaultExtensionTabTarget() {
     const routingToken = (0, node_crypto_1.randomUUID)();
-    return { mode: "new", routingToken, url: buildNewChatGptTabUrl(routingToken) };
+    return { mode: "new", routingToken, url: buildNewExtensionTabUrl(routingToken) };
 }
 function createWorkflows(sdk) {
     const { z } = sdk.schema;
-    const chatgpt = sdk.extension.chatgpt;
+    const chatgpt = createChatGptBrowserController(sdk.extension.browser, sdk.sleep);
     const sleep = sdk.sleep;
     const { inferMimeType, writeJson } = sdk.files;
     const selectorsSchema = z
@@ -32,6 +32,7 @@ function createWorkflows(sdk) {
         composer: z.string().optional(),
         submitButton: z.string().optional(),
         stopButton: z.string().optional(),
+        removeAttachmentButton: z.string().optional(),
         outputImage: z.string().optional()
     })
         .default({});
@@ -61,7 +62,7 @@ function createWorkflows(sdk) {
         outputMappings: z.array(outputMappingSchema),
         pausedSubject: pausedSubjectSchema.nullable().optional()
     });
-    const chatGptTabSchema = z
+    const extensionTabSchema = z
         .discriminatedUnion("mode", [
         z.object({ mode: z.literal("any") }),
         z.object({
@@ -77,14 +78,14 @@ function createWorkflows(sdk) {
             title: z.string().trim().optional()
         })
     ])
-        .default(createDefaultChatGptTabTarget);
+        .default(createDefaultExtensionTabTarget);
     const inputSchema = z.object({
         referenceImages: z.array(z.string()).optional().default([]),
         subjectImages: z.array(z.string()).min(1, "Choose at least one subject image."),
         masterPrompt: z.string().min(1, "Master prompt is required."),
         subjectInstruction: z.string().optional().default(""),
         timeoutMinutes: z.number().min(1).max(240).optional().default(60),
-        chatGptTab: chatGptTabSchema,
+        extensionTab: extensionTabSchema,
         selectors: selectorsSchema
     });
     const outputSchema = z.object({
@@ -124,7 +125,7 @@ function createWorkflows(sdk) {
         prompts: promptSequenceSchema,
         masterPrompt: z.string().optional().default("").transform((value) => value.trim()),
         timeoutMinutes: z.number().min(1).max(240).optional().default(60),
-        chatGptTab: chatGptTabSchema,
+        extensionTab: extensionTabSchema,
         selectors: selectorsSchema
     });
     const sequenceOutputSchema = z.object({
@@ -144,12 +145,12 @@ function createWorkflows(sdk) {
             requiresBrowser: false,
             targetUrl: "https://chatgpt.com/",
             outputKinds: ["image", "json"],
-            uiCapabilities: ["chatgpt.tabRouting", "chatgpt.focusTarget", "chatgpt.artifactPairs"],
+            uiCapabilities: ["extension.tabRouting", "extension.focusTarget"],
             inputFields: [
                 { name: "referenceImages", label: "Reference images", type: "fileList" },
                 { name: "subjectImages", label: "Subject images", type: "fileList", required: true },
                 {
-                    name: "chatGptTab",
+                    name: "extensionTab",
                     label: "ChatGPT tab",
                     type: "select",
                     help: "Target a compatible open ChatGPT tab, or open a new tab for this run."
@@ -177,7 +178,7 @@ function createWorkflows(sdk) {
             let outputProcessing = Promise.resolve();
             let outputProcessingError;
             let setupCompleted = false;
-            let latestChatGptPage = buildChatGptPage(input.chatGptTab, undefined, undefined);
+            let latestChatGptPage = buildChatGptPage(input.extensionTab, undefined, undefined);
             let pausedSubject;
             const restored = restoreCheckpointState(ctx.previousOutput, input, artifactDir);
             for (const restoredArtifactId of restored.artifactIds)
@@ -209,8 +210,8 @@ function createWorkflows(sdk) {
                 phase,
                 pausedSubject: pausedSubject ?? null,
                 chatGptPage: latestChatGptPage ?? null,
-                url: latestChatGptPage?.url ?? targetUrl(input.chatGptTab) ?? null,
-                target: buildRecoverableTarget(input.chatGptTab, latestChatGptPage)
+                url: latestChatGptPage?.url ?? targetUrl(input.extensionTab) ?? null,
+                target: buildRecoverableTarget(input.extensionTab, latestChatGptPage)
             });
             const registerOutputArtifact = async (output, taskId) => {
                 const subjectIndex = output.subjectIndex;
@@ -275,20 +276,22 @@ function createWorkflows(sdk) {
                 void outputProcessing;
             };
             const waitForTargetAtCheckpoint = async (phase) => {
-                let target = buildRecoverableTarget(input.chatGptTab, latestChatGptPage);
-                let client = await waitForCompatibleTarget(target, ctx.signal, 45_000);
-                while (!client) {
-                    await persistCheckpointOutput(`Waiting for ChatGPT tab before ${phase}.`);
-                    await ctx.waitForManualAction(`Open the tracked ChatGPT page, wait for the Based BLINK extension to reconnect, then resume this run.`, manualActionData(phase));
-                    target = buildRecoverableTarget(input.chatGptTab, latestChatGptPage);
-                    client = await waitForCompatibleTarget(target, ctx.signal, 10_000);
+                while (true) {
+                    const target = buildRecoverableTarget(input.extensionTab, latestChatGptPage);
+                    try {
+                        const client = await chatgpt.ensureRoutedTab(target, { signal: ctx.signal, timeoutMs: 45_000 });
+                        const page = buildChatGptPage(target, { url: client.url, title: client.title }, client);
+                        if (page && chatGptPageChanged(page, latestChatGptPage)) {
+                            latestChatGptPage = page;
+                            await persistCheckpointOutput(`Tracking ChatGPT page before ${phase}.`);
+                        }
+                        return { target: buildRecoverableTarget(target, page), client };
+                    }
+                    catch (error) {
+                        await persistCheckpointOutput(`Waiting for ChatGPT browser controller before ${phase}.`);
+                        await ctx.waitForManualAction(chatGptControllerManualMessage(error), manualActionData(phase));
+                    }
                 }
-                const page = buildChatGptPage(target, { url: client.url, title: client.title }, client);
-                if (page && page.url !== latestChatGptPage?.url) {
-                    latestChatGptPage = page;
-                    await persistCheckpointOutput(`Tracking ChatGPT page before ${phase}.`);
-                }
-                return { target, client };
             };
             const runPhaseTask = async (phase, phaseLabel, phaseInput) => {
                 while (true) {
@@ -323,7 +326,7 @@ function createWorkflows(sdk) {
                     try {
                         const result = await waitForTaskWithRecoverableTarget(task.id, target, ctx, input.timeoutMinutes * 60_000, async (client) => {
                             const page = buildChatGptPage(target, { url: client.url, title: client.title }, client);
-                            if (page && page.url !== latestChatGptPage?.url) {
+                            if (page && chatGptPageChanged(page, latestChatGptPage)) {
                                 latestChatGptPage = page;
                                 await persistCheckpointOutput(`Tracking ChatGPT page during ${phaseLabel}.`);
                             }
@@ -375,9 +378,8 @@ function createWorkflows(sdk) {
                             await ctx.waitForManualAction(`Paused during ChatGPT ${phaseLabel}. Refresh the ChatGPT page if needed, then resume this run.`, manualActionData(phaseLabel));
                             continue;
                         }
-                        if (error instanceof MissingChatGptTabError) {
+                        if (error instanceof MissingExtensionTabError) {
                             await persistCheckpointOutput(`ChatGPT tab disconnected during ${phaseLabel}.`);
-                            await ctx.waitForManualAction(`The ChatGPT tab disconnected during ${phaseLabel}. Open the tracked ChatGPT page, wait for the extension to reconnect, then resume this run.`, manualActionData(phaseLabel));
                             continue;
                         }
                         throw error;
@@ -447,7 +449,7 @@ function createWorkflows(sdk) {
                 referenceImages: input.referenceImages,
                 subjectImages: input.subjectImages,
                 subjectInstruction: input.subjectInstruction,
-                chatGptTab: redactTargetForManifest(input.chatGptTab),
+                extensionTab: redactTargetForManifest(input.extensionTab),
                 chatGptPage: latestChatGptPage ?? null,
                 selectors: input.selectors,
                 outputMappings
@@ -483,11 +485,11 @@ function createWorkflows(sdk) {
             requiresBrowser: false,
             targetUrl: "https://chatgpt.com/",
             outputKinds: ["image", "json"],
-            uiCapabilities: ["chatgpt.tabRouting", "chatgpt.focusTarget", "chatgpt.artifactPairs"],
+            uiCapabilities: ["extension.tabRouting", "extension.focusTarget"],
             inputFields: [
                 { name: "sourceImages", label: "Source image", type: "fileList", required: true },
                 {
-                    name: "chatGptTab",
+                    name: "extensionTab",
                     label: "ChatGPT tab",
                     type: "select",
                     help: "Target a compatible open ChatGPT tab, or open a new tab for this run."
@@ -529,7 +531,7 @@ function createWorkflows(sdk) {
             let outputProcessing = Promise.resolve();
             let outputProcessingError;
             let setupCompleted = false;
-            let latestChatGptPage = buildChatGptPage(input.chatGptTab, undefined, undefined);
+            let latestChatGptPage = buildChatGptPage(input.extensionTab, undefined, undefined);
             let pausedPrompt;
             const restored = restoreSequenceCheckpointState(ctx.previousOutput, input, artifactDir);
             for (const restoredArtifactId of restored.artifactIds)
@@ -563,8 +565,8 @@ function createWorkflows(sdk) {
                 phase,
                 pausedPrompt: pausedPrompt ?? null,
                 chatGptPage: latestChatGptPage ?? null,
-                url: latestChatGptPage?.url ?? targetUrl(input.chatGptTab) ?? null,
-                target: buildRecoverableTarget(input.chatGptTab, latestChatGptPage)
+                url: latestChatGptPage?.url ?? targetUrl(input.extensionTab) ?? null,
+                target: buildRecoverableTarget(input.extensionTab, latestChatGptPage)
             });
             const registerOutputArtifact = async (output, taskId) => {
                 const promptIndex = output.subjectIndex;
@@ -634,20 +636,22 @@ function createWorkflows(sdk) {
                 void outputProcessing;
             };
             const waitForTargetAtCheckpoint = async (phase) => {
-                let target = buildRecoverableTarget(input.chatGptTab, latestChatGptPage);
-                let client = await waitForCompatibleTarget(target, ctx.signal, 45_000);
-                while (!client) {
-                    await persistCheckpointOutput(`Waiting for ChatGPT tab before ${phase}.`);
-                    await ctx.waitForManualAction(`Open the tracked ChatGPT page, wait for the Based BLINK extension to reconnect, then resume this run.`, manualActionData(phase));
-                    target = buildRecoverableTarget(input.chatGptTab, latestChatGptPage);
-                    client = await waitForCompatibleTarget(target, ctx.signal, 10_000);
+                while (true) {
+                    const target = buildRecoverableTarget(input.extensionTab, latestChatGptPage);
+                    try {
+                        const client = await chatgpt.ensureRoutedTab(target, { signal: ctx.signal, timeoutMs: 45_000 });
+                        const page = buildChatGptPage(target, { url: client.url, title: client.title }, client);
+                        if (page && chatGptPageChanged(page, latestChatGptPage)) {
+                            latestChatGptPage = page;
+                            await persistCheckpointOutput(`Tracking ChatGPT page before ${phase}.`);
+                        }
+                        return { target: buildRecoverableTarget(target, page), client };
+                    }
+                    catch (error) {
+                        await persistCheckpointOutput(`Waiting for ChatGPT browser controller before ${phase}.`);
+                        await ctx.waitForManualAction(chatGptControllerManualMessage(error), manualActionData(phase));
+                    }
                 }
-                const page = buildChatGptPage(target, { url: client.url, title: client.title }, client);
-                if (page && page.url !== latestChatGptPage?.url) {
-                    latestChatGptPage = page;
-                    await persistCheckpointOutput(`Tracking ChatGPT page before ${phase}.`);
-                }
-                return { target, client };
             };
             const runPhaseTask = async (phase, phaseLabel, phaseInput) => {
                 while (true) {
@@ -682,7 +686,7 @@ function createWorkflows(sdk) {
                     try {
                         const result = await waitForTaskWithRecoverableTarget(task.id, target, ctx, input.timeoutMinutes * 60_000, async (client) => {
                             const page = buildChatGptPage(target, { url: client.url, title: client.title }, client);
-                            if (page && page.url !== latestChatGptPage?.url) {
+                            if (page && chatGptPageChanged(page, latestChatGptPage)) {
                                 latestChatGptPage = page;
                                 await persistCheckpointOutput(`Tracking ChatGPT page during ${phaseLabel}.`);
                             }
@@ -736,9 +740,8 @@ function createWorkflows(sdk) {
                             await ctx.waitForManualAction(`Paused during ChatGPT ${phaseLabel}. Refresh the ChatGPT page if needed, then resume this run.`, manualActionData(phaseLabel));
                             continue;
                         }
-                        if (error instanceof MissingChatGptTabError) {
+                        if (error instanceof MissingExtensionTabError) {
                             await persistCheckpointOutput(`ChatGPT tab disconnected during ${phaseLabel}.`);
-                            await ctx.waitForManualAction(`The ChatGPT tab disconnected during ${phaseLabel}. Open the tracked ChatGPT page, wait for the extension to reconnect, then resume this run.`, manualActionData(phaseLabel));
                             continue;
                         }
                         throw error;
@@ -824,7 +827,7 @@ function createWorkflows(sdk) {
                 masterPrompt: input.masterPrompt,
                 sourceImages: input.sourceImages,
                 prompts: input.prompts,
-                chatGptTab: redactTargetForManifest(input.chatGptTab),
+                extensionTab: redactTargetForManifest(input.extensionTab),
                 chatGptPage: latestChatGptPage ?? null,
                 selectors: input.selectors,
                 outputMappings
@@ -858,7 +861,7 @@ function createWorkflows(sdk) {
         const output = readStoredOutput(run.output);
         if (output?.checkpoint || output?.chatGptPage)
             return true;
-        return Boolean(targetUrl(parsedInput.data.chatGptTab));
+        return Boolean(targetUrl(parsedInput.data.extensionTab));
     }
     function readStoredOutput(value) {
         const parsed = outputSchema.safeParse(value);
@@ -926,13 +929,7 @@ function createWorkflows(sdk) {
             !completedSubjects.has(storedPausedSubject.subjectIndex)) {
             return storedPausedSubject;
         }
-        const firstUnfinished = input.subjectImages.findIndex((_subject, index) => !completedSubjects.has(index));
-        if (firstUnfinished < 0)
-            return undefined;
-        return {
-            subjectIndex: firstUnfinished,
-            reason: "Resuming a failed ChatGPT run. Resume will inspect the current page for an output before resubmitting this subject."
-        };
+        return undefined;
     }
     function canResumeFailedChatGptSequenceRun(run) {
         if (run.status !== "failed" || run.workflowId !== "based-blink.chatgpt.extension-image-sequence")
@@ -943,7 +940,7 @@ function createWorkflows(sdk) {
         const output = readStoredSequenceOutput(run.output);
         if (output?.checkpoint || output?.chatGptPage)
             return true;
-        return Boolean(targetUrl(parsedInput.data.chatGptTab));
+        return Boolean(targetUrl(parsedInput.data.extensionTab));
     }
     function readStoredSequenceOutput(value) {
         const parsed = sequenceOutputSchema.safeParse(value);
@@ -1020,20 +1017,17 @@ function createWorkflows(sdk) {
         }
         return undefined;
     }
-    async function waitForCompatibleTarget(target, signal, timeoutMs) {
-        const startedAt = Date.now();
-        while (Date.now() - startedAt < timeoutMs) {
-            const client = chatgpt.findCompatibleClientForTarget(target);
-            if (client)
-                return client;
-            await sleep(1_000, signal);
-        }
-        return undefined;
-    }
-    class MissingChatGptTabError extends Error {
+    class MissingExtensionTabError extends Error {
         constructor() {
             super("ChatGPT tab disconnected before the extension task completed.");
         }
+    }
+    function chatGptControllerManualMessage(error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/controller/i.test(message)) {
+            return "Reload or install the Based BLINK browser extension in the intended browser profile, open any page or the extension popup so the controller connects, then resume this run.";
+        }
+        return "The Based BLINK browser controller could not open or connect to the tracked ChatGPT page. Reload the extension in the intended browser profile, then resume this run.";
     }
     class ImmediateChatGptPauseError extends Error {
         constructor() {
@@ -1049,14 +1043,19 @@ function createWorkflows(sdk) {
             signal: ctx.signal,
             timeoutMs
         })
+            .then((result) => ({ result }), (error) => ({ error }))
             .finally(() => {
             settled = true;
         });
         while (!settled) {
             const tick = sleep(1_000, ctx.signal).then(() => null);
-            const result = await Promise.race([wait, tick]);
-            if (result)
-                return result;
+            const settledTask = await Promise.race([wait, tick]);
+            if (settledTask) {
+                if ("error" in settledTask) {
+                    throw recoverDisconnectedCommandError(settledTask.error, target);
+                }
+                return settledTask.result;
+            }
             if (ctx.isPauseRequested() && !taskPauseRequested) {
                 chatgpt.requestTaskPause(taskId);
                 taskPauseRequested = true;
@@ -1074,16 +1073,326 @@ function createWorkflows(sdk) {
             if (Date.now() - missingSince > 45_000) {
                 chatgpt.cancelTask(taskId);
                 await wait.catch(() => undefined);
-                throw new MissingChatGptTabError();
+                throw new MissingExtensionTabError();
             }
         }
-        return wait;
+        const settledTask = await wait;
+        if ("error" in settledTask) {
+            throw recoverDisconnectedCommandError(settledTask.error, target);
+        }
+        return settledTask.result;
+    }
+    function recoverDisconnectedCommandError(error, _target) {
+        if (isRecoverableExtensionCommandError(error)) {
+            return new MissingExtensionTabError();
+        }
+        return error instanceof Error ? error : new Error(String(error));
+    }
+    function isRecoverableExtensionCommandError(error) {
+        if (!(error instanceof Error))
+            return false;
+        return (/Timed out waiting for browser extension command/i.test(error.message) ||
+            /No compatible BLINK browser extension tab is connected/i.test(error.message) ||
+            /Selected browser extension tab is not connected/i.test(error.message));
     }
     return [chatGptExtensionImageTransformWorkflow, chatGptExtensionImageSequenceWorkflow];
+}
+function createChatGptBrowserController(browser, sleep) {
+    const tasks = new Map();
+    const eventListeners = new Map();
+    const outputListeners = new Map();
+    function emit(taskId, type, message, data) {
+        const event = { taskId, type, message, ...(data === undefined ? {} : { data }), createdAt: new Date().toISOString() };
+        for (const listener of eventListeners.get(taskId) ?? [])
+            listener(event);
+    }
+    function output(taskId, value) {
+        for (const listener of outputListeners.get(taskId) ?? [])
+            listener(value);
+    }
+    return {
+        createConversationTask(input) {
+            const id = (0, node_crypto_1.randomUUID)();
+            tasks.set(id, { ...input, id, target: input.target ?? { mode: "any" }, cancelled: false, pauseRequested: false });
+            return { id };
+        },
+        async waitForTask(taskId, options) {
+            const task = tasks.get(taskId);
+            if (!task)
+                throw new Error(`ChatGPT browser task not found: ${taskId}`);
+            emit(task.id, "browser.task.started", `Running ChatGPT ${task.phase} controller in plugin code`, {
+                phase: task.phase,
+                target: redactTargetForManifest(task.target ?? { mode: "any" })
+            });
+            const result = await runChatGptBrowserTask(browser, sleep, task, options, emit);
+            for (const item of result.outputs)
+                output(task.id, item);
+            emit(task.id, "browser.task.completed", `Completed ChatGPT ${task.phase} controller`, result.metadata);
+            return result;
+        },
+        subscribeTask(taskId, listener) {
+            const listeners = eventListeners.get(taskId) ?? new Set();
+            listeners.add(listener);
+            eventListeners.set(taskId, listeners);
+            return () => listeners.delete(listener);
+        },
+        subscribeTaskOutput(taskId, listener) {
+            const listeners = outputListeners.get(taskId) ?? new Set();
+            listeners.add(listener);
+            outputListeners.set(taskId, listeners);
+            return () => listeners.delete(listener);
+        },
+        requestTaskPause(taskId) {
+            const task = tasks.get(taskId);
+            if (task)
+                task.pauseRequested = true;
+        },
+        cancelTask(taskId) {
+            const task = tasks.get(taskId);
+            if (task)
+                task.cancelled = true;
+        },
+        findCompatibleClientForTarget(target) {
+            return browser.findCompatibleClientForTarget(target);
+        },
+        ensureRoutedTab(target, options) {
+            return browser.ensureRoutedTab(target, options);
+        }
+    };
+}
+async function runChatGptBrowserTask(browser, sleep, task, options, emit) {
+    const target = task.target ?? { mode: "any" };
+    const selectors = normalizeChatGptSelectors(task.selectors);
+    const baseline = task.subjectBaseline && typeof task.subjectBaseline === "object"
+        ? task.subjectBaseline
+        : await extractChatGptImageBaseline(browser, target, selectors, options.signal);
+    if (task.phase === "setup") {
+        if (task.referenceImagePaths?.length) {
+            const files = browser.stageFiles(task.referenceImagePaths);
+            await browser.action(target, { kind: "attach-file", selector: selectors.fileInput, files }, { signal: options.signal, timeoutMs: 30_000 });
+            emit(task.id, "browser.task.files_attached", "Attached ChatGPT reference image(s)", { count: files.length });
+        }
+        await submitChatGptPrompt(browser, sleep, target, selectors, task.masterPrompt ?? "", options, task, emit);
+        await waitForChatGptIdle(browser, sleep, target, selectors, options, task);
+        return {
+            outputs: [],
+            metadata: pageMetadata(normalizeRecord(await browser.inspect(target, { signal: options.signal, timeoutMs: 30_000 })))
+        };
+    }
+    if (!Number.isInteger(task.subjectIndex))
+        throw new Error("ChatGPT subject task requires subjectIndex.");
+    if (task.subjectMode !== "capture-existing") {
+        if (!task.subjectImagePath)
+            throw new Error("ChatGPT subject task requires subjectImagePath.");
+        await removeChatGptComposerAttachments(browser, sleep, target, selectors, options.signal, task, emit);
+        await attachAndSubmitChatGptSubjectImage(browser, sleep, target, selectors, task, options, emit);
+        await waitForChatGptIdle(browser, sleep, target, selectors, options, task);
+    }
+    const captured = await waitForChatGptOutput(browser, sleep, target, selectors, baseline, options, task);
+    return {
+        outputs: [
+            {
+                subjectIndex: task.subjectIndex,
+                ...(task.subjectImagePath ? { subjectName: node_path_1.default.basename(task.subjectImagePath) } : {}),
+                name: captured.name,
+                mimeType: captured.mimeType,
+                base64: captured.base64,
+                metadata: {
+                    source: "generic-browser-extension",
+                    fingerprint: captured.fingerprint,
+                    src: captured.src,
+                    width: captured.width,
+                    height: captured.height
+                }
+            }
+        ],
+        metadata: pageMetadata(normalizeRecord(await browser.inspect(target, { signal: options.signal, timeoutMs: 30_000 })))
+    };
+}
+async function attachAndSubmitChatGptSubjectImage(browser, sleep, target, selectors, task, options, emit) {
+    if (!task.subjectImagePath)
+        throw new Error("ChatGPT subject task requires subjectImagePath.");
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        throwIfTaskStopped(task);
+        const files = browser.stageFiles([task.subjectImagePath]);
+        await browser.action(target, { kind: "attach-file", selector: selectors.fileInput, files }, { signal: options.signal, timeoutMs: 30_000 });
+        emit(task.id, "browser.task.files_attached", "Attached ChatGPT subject image", { count: files.length, attempt });
+        try {
+            await submitChatGptPrompt(browser, sleep, target, selectors, task.subjectInstruction ?? "", options, task, emit);
+            return;
+        }
+        catch (error) {
+            if (attempt >= maxAttempts || !isSubmitReadinessTimeout(error))
+                throw error;
+            emit(task.id, "browser.task.submit_retry", "Retrying ChatGPT subject upload after submit control did not become ready", {
+                attempt,
+                reason: error instanceof Error ? error.message : String(error)
+            });
+            await removeChatGptComposerAttachments(browser, sleep, target, selectors, options.signal, task, emit);
+            await sleep(1_000, options.signal);
+        }
+    }
+}
+async function removeChatGptComposerAttachments(browser, sleep, target, selectors, signal, task, emit) {
+    for (let removed = 0; removed < 6; removed += 1) {
+        throwIfTaskStopped(task);
+        const state = await elementStateOrNull(browser, target, selectors.removeAttachmentButton, signal);
+        if (state?.visible !== true || state.disabled === true)
+            return;
+        await browser.action(target, { kind: "click", selector: selectors.removeAttachmentButton }, { signal, timeoutMs: 10_000 });
+        emit?.(task.id, "browser.task.attachment_removed", "Removed stale ChatGPT composer attachment", { removed: removed + 1 });
+        await sleep(500, signal);
+    }
+}
+function isSubmitReadinessTimeout(error) {
+    return error instanceof Error && /Timed out waiting for ChatGPT submit control to become ready/i.test(error.message);
+}
+function normalizeChatGptSelectors(selectors) {
+    return {
+        fileInput: stringValue(selectors?.fileInput) || "input[type='file']",
+        composer: stringValue(selectors?.composer) || "#prompt-textarea, textarea[data-id='root'], textarea, [contenteditable='true']",
+        submitButton: stringValue(selectors?.submitButton) ||
+            "button[data-testid='send-button'], button[aria-label='Send prompt'], button[aria-label='Send message'], form button[type='submit']",
+        stopButton: stringValue(selectors?.stopButton) ||
+            "button[data-testid='stop-button'], button[data-testid='composer-stop-button'], button[aria-label='Stop'], button[aria-label^='Stop '], button[aria-label^='Cancel ']",
+        removeAttachmentButton: stringValue(selectors?.removeAttachmentButton) || "button[aria-label^='Remove file']",
+        outputImage: stringValue(selectors?.outputImage) || "img"
+    };
+}
+async function submitChatGptPrompt(browser, sleep, target, selectors, prompt, options, task, emit) {
+    if (prompt.trim()) {
+        await fillAndVerifyPrompt(browser, target, selectors, prompt, options, task, emit);
+    }
+    await waitForChatGptSubmitReady(browser, sleep, target, selectors, options, task);
+    await browser.action(target, { kind: "click", selector: selectors.submitButton }, { signal: options.signal, timeoutMs: 30_000 });
+}
+async function fillAndVerifyPrompt(browser, target, selectors, prompt, options, task, emit) {
+    const fillResult = normalizeRecord(await browser.action(target, { kind: "fill", selector: selectors.composer, value: prompt }, { signal: options.signal, timeoutMs: 30_000 }));
+    const diagnostics = {
+        selector: selectors.composer,
+        candidateCount: numberValue(fillResult.candidateCount),
+        valueLength: numberValue(fillResult.valueLength) || prompt.length,
+        observedLength: numberValue(fillResult.observedLength),
+        method: stringValue(fillResult.method),
+        chosen: fillResult.chosen ?? null
+    };
+    emit?.(task.id, "browser.task.prompt_filled", "Filled browser prompt field", diagnostics);
+    if (prompt.trim() && diagnostics.observedLength === 0) {
+        throw new Error(`ChatGPT browser fill could not verify prompt text in the composer. Diagnostics: ${JSON.stringify(diagnostics)}`);
+    }
+}
+async function waitForChatGptSubmitReady(browser, sleep, target, selectors, options, task) {
+    const deadline = Date.now() + Math.min(options.timeoutMs, 120_000);
+    while (Date.now() < deadline) {
+        throwIfTaskStopped(task);
+        const submit = normalizeRecord(await browser.extract(target, { kind: "element-state", selector: selectors.submitButton }, { signal: options.signal, timeoutMs: 10_000 }));
+        const stop = await elementStateOrNull(browser, target, selectors.stopButton, options.signal);
+        if (submit.visible === true && submit.disabled !== true && stop?.visible !== true)
+            return;
+        await sleep(750, options.signal);
+    }
+    throw new Error("Timed out waiting for ChatGPT submit control to become ready.");
+}
+async function waitForChatGptIdle(browser, sleep, target, selectors, options, task) {
+    const deadline = Date.now() + Math.min(options.timeoutMs, 300_000);
+    while (Date.now() < deadline) {
+        throwIfTaskStopped(task);
+        const stop = await elementStateOrNull(browser, target, selectors.stopButton, options.signal);
+        if (stop?.visible !== true)
+            return;
+        await sleep(1_000, options.signal);
+    }
+}
+async function waitForChatGptOutput(browser, sleep, target, selectors, baseline, options, task) {
+    const previousFingerprints = baselineFingerprints(baseline);
+    const deadline = Date.now() + options.timeoutMs;
+    while (Date.now() < deadline) {
+        throwIfTaskStopped(task);
+        const result = normalizeRecord(await browser.extract(target, {
+            kind: "images",
+            selector: selectors.outputImage,
+            minWidth: 128,
+            minHeight: 128,
+            includeBase64: true,
+            excludeFingerprints: previousFingerprints,
+            latestFirst: true,
+            maxImages: 6,
+            fetchTimeoutMs: 8_000
+        }, { signal: options.signal, timeoutMs: 120_000 }));
+        const images = Array.isArray(result.images) ? result.images.map(normalizeRecord) : [];
+        const captured = [...images].reverse().find((image) => stringValue(image.base64));
+        if (captured) {
+            return {
+                src: stringValue(captured.src),
+                fingerprint: stringValue(captured.fingerprint),
+                width: numberValue(captured.width),
+                height: numberValue(captured.height),
+                mimeType: stringValue(captured.mimeType) || "image/png",
+                base64: stringValue(captured.base64),
+                name: "chatgpt-output.png"
+            };
+        }
+        await sleep(1_500, options.signal);
+    }
+    throw new Error("Timed out waiting for a new ChatGPT output image.");
+}
+async function extractChatGptImageBaseline(browser, target, selectors, signal) {
+    const result = normalizeRecord(await browser.extract(target, { kind: "images", selector: selectors.outputImage }, { signal, timeoutMs: 30_000 }));
+    const images = Array.isArray(result.images) ? result.images.map(normalizeRecord) : [];
+    return {
+        imageFingerprints: images.map((image) => stringValue(image.fingerprint)).filter(Boolean)
+    };
+}
+async function elementStateOrNull(browser, target, selector, signal) {
+    try {
+        return normalizeRecord(await browser.extract(target, { kind: "element-state", selector }, { signal, timeoutMs: 10_000 }));
+    }
+    catch {
+        return null;
+    }
+}
+function throwIfTaskStopped(task) {
+    if (task.cancelled)
+        throw new Error("ChatGPT browser task was cancelled.");
+    if (task.pauseRequested) {
+        throw new Error("ChatGPT browser task pause requested.");
+    }
+}
+function baselineFingerprints(value) {
+    if (!value || typeof value !== "object")
+        return [];
+    const record = value;
+    return Array.isArray(record.imageFingerprints)
+        ? record.imageFingerprints.filter((item) => typeof item === "string")
+        : [];
+}
+function pageMetadata(page) {
+    return {
+        url: stringValue(page.url),
+        title: stringValue(page.title)
+    };
+}
+function normalizeRecord(value) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function stringValue(value) {
+    return typeof value === "string" ? value : "";
+}
+function numberValue(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 function buildRecoverableTarget(target, page) {
     const url = page?.url ?? targetUrl(target);
     const title = page?.title ?? targetTitle(target);
+    if (page?.clientId) {
+        return {
+            mode: "existing",
+            clientId: page.clientId,
+            ...(url ? { url } : {}),
+            ...(title ? { title } : {})
+        };
+    }
     if (target.mode === "existing") {
         return {
             mode: "existing",
@@ -1101,6 +1410,13 @@ function buildRecoverableTarget(target, page) {
         };
     }
     return target;
+}
+function chatGptPageChanged(next, previous) {
+    return (!previous ||
+        next.url !== previous.url ||
+        next.title !== previous.title ||
+        next.clientId !== previous.clientId ||
+        next.routingToken !== previous.routingToken);
 }
 function targetUrl(target) {
     return target.mode === "existing" || target.mode === "new" ? target.url : undefined;

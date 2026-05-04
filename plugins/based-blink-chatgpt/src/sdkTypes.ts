@@ -38,7 +38,7 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
     requiresBrowser: boolean;
     targetUrl?: string;
     outputKinds: Array<"image" | "json">;
-    uiCapabilities?: Array<"chatgpt.tabRouting" | "chatgpt.focusTarget" | "chatgpt.artifactPairs">;
+    uiCapabilities?: Array<"extension.tabRouting" | "extension.focusTarget">;
     inputFields: Array<{
       name: string;
       label: string;
@@ -53,11 +53,12 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
   run(input: TInput, ctx: WorkflowContext): Promise<TOutput>;
 }
 
-export type ChatGptExtensionTaskTarget =
+export type ExtensionBrowserTarget =
   | { mode: "any" }
   | { mode: "existing"; clientId: string; url?: string; title?: string }
   | { mode: "new"; routingToken: string; url?: string; title?: string };
 
+export type ChatGptExtensionTaskTarget = ExtensionBrowserTarget;
 export type ChatGptSubjectTaskMode = "submit-and-capture" | "capture-existing";
 
 export interface ExtensionClientStatus {
@@ -87,37 +88,19 @@ export interface ExtensionTaskResult {
   metadata?: unknown;
 }
 
-export interface ExtensionTaskEvent {
-  taskId: string;
-  type: string;
-  message: string;
-  data?: unknown;
-  createdAt: string;
-}
-
 export interface WorkflowSdk {
   schema: { z: typeof zod.z };
   extension: {
-    chatgpt: {
-      createConversationTask(input: {
-        runId: string;
-        phase: "setup" | "subject";
-        subjectMode?: ChatGptSubjectTaskMode;
-        masterPrompt?: string;
-        referenceImagePaths?: string[];
-        subjectImagePath?: string;
-        subjectIndex?: number;
-        subjectInstruction?: string;
-        subjectBaseline?: unknown;
-        selectors?: Record<string, unknown>;
-        target?: ChatGptExtensionTaskTarget;
-      }): { id: string };
-      waitForTask(taskId: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<ExtensionTaskResult>;
-      subscribeTask(taskId: string, listener: (event: ExtensionTaskEvent) => void): () => void;
-      subscribeTaskOutput(taskId: string, listener: (output: ExtensionTaskOutput) => void): () => void;
-      requestTaskPause(taskId: string): void;
-      cancelTask(taskId: string): void;
-      findCompatibleClientForTarget(target: ChatGptExtensionTaskTarget): ExtensionClientStatus | undefined;
+    browser: {
+      findCompatibleClientForTarget(target: ExtensionBrowserTarget): ExtensionClientStatus | undefined;
+      ensureRoutedTab(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ExtensionClientStatus>;
+      openTab(url: string, options?: { active?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      stageFiles(filePaths: string[]): Array<{ id: string; name: string; mimeType: string; url: string }>;
+      executeCommand(target: ExtensionBrowserTarget, command: unknown, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      inspect(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      action(target: ExtensionBrowserTarget, action: unknown, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      wait(target: ExtensionBrowserTarget, condition: unknown, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      extract(target: ExtensionBrowserTarget, query: unknown, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
     };
   };
   files: {

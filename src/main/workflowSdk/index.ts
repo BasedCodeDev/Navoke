@@ -6,16 +6,14 @@ import {
   timeoutMinutes
 } from "../automation/browserHarness";
 import {
-  CHATGPT_EXTENSION_PROTOCOL_VERSION,
+  BLINK_EXTENSION_PROTOCOL_VERSION,
   extensionBridge,
-  type ChatGptSubjectTaskMode,
-  type ChatGptExtensionTaskInput,
-  type ChatGptExtensionTaskTarget,
+  type ExtensionBrowserAction,
+  type ExtensionBrowserExtractQuery,
+  type ExtensionBrowserTarget,
   type ExtensionClientStatus,
-  type ExtensionTaskEvent,
-  type ExtensionTaskOutput,
-  type ExtensionTaskPayload,
-  type ExtensionTaskResult
+  type ExtensionCommandFilePayload,
+  type ExtensionCommandInput
 } from "../extension/extensionBridge";
 import { z } from "zod";
 import { WorkflowConfigurationError } from "../runtime/errors";
@@ -49,14 +47,12 @@ export type {
 export type { InstalledPluginRecord, PluginManifest, PluginInstallResult } from "../plugins/types";
 
 export type {
-  ChatGptExtensionTaskInput,
-  ChatGptExtensionTaskTarget,
-  ChatGptSubjectTaskMode,
+  ExtensionBrowserAction,
+  ExtensionBrowserExtractQuery,
+  ExtensionBrowserTarget,
   ExtensionClientStatus,
-  ExtensionTaskEvent,
-  ExtensionTaskOutput,
-  ExtensionTaskPayload,
-  ExtensionTaskResult
+  ExtensionCommandFilePayload,
+  ExtensionCommandInput
 } from "../extension/extensionBridge";
 
 export interface WorkflowSdk {
@@ -84,15 +80,39 @@ export interface WorkflowSdk {
     timeoutMinutes: typeof timeoutMinutes;
   };
   extension: {
-    chatgpt: {
-      protocolVersion: typeof CHATGPT_EXTENSION_PROTOCOL_VERSION;
-      createConversationTask(input: ChatGptExtensionTaskInput): ExtensionTaskPayload;
-      waitForTask(taskId: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<ExtensionTaskResult>;
-      subscribeTask(taskId: string, listener: (event: ExtensionTaskEvent) => void): () => void;
-      subscribeTaskOutput(taskId: string, listener: (output: ExtensionTaskOutput) => void): () => void;
-      requestTaskPause(taskId: string): void;
-      cancelTask(taskId: string): void;
-      findCompatibleClientForTarget(target: ChatGptExtensionTaskTarget): ExtensionClientStatus | undefined;
+    browser: {
+      protocolVersion: typeof BLINK_EXTENSION_PROTOCOL_VERSION;
+      findCompatibleClientForTarget(target: ExtensionBrowserTarget): ExtensionClientStatus | undefined;
+      ensureRoutedTab(
+        target: ExtensionBrowserTarget,
+        options?: { signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<ExtensionClientStatus>;
+      openTab(
+        url: string,
+        options?: { active?: boolean; signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<unknown>;
+      stageFiles(filePaths: string[]): ExtensionCommandFilePayload[];
+      executeCommand(
+        target: ExtensionBrowserTarget,
+        command: ExtensionCommandInput,
+        options?: { signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<unknown>;
+      inspect(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      action(
+        target: ExtensionBrowserTarget,
+        action: ExtensionBrowserAction,
+        options?: { signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<unknown>;
+      wait(
+        target: ExtensionBrowserTarget,
+        condition: unknown,
+        options?: { signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<unknown>;
+      extract(
+        target: ExtensionBrowserTarget,
+        query: ExtensionBrowserExtractQuery,
+        options?: { signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<unknown>;
     };
   };
   errors: {
@@ -127,15 +147,58 @@ export function createWorkflowSdk(): WorkflowSdk {
       timeoutMinutes
     },
     extension: {
-      chatgpt: {
-        protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-        createConversationTask: (input) => extensionBridge.createChatGptConversationTask(input),
-        waitForTask: (taskId, options) => extensionBridge.waitForTask(taskId, options),
-        subscribeTask: (taskId, listener) => extensionBridge.subscribeTask(taskId, listener),
-        subscribeTaskOutput: (taskId, listener) => extensionBridge.subscribeTaskOutput(taskId, listener),
-        requestTaskPause: (taskId) => extensionBridge.requestTaskPause(taskId),
-        cancelTask: (taskId) => extensionBridge.cancelTask(taskId),
-        findCompatibleClientForTarget: (target) => extensionBridge.findCompatibleClientForTarget(target)
+      browser: {
+        protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+        findCompatibleClientForTarget: (target) => extensionBridge.findCompatibleClientForTarget(target),
+        ensureRoutedTab: (target, options) =>
+          extensionBridge.ensureRoutedTab({
+            target,
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
+        openTab: (url, options) =>
+          extensionBridge.openTabWithController({
+            url,
+            active: options?.active,
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
+        stageFiles: (filePaths) => extensionBridge.stageFiles(filePaths),
+        executeCommand: (target, command, options) =>
+          extensionBridge.executeCommandForTarget({
+            target,
+            command,
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
+        inspect: (target, options) =>
+          extensionBridge.executeCommandForTarget({
+            target,
+            command: { kind: "inspect" },
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
+        action: (target, action, options) =>
+          extensionBridge.executeCommandForTarget({
+            target,
+            command: { kind: "action", action },
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
+        wait: (target, condition, options) =>
+          extensionBridge.executeCommandForTarget({
+            target,
+            command: { kind: "wait", condition },
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
+        extract: (target, query, options) =>
+          extensionBridge.executeCommandForTarget({
+            target,
+            command: { kind: "extract", query },
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          })
       }
     },
     errors: {

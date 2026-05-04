@@ -8,7 +8,7 @@ export const BUILTIN_WORKFLOW_PLUGIN: WorkflowPluginMetadata = {
   version: "0.1.0",
   source: "builtin",
   apiVersion: WORKFLOW_PLUGIN_API_VERSION,
-  capabilities: ["filesystem.artifacts", "browser", "extension.chatgpt"]
+  capabilities: ["filesystem.artifacts", "browser", "extension.browser"]
 };
 
 export function createBuiltInWorkflowRegistry(): WorkflowRegistry {

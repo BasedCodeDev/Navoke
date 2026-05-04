@@ -90,16 +90,15 @@ export interface WorkflowInputField {
 }
 
 export type WorkflowUiCapability =
-  | "chatgpt.tabRouting"
-  | "chatgpt.focusTarget"
-  | "chatgpt.artifactPairs"
+  | "extension.tabRouting"
+  | "extension.focusTarget"
   | "browser.profile";
 
 export interface WorkflowManifest {
   id: string;
   title: string;
   description: string;
-  category: "demo" | "hunyuan" | "chatgpt" | "utility";
+  category: string;
   version: string;
   concurrency: number;
   inputFields: WorkflowInputField[];
@@ -142,7 +141,7 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
 
 export type PluginSource = "builtin" | "user";
 
-export type WorkflowPluginCapability = "filesystem.artifacts" | "browser" | "extension.chatgpt";
+export type WorkflowPluginCapability = "filesystem.artifacts" | "browser" | "extension.browser";
 
 export interface WorkflowPluginMetadata {
   id: string;

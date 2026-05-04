@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
+  HUNYUAN_GLOBAL_WORKFLOW_ID,
   assignHunyuanSelectorJson,
   buildHunyuanRunInput,
   collectHunyuanInputFilePaths,
+  defaultHunyuanSelectorConfigJsonForWorkflow,
   emptyHunyuanViewFiles
 } from "../../src/renderer/lib/hunyuanWorkflow";
 
@@ -24,7 +26,8 @@ describe("Hunyuan renderer helpers", () => {
         generateTexture: true,
         autoRig: false,
         exportFormat: "obj",
-        selectorsJson: DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON
+        selectorsJson: DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
+        extensionTab: { mode: "new", routingToken: "token-1", url: "https://3d.hunyuanglobal.com/#based-blink-tab=token-1" }
       })
     ).toMatchObject({
       frontImage: "C:\\input\\front.png",
@@ -34,7 +37,8 @@ describe("Hunyuan renderer helpers", () => {
       retopologyType: "quad",
       generateTexture: true,
       autoRig: false,
-      exportFormat: "obj"
+      exportFormat: "obj",
+      extensionTab: { mode: "new", routingToken: "token-1" }
     });
   });
 
@@ -45,6 +49,19 @@ describe("Hunyuan renderer helpers", () => {
         left45: "input.left45"
       }
     });
+  });
+
+  it("selects the English selector preset for Hunyuan Global runs", () => {
+    const globalJson = defaultHunyuanSelectorConfigJsonForWorkflow(HUNYUAN_GLOBAL_WORKFLOW_ID);
+    const parsed = JSON.parse(globalJson);
+
+    expect(parsed).toMatchObject({
+      loginRequiredText: "Start Using HY 3D",
+      generateButton: expect.stringContaining("Generate"),
+      downloadButton: expect.stringContaining("Download")
+    });
+    expect(parsed.imageTo3dTab).toContain("Image to 3D");
+    expect(parsed.modelOptionV31).toContain("V3.1");
   });
 
   it("collects all explicit Hunyuan input paths", () => {

@@ -4,7 +4,7 @@ import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "../../
 
 type ExtensionClient = SystemInfo["extension"]["connectedClients"][number];
 const chatGptWorkflow = {
-  manifest: { uiCapabilities: ["chatgpt.tabRouting"] }
+  manifest: { uiCapabilities: ["extension.tabRouting"] }
 } as WorkflowSummary;
 const hunyuanWorkflow = {
   manifest: { uiCapabilities: ["browser.profile"] }
@@ -53,10 +53,10 @@ describe("duplicate run configuration", () => {
           subjectImages: ["C:\\runs\\inputs\\subject-a.png", "C:\\runs\\inputs\\subject-b.png"],
           masterPrompt: "Setup prompt",
           subjectInstruction: "Change the hands.",
-          chatGptTab: { mode: "existing", clientId: "tab-1" }
+          extensionTab: { mode: "existing", clientId: "tab-1" }
         }
       }),
-      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newChatGptTabValue: "__new__" }
+      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
     );
 
     expect(duplicate).toMatchObject({
@@ -66,7 +66,7 @@ describe("duplicate run configuration", () => {
       subjectFiles: ["C:\\runs\\inputs\\subject-a.png", "C:\\runs\\inputs\\subject-b.png"],
       masterPrompt: "Setup prompt",
       subjectInstruction: "Change the hands.",
-      chatGptTabSelection: "tab-1"
+      extensionTabSelection: "tab-1"
     });
     expect(duplicate.filePaths).toEqual([
       "C:\\runs\\inputs\\reference.png",
@@ -82,13 +82,13 @@ describe("duplicate run configuration", () => {
         input: {
           subjectImages: ["C:\\runs\\inputs\\subject.png"],
           masterPrompt: "Setup",
-          chatGptTab: { mode: "existing", clientId: "missing-tab" }
+          extensionTab: { mode: "existing", clientId: "missing-tab" }
         }
       }),
-      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "other-tab" })], newChatGptTabValue: "__new__" }
+      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "other-tab" })], newExtensionTabValue: "__new__" }
     );
 
-    expect(duplicate.chatGptTabSelection).toBe("__new__");
+    expect(duplicate.extensionTabSelection).toBe("__new__");
   });
 
   it("copies ChatGPT sequence source image, prompts, setup, and target tab", () => {
@@ -99,10 +99,10 @@ describe("duplicate run configuration", () => {
           sourceImages: ["C:\\runs\\inputs\\source.png"],
           prompts: ["Back view", "Side view"],
           masterPrompt: "Keep the same character.",
-          chatGptTab: { mode: "existing", clientId: "tab-1" }
+          extensionTab: { mode: "existing", clientId: "tab-1" }
         }
       }),
-      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newChatGptTabValue: "__new__" }
+      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
     );
 
     expect(duplicate).toMatchObject({
@@ -110,7 +110,7 @@ describe("duplicate run configuration", () => {
       sourceFiles: ["C:\\runs\\inputs\\source.png"],
       sequencePrompts: ["Back view", "Side view"],
       masterPrompt: "Keep the same character.",
-      chatGptTabSelection: "tab-1"
+      extensionTabSelection: "tab-1"
     });
     expect(duplicate.filePaths).toEqual(["C:\\runs\\inputs\\source.png"]);
   });
@@ -134,7 +134,7 @@ describe("duplicate run configuration", () => {
           selectors: { generateButton: "button.generate" }
         }
       }),
-      { workflow: hunyuanWorkflow, compatibleClients: [], newChatGptTabValue: "__new__" }
+      { workflow: hunyuanWorkflow, compatibleClients: [], newExtensionTabValue: "__new__" }
     );
 
     expect(duplicate).toMatchObject({

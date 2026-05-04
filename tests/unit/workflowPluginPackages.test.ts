@@ -29,9 +29,23 @@ describe("workflow plugin packages", () => {
       status: "loaded"
     });
     expect(manager.listWorkflowRegistrations().map((registration) => registration.definition.manifest.id)).toEqual([
-      "based-blink.hunyuan.image-to-model"
+      "based-blink.hunyuan.image-to-model",
+      "based-blink.hunyuan.global.image-to-model"
     ]);
-    const workflow = manager.listWorkflowRegistrations()[0].definition;
+    const workflow = manager
+      .listWorkflowRegistrations()
+      .find((registration) => registration.definition.manifest.id === "based-blink.hunyuan.image-to-model")!.definition;
+    const globalWorkflow = manager
+      .listWorkflowRegistrations()
+      .find((registration) => registration.definition.manifest.id === "based-blink.hunyuan.global.image-to-model")!.definition;
+    expect(globalWorkflow.manifest).toMatchObject({
+      targetUrl: "https://3d.hunyuanglobal.com/",
+      title: "Hunyuan Global Image to 3D Model",
+      requiresBrowser: false,
+      outputKinds: ["json"],
+      uiCapabilities: ["extension.tabRouting"]
+    });
+    expect(manager.listPlugins()[0].capabilities).toContain("extension.browser");
     expect(workflow.inputSchema.safeParse({ frontImage: "C:\\tmp\\front.png" }).success).toBe(false);
     const parsed = workflow.inputSchema.safeParse({
       frontImage: "C:\\tmp\\front.png",
@@ -74,7 +88,7 @@ describe("workflow plugin packages", () => {
         subjectImages: ["C:\\tmp\\subject.png"],
         masterPrompt: "Respond with READY.",
         subjectInstruction: "",
-        chatGptTab: { mode: "existing", clientId: "client-1" }
+        extensionTab: { mode: "existing", clientId: "client-1" }
       }).success
     ).toBe(true);
     expect(sequenceWorkflow.inputSchema.safeParse({ sourceImages: [], prompts: ["Back"] }).success).toBe(false);
@@ -85,7 +99,7 @@ describe("workflow plugin packages", () => {
         sourceImages: ["C:\\tmp\\one.png"],
         prompts: ["  Back view  ", "Side view"],
         masterPrompt: "",
-        chatGptTab: { mode: "existing", clientId: "client-1" }
+        extensionTab: { mode: "existing", clientId: "client-1" }
       }).success
     ).toBe(true);
   });

@@ -1,361 +1,259 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CHATGPT_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
+import { BLINK_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
 
 describe("ExtensionBridge", () => {
-  it("queues, leases, and completes a ChatGPT extension setup task", async () => {
+  it("registers compatible browser extension clients", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
-      id: "client-1",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.1.0"
-    });
-    const task = bridge.createChatGptConversationTask({
-      runId: "run-1",
-      phase: "setup",
-      masterPrompt: "convert these",
-      referenceImagePaths: ["C:\\tmp\\reference.png"],
-      subjectInstruction: "Apply the transform.",
-      selectors: { composer: "#prompt-textarea" }
-    });
-
-    expect(bridge.status().pending).toBe(1);
-    const leased = bridge.nextTask("client-1");
-    expect(leased?.id).toBe(task.id);
-    expect(leased?.phase).toBe("setup");
-    expect(leased?.protocolVersion).toBe(CHATGPT_EXTENSION_PROTOCOL_VERSION);
-    expect(leased?.referenceImages).toHaveLength(1);
-    expect(leased?.subjectImage).toBeUndefined();
-    expect(leased?.subjectInstruction).toBe("Apply the transform.");
-    expect(bridge.getTaskImagePath(task.id, "reference", 0)).toBe("C:\\tmp\\reference.png");
-    expect(bridge.status().running).toBe(1);
-
-    const wait = bridge.waitForTask(task.id, {
-      signal: new AbortController().signal,
-      timeoutMs: 1_000
-    });
-    bridge.completeTask(task.id, {
-      outputs: [
-        {
-          subjectIndex: 0,
-          subjectName: "subject-a.png",
-          mimeType: "image/png",
-          base64: Buffer.from("image").toString("base64")
-        }
-      ]
-    });
-
-    await expect(wait).resolves.toMatchObject({ outputs: expect.any(Array) });
-  });
-
-  it("queues and leases a ChatGPT extension subject task", () => {
-    const bridge = new ExtensionBridge();
-    bridge.heartbeat({
-      id: "client-1",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.8.0"
-    });
-    const task = bridge.createChatGptConversationTask({
-      runId: "run-1",
-      phase: "subject",
-      subjectImagePath: "C:\\tmp\\subject-b.png",
-      subjectIndex: 1,
-      subjectInstruction: "Apply the transform.",
-      selectors: { composer: "#prompt-textarea" }
-    });
-
-    const leased = bridge.nextTask("client-1");
-    expect(leased).toMatchObject({
-      id: task.id,
-      phase: "subject",
-      subjectImage: {
-        index: 1,
-        name: "subject-b.png"
-      }
-    });
-    expect(bridge.getTaskImagePath(task.id, "subject", 1)).toBe("C:\\tmp\\subject-b.png");
-  });
-
-  it("leases capture-existing subject tasks and exposes pause control for running tasks", () => {
-    const bridge = new ExtensionBridge();
-    bridge.heartbeat({
-      id: "client-1",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.9.0"
-    });
-    const baseline = { assistantCount: 1, imageFingerprints: ["old|512x512"], outputCandidateCount: 1 };
-    const task = bridge.createChatGptConversationTask({
-      runId: "run-1",
-      phase: "subject",
-      subjectMode: "capture-existing",
-      subjectImagePath: "C:\\tmp\\subject-b.png",
-      subjectIndex: 1,
-      subjectBaseline: baseline,
-      subjectInstruction: "",
-      selectors: {}
-    });
-
-    const leased = bridge.nextTask("client-1");
-    expect(leased).toMatchObject({
-      id: task.id,
-      subjectMode: "capture-existing",
-      subjectBaseline: baseline
-    });
-    bridge.requestTaskPause(task.id);
-
-    const control = bridge.taskControl(task.id, "client-1");
-    expect(control).toMatchObject({
-      kind: "task-control",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      status: "running",
-      pauseRequested: true,
-      cancelled: false
-    });
-    expect(bridge.status().running).toBe(1);
-
-    bridge.cancelTask(task.id);
-    expect(bridge.taskControl(task.id, "client-1")).toMatchObject({
-      status: "cancelled",
-      cancelled: true
-    });
-  });
-
-  it("streams task outputs before completion and resolves them with the final result", async () => {
-    const bridge = new ExtensionBridge();
-    bridge.heartbeat({
-      id: "client-1",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.6.0"
-    });
-    const task = bridge.createChatGptConversationTask({
-      runId: "run-1",
-      phase: "subject",
-      subjectImagePath: "C:\\tmp\\subject-a.png",
-      subjectIndex: 0,
-      subjectInstruction: "",
-      selectors: {}
-    });
-    const streamedOutputs: Array<{ subjectIndex: number; base64: string }> = [];
-    const unsubscribe = bridge.subscribeTaskOutput(task.id, (output) => {
-      streamedOutputs.push({ subjectIndex: output.subjectIndex, base64: output.base64 });
-    });
-
-    bridge.nextTask("client-1");
-    const wait = bridge.waitForTask(task.id, {
-      signal: new AbortController().signal,
-      timeoutMs: 1_000
-    });
-    bridge.addTaskOutput(task.id, {
-      subjectIndex: 0,
-      subjectName: "subject-a.png",
-      mimeType: "image/png",
-      base64: Buffer.from("image").toString("base64")
-    });
-    bridge.completeTask(task.id, { outputs: [], metadata: { title: "ChatGPT" } });
-
-    await expect(wait).resolves.toMatchObject({
-      outputs: [{ subjectIndex: 0, base64: Buffer.from("image").toString("base64") }]
-    });
-    expect(streamedOutputs).toEqual([{ subjectIndex: 0, base64: Buffer.from("image").toString("base64") }]);
-    unsubscribe();
-  });
-
-  it("marks compatible and incompatible extension clients", () => {
-    const bridge = new ExtensionBridge();
-
-    bridge.heartbeat({
-      id: "compatible",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.1.0"
+      clientId: "tab-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/#based-blink-tab=route-1",
+      title: "Example"
     });
     bridge.heartbeat({
-      id: "stale",
+      clientId: "stale-tab",
+      protocolVersion: 999,
       extensionVersion: "0.0.1"
     });
 
-    const clients = bridge.status().connectedClients;
-    expect(clients.find((client) => client.id === "compatible")).toMatchObject({
-      compatible: true,
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+    expect(bridge.status()).toMatchObject({ connected: 2, compatible: 1, incompatible: 1 });
+    expect(bridge.findCompatibleClientForTarget({ mode: "new", routingToken: "route-1" })).toMatchObject({
+      id: "tab-1",
+      routingToken: "route-1",
+      compatible: true
+    });
+  });
+
+  it("queues, leases, and completes generic browser commands", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      clientId: "tab-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0"
     });
-    expect(clients.find((client) => client.id === "stale")).toMatchObject({
-      compatible: false,
-      protocolVersion: null,
-      extensionVersion: "0.0.1"
-    });
-  });
 
-  it("refuses to lease tasks to missing or incompatible extension clients", () => {
-    const bridge = new ExtensionBridge();
-    const task = bridge.createChatGptConversationTask({
-      runId: "run-1",
-      phase: "subject",
-      subjectImagePath: "C:\\tmp\\subject-a.png",
-      subjectIndex: 0,
-      subjectInstruction: "",
-      selectors: {}
-    });
-
-    expect(() => bridge.nextTask("")).toThrow(/client id/i);
-    expect(() => bridge.nextTask("missing")).toThrow(/has not checked in/i);
-
-    bridge.heartbeat({ id: "stale", extensionVersion: "0.0.1" });
-    expect(() => bridge.nextTask("stale")).toThrow(/Reload the unpacked Chrome extension/i);
-    expect(bridge.status().pending).toBe(1);
-
-    bridge.heartbeat({
-      id: "compatible",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.1.0"
-    });
-    expect(bridge.nextTask("compatible")?.id).toBe(task.id);
-  });
-
-  it("leases a targeted task only to the selected ChatGPT tab", () => {
-    const bridge = new ExtensionBridge();
-    bridge.heartbeat({
-      id: "client-1",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.3.0"
-    });
-    bridge.heartbeat({
-      id: "client-2",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.3.0"
-    });
-    const task = bridge.createChatGptConversationTask({
-      runId: "run-1",
-      phase: "subject",
-      subjectImagePath: "C:\\tmp\\subject-a.png",
-      subjectIndex: 0,
-      subjectInstruction: "",
-      selectors: {},
-      target: { mode: "existing", clientId: "client-2" }
-    });
-
-    expect(bridge.nextTask("client-1")).toBeNull();
-    expect(bridge.status().pending).toBe(1);
-    expect(bridge.nextTask("client-2")?.id).toBe(task.id);
-  });
-
-  it("leases a new-tab task only to the matching routing token", () => {
-    const bridge = new ExtensionBridge();
-    bridge.heartbeat({
-      id: "existing-tab",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.3.0"
-    });
-    bridge.heartbeat({
-      id: "new-tab",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.3.0",
-      routingToken: "run-token-1"
-    });
-    const task = bridge.createChatGptConversationTask({
-      runId: "run-1",
-      phase: "subject",
-      subjectImagePath: "C:\\tmp\\subject-a.png",
-      subjectIndex: 0,
-      subjectInstruction: "",
-      selectors: {},
-      target: { mode: "new", routingToken: "run-token-1" }
-    });
-
-    expect(bridge.findCompatibleClientForTarget({ mode: "new", routingToken: "run-token-1" })?.id).toBe("new-tab");
-    expect(bridge.nextTask("existing-tab")).toBeNull();
-    expect(bridge.status().pending).toBe(1);
-    expect(bridge.nextTask("new-tab")?.id).toBe(task.id);
-  });
-
-  it("leases a recoverable task to a compatible tab with the same tracked URL", () => {
-    const bridge = new ExtensionBridge();
-    bridge.heartbeat({
-      id: "old-tab",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.8.0",
-      url: "https://chatgpt.com/c/abc"
-    });
-    const task = bridge.createChatGptConversationTask({
-      runId: "run-1",
-      phase: "subject",
-      subjectImagePath: "C:\\tmp\\subject-a.png",
-      subjectIndex: 0,
-      subjectInstruction: "",
-      selectors: {},
-      target: { mode: "existing", clientId: "missing-tab", url: "https://chatgpt.com/c/abc#based-blink-tab=run-token-1" }
-    });
-
-    expect(bridge.findCompatibleClientForTarget({ mode: "existing", clientId: "missing-tab", url: "https://chatgpt.com/c/abc" })?.id).toBe("old-tab");
-    expect(bridge.nextTask("old-tab")?.id).toBe(task.id);
-  });
-
-  it("queues Workflow Lab commands for a selected compatible extension tab", async () => {
-    const bridge = new ExtensionBridge();
-    bridge.heartbeat({
-      id: "lab-tab",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.4.0"
-    });
-
-    const wait = bridge.executeLabCommand({
-      clientId: "lab-tab",
+    const wait = bridge.executeCommand({
+      clientId: "tab-1",
       command: { kind: "inspect" },
       timeoutMs: 1_000
     });
-
-    expect(bridge.status().labPending).toBe(1);
-    const command = bridge.nextLabCommand("lab-tab");
+    const command = bridge.nextCommand("tab-1");
     expect(command).toMatchObject({
-      kind: "workflow-lab",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
+      kind: "browser-command",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       command: { kind: "inspect" }
     });
-    expect(bridge.status().labRunning).toBe(1);
 
-    bridge.completeLabCommand(command!.id, { url: "https://chatgpt.com/", interactiveElements: [] });
-
-    await expect(wait).resolves.toMatchObject({ url: "https://chatgpt.com/" });
+    bridge.completeCommand(command!.id, { url: "https://example.test/", interactiveElements: [] });
+    await expect(wait).resolves.toMatchObject({ url: "https://example.test/" });
   });
 
-  it("queues, leases, and completes focus commands for a selected compatible extension tab even while busy", async () => {
+  it("targets commands through routing token lookup", async () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
-      id: "focus-tab",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.8.0",
-      status: "busy"
+      clientId: "other",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0"
+    });
+    bridge.heartbeat({
+      clientId: "routed",
+      routingToken: "run-token",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0"
     });
 
-    const wait = bridge.focusClient("focus-tab", { timeoutMs: 1_000 });
+    const wait = bridge.executeCommandForTarget({
+      target: { mode: "new", routingToken: "run-token" },
+      command: { kind: "wait", condition: { kind: "document-ready" } },
+      timeoutMs: 1_000
+    });
 
-    expect(bridge.status().connectedClients[0]).toMatchObject({ id: "focus-tab", status: "busy" });
-    expect(bridge.status().focusPending).toBe(1);
-    const command = bridge.nextFocusCommand("focus-tab");
+    expect(bridge.nextCommand("other")).toBeNull();
+    const command = bridge.nextCommand("routed");
+    expect(command?.command).toEqual({ kind: "wait", condition: { kind: "document-ready" } });
+    bridge.completeCommand(command!.id, { satisfied: true });
+    await expect(wait).resolves.toMatchObject({ satisfied: true });
+  });
+
+  it("registers browser controllers and exposes controller status", () => {
+    const bridge = new ExtensionBridge();
+    bridge.controllerHeartbeat({
+      controllerId: "controller-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      capabilities: ["open-tab"]
+    });
+    bridge.controllerHeartbeat({
+      controllerId: "old-controller",
+      protocolVersion: 999,
+      extensionVersion: "0.0.1",
+      capabilities: ["open-tab"]
+    });
+
+    expect(bridge.status()).toMatchObject({
+      compatibleControllers: 1,
+      incompatibleControllers: 1,
+      connectedControllers: [expect.objectContaining({ id: expect.any(String) }), expect.objectContaining({ id: expect.any(String) })]
+    });
+  });
+
+  it("queues open-tab commands through a compatible browser controller", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.controllerHeartbeat({
+      controllerId: "controller-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      capabilities: ["open-tab"]
+    });
+
+    const wait = bridge.openTabWithController({ url: "https://example.test/#based-blink-tab=route-1", timeoutMs: 1_000 });
+    const command = bridge.nextControllerCommand("controller-1");
     expect(command).toMatchObject({
-      kind: "focus-tab",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION
+      kind: "controller-command",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      command: { kind: "open-tab", url: "https://example.test/#based-blink-tab=route-1", active: true }
     });
-    expect(bridge.status().focusRunning).toBe(1);
 
+    bridge.completeControllerCommand(command!.id, { ok: true, tabId: 1 });
+    await expect(wait).resolves.toMatchObject({ ok: true, tabId: 1 });
+  });
+
+  it("opens a routed tab through the controller and waits for the page client", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.controllerHeartbeat({
+      controllerId: "controller-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      capabilities: ["open-tab"]
+    });
+
+    const wait = bridge.ensureRoutedTab({
+      target: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" },
+      timeoutMs: 1_000
+    });
+    const command = bridge.nextControllerCommand("controller-1");
+    expect(command?.command).toMatchObject({ kind: "open-tab", url: "https://example.test/#based-blink-tab=route-1" });
+    bridge.completeControllerCommand(command!.id, { ok: true });
+    bridge.heartbeat({
+      clientId: "routed-tab",
+      routingToken: "route-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/"
+    });
+
+    await expect(wait).resolves.toMatchObject({ id: "routed-tab", routingToken: "route-1" });
+  });
+
+  it("fails routed tab opening when no compatible browser controller is connected", async () => {
+    const bridge = new ExtensionBridge();
+    await expect(
+      bridge.ensureRoutedTab({
+        target: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" },
+        timeoutMs: 1_000
+      })
+    ).rejects.toThrow(/No compatible BLINK browser controller/);
+  });
+
+  it("keeps a routed tab matched after the page removes the routing token from its URL", () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      clientId: "routed",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/#based-blink-tab=run-token",
+      title: "Routed start"
+    });
+    bridge.heartbeat({
+      clientId: "routed",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/conversation/123",
+      title: "Conversation"
+    });
+
+    expect(bridge.findCompatibleClientForTarget({ mode: "new", routingToken: "run-token" })).toMatchObject({
+      id: "routed",
+      routingToken: "run-token",
+      url: "https://example.test/conversation/123"
+    });
+  });
+
+  it("falls back to a fresh same-url client after the original client command channel times out", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      clientId: "stuck",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/conversation/123",
+      title: "Conversation"
+    });
+    bridge.heartbeat({
+      clientId: "fresh",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/conversation/123",
+      title: "Conversation"
+    });
+
+    const wait = bridge.executeCommand({
+      clientId: "stuck",
+      command: { kind: "inspect" },
+      timeoutMs: 5
+    });
+    const timedOutCommand = bridge.nextCommand("stuck");
+    expect(timedOutCommand).toBeTruthy();
+    await expect(wait).rejects.toThrow(/Timed out waiting for browser extension command/);
+    bridge.completeCommand(timedOutCommand!.id, { late: true });
+
+    expect(
+      bridge.findCompatibleClientForTarget({
+        mode: "existing",
+        clientId: "stuck",
+        url: "https://example.test/conversation/123"
+      })
+    ).toMatchObject({ id: "fresh" });
+  });
+
+  it("stages files for generic attach-file commands", () => {
+    const bridge = new ExtensionBridge();
+    const filePath = path.join(process.cwd(), "package.json");
+    expect(fs.existsSync(filePath)).toBe(true);
+
+    const [file] = bridge.stageFiles([filePath]);
+    expect(file).toMatchObject({ name: "package.json", url: expect.stringContaining("/api/extension/files/") });
+    expect(bridge.getStagedFilePath(file.id)).toBe(filePath);
+  });
+
+  it("queues focus commands for selected tabs", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      clientId: "tab-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0"
+    });
+
+    const wait = bridge.focusClient("tab-1");
+    const command = bridge.nextFocusCommand("tab-1");
+    expect(command).toMatchObject({ kind: "focus-tab", protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION });
     bridge.completeFocusCommand(command!.id, { ok: true });
-
     await expect(wait).resolves.toMatchObject({ ok: true });
   });
 
-  it("fails and times out focus commands with clear errors", async () => {
+  it("fails commands with clear errors", async () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
-      id: "focus-tab",
-      protocolVersion: CHATGPT_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: "0.8.0"
+      clientId: "tab-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0"
     });
 
-    const failed = bridge.focusClient("focus-tab", { timeoutMs: 1_000 });
-    const failedCommand = bridge.nextFocusCommand("focus-tab");
-    bridge.failFocusCommand(failedCommand!.id, "Cannot focus sender tab.");
-    await expect(failed).rejects.toThrow("Cannot focus sender tab.");
-
-    const timedOut = bridge.focusClient("focus-tab", { timeoutMs: 5 });
-    await expect(timedOut).rejects.toThrow(/Timed out waiting for the Chrome extension to focus/);
+    const wait = bridge.executeCommand({ clientId: "tab-1", command: { kind: "inspect" }, timeoutMs: 1_000 });
+    const command = bridge.nextCommand("tab-1");
+    bridge.failCommand(command!.id, "Page command failed.");
+    await expect(wait).rejects.toThrow("Page command failed.");
   });
 });

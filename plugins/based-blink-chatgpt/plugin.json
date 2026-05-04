@@ -5,5 +5,5 @@
   "pluginApiVersion": "1",
   "entrypoint": "dist/index.js",
   "workflows": ["based-blink.chatgpt.extension-image-transform", "based-blink.chatgpt.extension-image-sequence"],
-  "capabilities": ["filesystem.artifacts", "extension.chatgpt"]
+  "capabilities": ["filesystem.artifacts", "extension.browser"]
 }

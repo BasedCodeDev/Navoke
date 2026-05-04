@@ -21,27 +21,23 @@ export type LabWaitCondition =
       timeoutMs?: number;
     }
   | {
-      kind: "stop-button";
-      selector?: string;
-      state: "visible" | "hidden";
-      timeoutMs?: number;
-    }
-  | {
-      kind: "chatgpt-submit-ready";
-      selectors?: {
-        composer?: string;
-        submitButton?: string;
-        stopButton?: string;
-        fileInput?: string;
-      };
+      kind: "url";
+      value: string;
+      match: "contains" | "equals" | "regex";
       timeoutMs?: number;
     }
   | {
       kind: "network-idle";
       timeoutMs?: number;
+    }
+  | {
+      kind: "document-ready";
+      timeoutMs?: number;
     };
 
 export interface LabWaitPageState {
+  url: string;
+  readyState?: string;
   bodyText: string;
   element?: {
     selector: string;
@@ -50,19 +46,6 @@ export interface LabWaitPageState {
     disabled: boolean;
   };
   imageFingerprints: string[];
-  stopButtonVisible: boolean;
-  chatGptSubmit?: {
-    composerFound: boolean;
-    composerVisible: boolean;
-    submitFound: boolean;
-    submitVisible: boolean;
-    submitEnabled: boolean;
-    stopButtonVisible: boolean;
-    stopButtonLabel?: string | null;
-    fileInputFound: boolean;
-    visibleButtons: string[];
-    imageCount: number;
-  };
   networkIdle?: boolean;
 }
 
@@ -80,21 +63,17 @@ export function evaluateWaitCondition(condition: LabWaitCondition, state: LabWai
       return evaluateTextCondition(condition, state);
     case "image-count":
       return evaluateImageCountCondition(condition, state);
-    case "stop-button":
+    case "url":
+      return evaluateUrlCondition(condition, state);
+    case "document-ready":
       return {
-        satisfied: condition.state === "visible" ? state.stopButtonVisible : !state.stopButtonVisible,
+        satisfied: state.readyState === "complete" || state.readyState === "interactive",
         reason:
-          condition.state === "visible"
-            ? state.stopButtonVisible
-              ? "Stop button is visible."
-              : "Stop button is not visible yet."
-            : state.stopButtonVisible
-              ? "Stop button is still visible."
-              : "Stop button is hidden.",
-        diagnostics: { stopButtonVisible: state.stopButtonVisible }
+          state.readyState === "complete" || state.readyState === "interactive"
+            ? "Document is ready."
+            : "Document is not ready yet.",
+        diagnostics: { readyState: state.readyState ?? null }
       };
-    case "chatgpt-submit-ready":
-      return evaluateChatGptSubmitReadyCondition(state);
     case "network-idle":
       return {
         satisfied: state.networkIdle === true,
@@ -105,48 +84,16 @@ export function evaluateWaitCondition(condition: LabWaitCondition, state: LabWai
 }
 
 export function defaultWaitTimeoutMs(condition: LabWaitCondition): number {
-  return condition.timeoutMs ?? (condition.kind === "network-idle" ? 15_000 : condition.kind === "chatgpt-submit-ready" ? 120_000 : 30_000);
+  return condition.timeoutMs ?? (condition.kind === "network-idle" ? 15_000 : 30_000);
 }
 
 export function waitConditionLabel(condition: LabWaitCondition): string {
   if (condition.kind === "element") return `Wait for ${condition.selector} ${condition.state}`;
   if (condition.kind === "text") return `Wait for text ${condition.state}: ${condition.text}`;
   if (condition.kind === "image-count") return `Wait for ${condition.minCount} image(s)`;
-  if (condition.kind === "stop-button") return `Wait for stop button ${condition.state}`;
-  if (condition.kind === "chatgpt-submit-ready") return "Wait for ChatGPT submit ready";
+  if (condition.kind === "url") return `Wait for URL ${condition.match}: ${condition.value}`;
+  if (condition.kind === "document-ready") return "Wait for document ready";
   return "Wait for network idle";
-}
-
-function evaluateChatGptSubmitReadyCondition(state: LabWaitPageState): LabWaitEvaluation {
-  const submit = state.chatGptSubmit;
-  if (!submit) {
-    return {
-      satisfied: false,
-      reason: "ChatGPT submit state was not captured.",
-      diagnostics: {}
-    };
-  }
-
-  const satisfied = submit.composerFound && submit.composerVisible && submit.submitFound && submit.submitVisible && submit.submitEnabled && !submit.stopButtonVisible;
-  const reason = satisfied
-    ? "ChatGPT submit button is ready."
-    : submit.stopButtonVisible
-      ? "ChatGPT generation is still active; stop button is visible."
-      : !submit.composerFound
-        ? "ChatGPT composer was not found."
-        : !submit.submitFound
-          ? "ChatGPT submit button was not found."
-          : !submit.submitVisible
-            ? "ChatGPT submit button is not visible."
-            : !submit.submitEnabled
-              ? "ChatGPT submit button is still disabled, likely while uploads or processing finish."
-              : "ChatGPT submit button is not ready.";
-
-  return {
-    satisfied,
-    reason,
-    diagnostics: submit
-  };
 }
 
 function evaluateElementCondition(
@@ -216,6 +163,27 @@ function evaluateImageCountCondition(
       currentCount: state.imageFingerprints.length,
       newCount: newFingerprints.length,
       minCount: condition.minCount
+    }
+  };
+}
+
+function evaluateUrlCondition(
+  condition: Extract<LabWaitCondition, { kind: "url" }>,
+  state: LabWaitPageState
+): LabWaitEvaluation {
+  const satisfied =
+    condition.match === "equals"
+      ? state.url === condition.value
+      : condition.match === "regex"
+        ? new RegExp(condition.value).test(state.url)
+        : state.url.includes(condition.value);
+  return {
+    satisfied,
+    reason: satisfied ? "URL matched." : "URL did not match yet.",
+    diagnostics: {
+      url: state.url,
+      value: condition.value,
+      match: condition.match
     }
   };
 }

@@ -21,6 +21,7 @@ test-results/
 .nyc_output/
 
 # Local app/runtime data
+.blink/
 artifacts/
 browser-profiles/
 logs/
