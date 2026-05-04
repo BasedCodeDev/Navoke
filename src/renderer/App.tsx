@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -258,10 +258,10 @@ export default function App(): JSX.Element {
   const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
   const [newRunFocusError, setNewRunFocusError] = useState<string | null>(null);
   const [showProjectLanding, setShowProjectLanding] = useState(false);
-  const [duplicateSourceRun, setDuplicateSourceRun] = useState<RunRecord | null>(null);
-  const [duplicateValidation, setDuplicateValidation] = useState<DuplicateRunValidationState>({ status: "idle", files: [] });
-  const [duplicateError, setDuplicateError] = useState<string | null>(null);
-  const [isDuplicating, setIsDuplicating] = useState(false);
+  const [newRunModalMode, setNewRunModalMode] = useState<"fresh" | "resubmit" | null>(null);
+  const [resubmitSourceRun, setResubmitSourceRun] = useState<RunRecord | null>(null);
+  const [resubmitValidation, setResubmitValidation] = useState<ReusedInputValidationState>({ status: "idle", files: [] });
+  const [resubmitError, setResubmitError] = useState<string | null>(null);
 
   const configQuery = useQuery({ queryKey: ["config"], queryFn: getConfig });
   const hasProject = Boolean(configQuery.data?.apiBaseUrl && configQuery.data.projectDir);
@@ -383,6 +383,10 @@ export default function App(): JSX.Element {
     },
     onSuccess: (run) => {
       setSelectedRunId(run.id);
+      setNewRunModalMode(null);
+      setResubmitSourceRun(null);
+      setResubmitValidation({ status: "idle", files: [] });
+      setResubmitError(null);
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       void queryClient.invalidateQueries({ queryKey: ["run"] });
     },
@@ -471,7 +475,6 @@ export default function App(): JSX.Element {
   const extensionClients = systemQuery.data?.extension.connectedClients ?? [];
   const compatibleExtensionClients = useMemo(() => extensionClients.filter((client) => client.compatible), [extensionClients]);
   const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 7;
-  const duplicateFilePaths = useMemo(() => collectRunInputFilePaths(duplicateSourceRun?.input), [duplicateSourceRun?.input]);
   const activeRunWorkflowAvailability = useMemo(
     () => (activeRun ? resolveRunWorkflowAvailability(activeRun, workflows) : null),
     [activeRun, workflows]
@@ -528,7 +531,60 @@ export default function App(): JSX.Element {
     setFormError(null);
   }
 
-  async function duplicateRunConfiguration(run: RunRecord): Promise<void> {
+  function resetNewRunForm(): void {
+    setSelectedWorkflowId(workflows[0]?.manifest.id ?? "");
+    setName("");
+    setSelectedFiles([]);
+    setReferenceFiles([]);
+    setSubjectFiles([]);
+    setSourceFiles([]);
+    setPrompt("");
+    setMasterPrompt("");
+    setSubjectInstruction("");
+    setSequencePrompts([]);
+    setModelName("Demo model");
+    setProfileName("default");
+    setPauseForManualLogin(true);
+    setHunyuanViewFiles(emptyHunyuanViewFiles());
+    setHunyuanModelFaceCount("50k");
+    setHunyuanRetopologyType("quad");
+    setHunyuanGenerateTexture(true);
+    setHunyuanAutoRig(false);
+    setHunyuanExportFormat("obj");
+    setHunyuanSelectorsJson(DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON);
+    setChatGptTabSelection("");
+    setFormError(null);
+    setNewRunFocusError(null);
+    setResubmitSourceRun(null);
+    setResubmitValidation({ status: "idle", files: [] });
+    setResubmitError(null);
+  }
+
+  function openFreshNewRunModal(): void {
+    resetNewRunForm();
+    setWorkspaceView("runs");
+    setNewRunModalMode("fresh");
+  }
+
+  function markResubmitFileInputsChanged(): void {
+    if (newRunModalMode !== "resubmit") return;
+    setResubmitError(null);
+    setResubmitValidation({ status: "ready", files: [] });
+  }
+
+  async function chooseNewRunImages(setFiles: (files: string[]) => void, title: string): Promise<void> {
+    await chooseImages((files) => {
+      setFiles(files);
+      markResubmitFileInputsChanged();
+    }, title);
+  }
+
+  function clearNewRunFiles(clearFiles: () => void): void {
+    clearFiles();
+    markResubmitFileInputsChanged();
+  }
+
+  function applyRunConfigurationToForm(run: RunRecord): void {
     const availability = resolveRunWorkflowAvailability(run, workflows);
     if (availability.status === "missing" || availability.status === "version-mismatch") {
       throw new Error(availability.message);
@@ -567,32 +623,35 @@ export default function App(): JSX.Element {
     setSelectedRunId(null);
   }
 
-  async function confirmDuplicateRunConfiguration(): Promise<void> {
-    if (!duplicateSourceRun || !canDuplicateRun(duplicateValidation)) return;
-    setDuplicateError(null);
-    setIsDuplicating(true);
-    try {
-      await duplicateRunConfiguration(duplicateSourceRun);
-      setDuplicateSourceRun(null);
-    } catch (error) {
-      setDuplicateError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setIsDuplicating(false);
-    }
+  function closeNewRunModal(): void {
+    if (createRunMutation.isPending) return;
+    setNewRunModalMode(null);
+    setResubmitSourceRun(null);
+    setResubmitValidation({ status: "idle", files: [] });
+    setResubmitError(null);
   }
 
-  function openDuplicateRunDialog(run: RunRecord): void {
+  function openResubmitNewModal(run: RunRecord): void {
     const filePaths = collectRunInputFilePaths(run.input);
-    setDuplicateError(null);
-    setDuplicateSourceRun(run);
-    setDuplicateValidation(filePaths.length === 0 ? { status: "ready", files: [] } : { status: "checking", files: [] });
+    setResubmitError(null);
+    setResubmitSourceRun(run);
+    setResubmitValidation(filePaths.length === 0 ? { status: "ready", files: [] } : { status: "checking", files: [] });
+    setNewRunModalMode("resubmit");
+
+    try {
+      applyRunConfigurationToForm(run);
+    } catch (error) {
+      setResubmitError(error instanceof Error ? error.message : String(error));
+      setResubmitValidation({ status: "error", files: [], message: error instanceof Error ? error.message : String(error) });
+      return;
+    }
 
     if (filePaths.length === 0) return;
 
     void validateFilePaths(filePaths)
-      .then((result) => setDuplicateValidation({ status: "ready", files: result.files }))
+      .then((result) => setResubmitValidation({ status: "ready", files: result.files }))
       .catch((error) =>
-        setDuplicateValidation({
+        setResubmitValidation({
           status: "error",
           files: [],
           message: error instanceof Error ? error.message : String(error)
@@ -603,6 +662,217 @@ export default function App(): JSX.Element {
   const showLanding = showProjectLanding || !hasProject;
   const currentProjectDir = configQuery.data?.projectDir ?? "";
   const projectName = configQuery.data?.projectName ?? "Based BLINK";
+  const resubmitFileCount = resubmitSourceRun ? collectRunInputFilePaths(resubmitSourceRun.input).length : 0;
+  const canStartNewRun =
+    Boolean(selectedWorkflow) &&
+    !createRunMutation.isPending &&
+    (newRunModalMode !== "resubmit" || canUseReusedInputFiles(resubmitValidation));
+  const newRunModalTitle = newRunModalMode === "resubmit" ? "Resubmit New" : "New Run";
+  const newRunModalDescription =
+    newRunModalMode === "resubmit" && resubmitSourceRun
+      ? `Create a new run from ${resubmitSourceRun.name}.`
+      : "Configure and start a new workflow run.";
+  const newRunForm = (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <Label>Workflow</Label>
+        <select
+          value={selectedWorkflowId}
+          onChange={(event) => setSelectedWorkflowId(event.target.value)}
+          className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+        >
+          {workflows.length === 0 ? <option value="">No workflow plugins installed</option> : null}
+          {workflows.map((workflow) => (
+            <option key={workflow.manifest.id} value={workflow.manifest.id}>
+              {workflow.manifest.title} [{workflow.plugin.source}: {workflow.plugin.id}@{workflow.plugin.version}]
+            </option>
+          ))}
+        </select>
+      </div>
+      {hasProject && workflows.length === 0 ? (
+        <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.info)}>
+          <Package className="mt-0.5 h-4 w-4 shrink-0" />
+          Install a workflow plugin from the Plugins tab before starting a run.
+        </div>
+      ) : null}
+
+      <div className="space-y-1.5">
+        <Label>Run name</Label>
+        <Input className="h-9" value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional" />
+      </div>
+
+      {isChatGptExtensionWorkflow ? (
+        <ChatGptTabRoutingPanel
+          clients={extensionClients}
+          requiredProtocolVersion={requiredExtensionProtocol}
+          value={chatGptTabSelection || NEW_CHATGPT_TAB_VALUE}
+          onChange={(value) => {
+            setNewRunFocusError(null);
+            setChatGptTabSelection(value);
+          }}
+          onRefresh={() => void queryClient.invalidateQueries({ queryKey: ["system"] })}
+          onFocusSelected={(clientId) => {
+            setNewRunFocusError(null);
+            focusNewRunTabMutation.mutate(clientId);
+          }}
+          isFocusingSelected={focusNewRunTabMutation.isPending}
+          focusError={newRunFocusError}
+        />
+      ) : null}
+
+      {isChatGptExtensionWorkflow ? (
+        isChatGptSequenceWorkflow ? (
+          <>
+            <ImagePicker
+              label="Source image"
+              chooseLabel="Choose source"
+              files={sourceFiles}
+              emptyText="No source file selected"
+              onChoose={() => void chooseNewRunImages((files) => setSourceFiles(files.slice(0, 1)), "Choose one source image")}
+              onClear={() => clearNewRunFiles(() => setSourceFiles([]))}
+            />
+            <div className="space-y-1.5">
+              <Label>Setup prompt</Label>
+              <Textarea
+                className="min-h-12 py-1.5"
+                value={masterPrompt}
+                onChange={(event) => setMasterPrompt(event.target.value)}
+                placeholder="Optional global setup sent with the source image before the sequence."
+              />
+            </div>
+            <PromptSequenceEditor prompts={sequencePrompts} onChange={setSequencePrompts} />
+          </>
+        ) : (
+          <>
+            <ImagePicker
+              label="Reference images"
+              chooseLabel="Choose references"
+              files={referenceFiles}
+              emptyText="No reference files selected"
+              onChoose={() => void chooseNewRunImages(setReferenceFiles, "Choose optional reference images")}
+              onClear={() => clearNewRunFiles(() => setReferenceFiles([]))}
+            />
+            <div className="space-y-1.5">
+              <Label>Master prompt</Label>
+              <Textarea
+                className="min-h-12 py-1.5"
+                value={masterPrompt}
+                onChange={(event) => setMasterPrompt(event.target.value)}
+                placeholder='Initial instruction. Example: "After the first response, respond with images only. When ready, respond READY."'
+              />
+            </div>
+            <ImagePicker
+              label="Subject images"
+              chooseLabel="Choose subjects"
+              files={subjectFiles}
+              emptyText="No subject files selected"
+              onChoose={() => void chooseNewRunImages(setSubjectFiles, "Choose subject images")}
+              onClear={() => clearNewRunFiles(() => setSubjectFiles([]))}
+            />
+            <div className="space-y-1.5">
+              <Label>Per-subject instruction</Label>
+              <Textarea
+                className="min-h-12 py-1.5"
+                value={subjectInstruction}
+                onChange={(event) => setSubjectInstruction(event.target.value)}
+                placeholder="Optional. Leave blank to send each subject image without text."
+              />
+            </div>
+          </>
+        )
+      ) : isHunyuanWorkflow ? (
+        <HunyuanWorkflowFields
+          viewFiles={hunyuanViewFiles}
+          prompt={prompt}
+          modelFaceCount={hunyuanModelFaceCount}
+          retopologyType={hunyuanRetopologyType}
+          generateTexture={hunyuanGenerateTexture}
+          autoRig={hunyuanAutoRig}
+          exportFormat={hunyuanExportFormat}
+          selectorsJson={hunyuanSelectorsJson}
+          onChooseView={(field, title) =>
+            void chooseNewRunImages((files) => {
+              setHunyuanViewField(field, files);
+            }, title)
+          }
+          onClearView={(field) => clearNewRunFiles(() => setHunyuanViewField(field, []))}
+          onPromptChange={setPrompt}
+          onModelFaceCountChange={setHunyuanModelFaceCount}
+          onRetopologyTypeChange={setHunyuanRetopologyType}
+          onGenerateTextureChange={setHunyuanGenerateTexture}
+          onAutoRigChange={setHunyuanAutoRig}
+          onExportFormatChange={setHunyuanExportFormat}
+          onSelectorsJsonChange={setHunyuanSelectorsJson}
+        />
+      ) : (
+        <ImagePicker
+          label="Images"
+          chooseLabel="Choose images"
+          files={selectedFiles}
+          emptyText="No files selected"
+          onChoose={() => void chooseNewRunImages(setSelectedFiles, "Choose workflow input images")}
+          onClear={() => clearNewRunFiles(() => setSelectedFiles([]))}
+        />
+      )}
+
+      {!workflowHasField(selectedWorkflow, "masterPrompt") && !isHunyuanWorkflow ? (
+        <>
+          <div className="space-y-1.5">
+            <Label>Prompt</Label>
+            <Textarea className="min-h-12 py-1.5" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Optional model prompt" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Model name</Label>
+            <Input className="h-9" value={modelName} onChange={(event) => setModelName(event.target.value)} />
+          </div>
+        </>
+      ) : null}
+
+      {usesBrowserProfile ? (
+        <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+          <div className="space-y-1.5">
+            <Label>Browser profile</Label>
+            <Input className="h-9" value={profileName} onChange={(event) => setProfileName(event.target.value)} />
+          </div>
+          <label className="flex h-9 items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={pauseForManualLogin}
+              onChange={(event) => setPauseForManualLogin(event.target.checked)}
+            />
+            Login pause
+          </label>
+        </div>
+      ) : null}
+
+      {!hasProject ? (
+        <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.info)}>
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          Choose a project folder to create runs. Starting a run will prompt for one.
+        </div>
+      ) : null}
+
+      {newRunModalMode === "resubmit" ? (
+        <ReusedInputValidationPanel
+          fileCount={resubmitFileCount}
+          validation={resubmitValidation}
+          error={resubmitError}
+        />
+      ) : null}
+
+      {formError ? (
+        <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.danger)}>
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          {formError}
+        </div>
+      ) : null}
+
+      <Button className="h-9 w-full" onClick={() => createRunMutation.mutate()} disabled={!canStartNewRun}>
+        <Play className="h-4 w-4" />
+        {createRunMutation.isPending ? "Starting..." : hasProject ? "Start run" : "Choose project and start"}
+      </Button>
+    </div>
+  );
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-background text-foreground transition-colors">
@@ -684,204 +954,8 @@ export default function App(): JSX.Element {
           }
         />
       ) : (
-      <div className="mx-auto grid min-h-0 w-full max-w-[1500px] flex-1 grid-cols-[minmax(320px,360px)_minmax(0,1fr)] gap-4 overflow-hidden px-5 py-4">
-        <section className="min-h-0">
-          <Card>
-            <CardHeader className="p-3 pb-1.5">
-              <CardTitle>New Run</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 p-3 pt-0">
-              <div className="space-y-1.5">
-                <Label>Workflow</Label>
-                <select
-                  value={selectedWorkflowId}
-                  onChange={(event) => setSelectedWorkflowId(event.target.value)}
-                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-                >
-                  {workflows.length === 0 ? <option value="">No workflow plugins installed</option> : null}
-                  {workflows.map((workflow) => (
-                    <option key={workflow.manifest.id} value={workflow.manifest.id}>
-                      {workflow.manifest.title} [{workflow.plugin.source}: {workflow.plugin.id}@{workflow.plugin.version}]
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {hasProject && workflows.length === 0 ? (
-                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.info)}>
-                  <Package className="mt-0.5 h-4 w-4 shrink-0" />
-                  Install a workflow plugin from the Plugins tab before starting a run.
-                </div>
-              ) : null}
-
-              <div className="space-y-1.5">
-                <Label>Run name</Label>
-                <Input className="h-9" value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional" />
-              </div>
-
-              {isChatGptExtensionWorkflow ? (
-                <ChatGptTabRoutingPanel
-                  clients={extensionClients}
-                  requiredProtocolVersion={requiredExtensionProtocol}
-                  value={chatGptTabSelection || NEW_CHATGPT_TAB_VALUE}
-                  onChange={(value) => {
-                    setNewRunFocusError(null);
-                    setChatGptTabSelection(value);
-                  }}
-                  onRefresh={() => void queryClient.invalidateQueries({ queryKey: ["system"] })}
-                  onFocusSelected={(clientId) => {
-                    setNewRunFocusError(null);
-                    focusNewRunTabMutation.mutate(clientId);
-                  }}
-                  isFocusingSelected={focusNewRunTabMutation.isPending}
-                  focusError={newRunFocusError}
-                />
-              ) : null}
-
-              {isChatGptExtensionWorkflow ? (
-                isChatGptSequenceWorkflow ? (
-                  <>
-                    <ImagePicker
-                      label="Source image"
-                      chooseLabel="Choose source"
-                      files={sourceFiles}
-                      emptyText="No source file selected"
-                      onChoose={() => void chooseImages((files) => setSourceFiles(files.slice(0, 1)), "Choose one source image")}
-                      onClear={() => setSourceFiles([])}
-                    />
-                    <div className="space-y-1.5">
-                      <Label>Setup prompt</Label>
-                      <Textarea
-                        className="min-h-12 py-1.5"
-                        value={masterPrompt}
-                        onChange={(event) => setMasterPrompt(event.target.value)}
-                        placeholder="Optional global setup sent with the source image before the sequence."
-                      />
-                    </div>
-                    <PromptSequenceEditor prompts={sequencePrompts} onChange={setSequencePrompts} />
-                  </>
-                ) : (
-                  <>
-                    <ImagePicker
-                      label="Reference images"
-                      chooseLabel="Choose references"
-                      files={referenceFiles}
-                      emptyText="No reference files selected"
-                      onChoose={() => void chooseImages(setReferenceFiles, "Choose optional reference images")}
-                      onClear={() => setReferenceFiles([])}
-                    />
-                    <div className="space-y-1.5">
-                      <Label>Master prompt</Label>
-                      <Textarea
-                        className="min-h-12 py-1.5"
-                        value={masterPrompt}
-                        onChange={(event) => setMasterPrompt(event.target.value)}
-                        placeholder='Initial instruction. Example: "After the first response, respond with images only. When ready, respond READY."'
-                      />
-                    </div>
-                    <ImagePicker
-                      label="Subject images"
-                      chooseLabel="Choose subjects"
-                      files={subjectFiles}
-                      emptyText="No subject files selected"
-                      onChoose={() => void chooseImages(setSubjectFiles, "Choose subject images")}
-                      onClear={() => setSubjectFiles([])}
-                    />
-                    <div className="space-y-1.5">
-                      <Label>Per-subject instruction</Label>
-                      <Textarea
-                        className="min-h-12 py-1.5"
-                        value={subjectInstruction}
-                        onChange={(event) => setSubjectInstruction(event.target.value)}
-                        placeholder="Optional. Leave blank to send each subject image without text."
-                      />
-                    </div>
-                  </>
-                )
-              ) : isHunyuanWorkflow ? (
-                <HunyuanWorkflowFields
-                  viewFiles={hunyuanViewFiles}
-                  prompt={prompt}
-                  modelFaceCount={hunyuanModelFaceCount}
-                  retopologyType={hunyuanRetopologyType}
-                  generateTexture={hunyuanGenerateTexture}
-                  autoRig={hunyuanAutoRig}
-                  exportFormat={hunyuanExportFormat}
-                  selectorsJson={hunyuanSelectorsJson}
-                  onChooseView={(field, title) => void chooseImages((files) => setHunyuanViewField(field, files), title)}
-                  onClearView={(field) => setHunyuanViewField(field, [])}
-                  onPromptChange={setPrompt}
-                  onModelFaceCountChange={setHunyuanModelFaceCount}
-                  onRetopologyTypeChange={setHunyuanRetopologyType}
-                  onGenerateTextureChange={setHunyuanGenerateTexture}
-                  onAutoRigChange={setHunyuanAutoRig}
-                  onExportFormatChange={setHunyuanExportFormat}
-                  onSelectorsJsonChange={setHunyuanSelectorsJson}
-                />
-              ) : (
-                <ImagePicker
-                  label="Images"
-                  chooseLabel="Choose images"
-                  files={selectedFiles}
-                  emptyText="No files selected"
-                  onChoose={() => void chooseImages(setSelectedFiles, "Choose workflow input images")}
-                  onClear={() => setSelectedFiles([])}
-                />
-              )}
-
-              {!workflowHasField(selectedWorkflow, "masterPrompt") && !isHunyuanWorkflow ? (
-                <>
-                  <div className="space-y-1.5">
-                    <Label>Prompt</Label>
-                    <Textarea className="min-h-12 py-1.5" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Optional model prompt" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Model name</Label>
-                    <Input className="h-9" value={modelName} onChange={(event) => setModelName(event.target.value)} />
-                  </div>
-                </>
-              ) : null}
-
-              {usesBrowserProfile ? (
-                <>
-                  <div className="grid grid-cols-[1fr_auto] items-end gap-3">
-                    <div className="space-y-1.5">
-                      <Label>Browser profile</Label>
-                      <Input className="h-9" value={profileName} onChange={(event) => setProfileName(event.target.value)} />
-                    </div>
-                    <label className="flex h-9 items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={pauseForManualLogin}
-                        onChange={(event) => setPauseForManualLogin(event.target.checked)}
-                      />
-                      Login pause
-                    </label>
-                  </div>
-                </>
-              ) : null}
-              {!hasProject ? (
-                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.info)}>
-                  <Info className="mt-0.5 h-4 w-4 shrink-0" />
-                  Choose a project folder to create runs. Starting a run will prompt for one.
-                </div>
-              ) : null}
-
-              {formError ? (
-                <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.danger)}>
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  {formError}
-                </div>
-              ) : null}
-
-              <Button className="h-9 w-full" onClick={() => createRunMutation.mutate()} disabled={createRunMutation.isPending || !selectedWorkflow}>
-                <Play className="h-4 w-4" />
-                {hasProject ? "Start run" : "Choose project and start"}
-              </Button>
-            </CardContent>
-          </Card>
-        </section>
-
-        <section className="flex min-h-0 flex-col gap-4">
+      <div className="mx-auto flex min-h-0 w-full max-w-[1500px] flex-1 overflow-hidden px-5 py-4">
+        <section className="flex min-h-0 w-full flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
             <div className="inline-flex rounded-md border border-border bg-card p-1">
               <button
@@ -931,9 +1005,11 @@ export default function App(): JSX.Element {
               hasProject={hasProject}
               apiBaseUrl={apiBaseUrl}
               onApplyHunyuanSelectorConfig={(selectorsJson) => {
+                resetNewRunForm();
                 setHunyuanSelectorsJson(selectorsJson);
                 setSelectedWorkflowId(HUNYUAN_WORKFLOW_ID);
                 setWorkspaceView("runs");
+                setNewRunModalMode("fresh");
               }}
             />
           </div>
@@ -960,8 +1036,12 @@ export default function App(): JSX.Element {
               {cliAgentRuns.length > 0 ? (
                 <AgentActivityPanel runs={cliAgentRuns} onSelectRun={(runId) => setSelectedRunId(runId)} />
               ) : null}
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <h2 className="text-lg font-semibold">Runs</h2>
+                <Button type="button" onClick={openFreshNewRunModal} disabled={!hasProject}>
+                  <Plus className="h-4 w-4" />
+                  New Run
+                </Button>
               </div>
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                 {!hasProject ? (
@@ -976,7 +1056,7 @@ export default function App(): JSX.Element {
                     selected={selectedRunIds.has(run.id)}
                     workflowAvailability={resolveRunWorkflowAvailability(run, workflows)}
                     onSelect={() => setSelectedRunId(run.id)}
-                    onDuplicate={() => openDuplicateRunDialog(run)}
+                    onResubmit={() => openResubmitNewModal(run)}
                   />
                 ))}
                 {hasProject && runsQuery.data?.length === 0 ? (
@@ -991,6 +1071,11 @@ export default function App(): JSX.Element {
 
       <LocalRuntimeFooter config={configQuery.data} system={systemQuery.data} />
 
+      {!showLanding && newRunModalMode ? (
+        <NewRunModal title={newRunModalTitle} description={newRunModalDescription} onClose={closeNewRunModal}>
+          {newRunForm}
+        </NewRunModal>
+      ) : null}
       {!showLanding && selectedRunId ? (
         <RunDetailModal
           runId={selectedRunId}
@@ -1011,17 +1096,6 @@ export default function App(): JSX.Element {
           onFocusClient={(clientId) => focusExtensionClient(clientId)}
           onRename={(runId, nextName) => renameRunMutation.mutateAsync({ runId, nextName }).then(() => undefined)}
           onDelete={(runId) => void deleteRunMutation.mutate(runId)}
-        />
-      ) : null}
-      {duplicateSourceRun ? (
-        <DuplicateRunConfirmDialog
-          runName={duplicateSourceRun.name}
-          fileCount={duplicateFilePaths.length}
-          validation={duplicateValidation}
-          error={duplicateError}
-          isDuplicating={isDuplicating}
-          onCancel={() => setDuplicateSourceRun(null)}
-          onConfirm={() => void confirmDuplicateRunConfiguration()}
         />
       ) : null}
       {actionError ? (
@@ -1544,7 +1618,7 @@ function ProjectLanding({
   );
 }
 
-type DuplicateRunValidationState =
+type ReusedInputValidationState =
   | { status: "idle" | "checking"; files: FileValidationResult["files"] }
   | { status: "ready"; files: FileValidationResult["files"] }
   | { status: "error"; files: FileValidationResult["files"]; message: string };
@@ -1910,98 +1984,97 @@ function RunDetailModal({
   );
 }
 
-function DuplicateRunConfirmDialog({
-  runName,
-  fileCount,
-  validation,
-  error,
-  isDuplicating,
-  onCancel,
-  onConfirm
+function NewRunModal({
+  title,
+  description,
+  children,
+  onClose
 }: {
-  runName: string;
-  fileCount: number;
-  validation: DuplicateRunValidationState;
-  error: string | null;
-  isDuplicating: boolean;
-  onCancel(): void;
-  onConfirm(): void;
+  title: string;
+  description: string;
+  children: ReactNode;
+  onClose(): void;
 }): JSX.Element {
-  const invalidFiles = invalidDuplicateFiles(validation);
-  const canDuplicate = canDuplicateRun(validation);
-
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 px-4" onMouseDown={onCancel}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 px-4 py-6" onMouseDown={onClose}>
       <div
-        className="w-full max-w-lg rounded-lg border border-border bg-background shadow-xl"
+        className="flex max-h-full w-full max-w-3xl flex-col rounded-lg border border-border bg-background shadow-xl"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="duplicate-run-title"
+        aria-labelledby="new-run-title"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="border-b border-border px-5 py-4">
-          <h3 id="duplicate-run-title" className="text-base font-semibold">
-            Duplicate Run Configuration
-          </h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Copy the workflow settings from {runName} into the New Run form. This will not start the run.
-          </p>
-        </div>
-
-        <div className="space-y-3 p-5 text-sm">
-          {validation.status === "checking" ? (
-            <div className={cn("flex gap-2 rounded-md border p-3", toneClassNames.info)}>
-              <RefreshCcw className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
-              Checking {fileCount} attached file path{fileCount === 1 ? "" : "s"}...
-            </div>
-          ) : null}
-
-          {validation.status === "ready" && invalidFiles.length === 0 ? (
-            <div className={cn("rounded-md border p-3", toneClassNames.success)}>
-              {fileCount === 0
-                ? "This run has no attached input files to validate."
-                : `All ${fileCount} attached input file path${fileCount === 1 ? "" : "s"} are available.`}
-            </div>
-          ) : null}
-
-          {validation.status === "ready" && invalidFiles.length > 0 ? (
-            <div className={cn("space-y-2 rounded-md border p-3", toneClassNames.danger)}>
-              <div className="font-medium">
-                {invalidFiles.length} attached file path{invalidFiles.length === 1 ? "" : "s"} cannot be reused.
-              </div>
-              <div className="max-h-36 space-y-1 overflow-auto text-xs">
-                {invalidFiles.slice(0, 8).map((file) => (
-                  <div key={file.path} className="space-y-0.5" title={file.path}>
-                    <div className="truncate">{file.path}</div>
-                    <div className="text-muted-foreground">
-                      {file.error ?? (file.exists ? "Path is not a file." : "File is missing.")}
-                    </div>
-                  </div>
-                ))}
-                {invalidFiles.length > 8 ? <div>{invalidFiles.length - 8} more...</div> : null}
-              </div>
-            </div>
-          ) : null}
-
-          {validation.status === "error" ? (
-            <div className={cn("rounded-md border p-3", toneClassNames.danger)}>
-              Could not validate attached file paths: {validation.message}
-            </div>
-          ) : null}
-
-          {error ? <div className={cn("rounded-md border p-3", toneClassNames.danger)}>{error}</div> : null}
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-border px-5 py-4">
-          <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={isDuplicating}>
-            Cancel
-          </Button>
-          <Button type="button" size="sm" onClick={onConfirm} disabled={!canDuplicate || isDuplicating}>
-            <Copy className="h-4 w-4" />
-            {isDuplicating ? "Duplicating..." : "Duplicate configuration"}
+        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+          <div className="min-w-0">
+            <h3 id="new-run-title" className="text-base font-semibold">
+              {title}
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+          </div>
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close new run modal">
+            <X className="h-4 w-4" />
           </Button>
         </div>
+        <div className="min-h-0 overflow-y-auto p-5">{children}</div>
       </div>
+    </div>
+  );
+}
+
+function ReusedInputValidationPanel({
+  fileCount,
+  validation,
+  error
+}: {
+  fileCount: number;
+  validation: ReusedInputValidationState;
+  error: string | null;
+}): JSX.Element {
+  const invalidFiles = invalidReusedInputFiles(validation);
+
+  return (
+    <div className="space-y-3 text-sm">
+      {validation.status === "checking" ? (
+        <div className={cn("flex gap-2 rounded-md border p-3", toneClassNames.info)}>
+          <RefreshCcw className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+          Checking {fileCount} attached file path{fileCount === 1 ? "" : "s"}...
+        </div>
+      ) : null}
+
+      {validation.status === "ready" && invalidFiles.length === 0 ? (
+        <div className={cn("rounded-md border p-3", toneClassNames.success)}>
+          {fileCount === 0
+            ? "This run has no attached input files to validate."
+            : `All ${fileCount} attached input file path${fileCount === 1 ? "" : "s"} are available.`}
+        </div>
+      ) : null}
+
+      {validation.status === "ready" && invalidFiles.length > 0 ? (
+        <div className={cn("space-y-2 rounded-md border p-3", toneClassNames.danger)}>
+          <div className="font-medium">
+            {invalidFiles.length} attached file path{invalidFiles.length === 1 ? "" : "s"} cannot be reused.
+          </div>
+          <div className="max-h-36 space-y-1 overflow-auto text-xs">
+            {invalidFiles.slice(0, 8).map((file) => (
+              <div key={file.path} className="space-y-0.5" title={file.path}>
+                <div className="truncate">{file.path}</div>
+                <div className="text-muted-foreground">
+                  {file.error ?? (file.exists ? "Path is not a file." : "File is missing.")}
+                </div>
+              </div>
+            ))}
+            {invalidFiles.length > 8 ? <div>{invalidFiles.length - 8} more...</div> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {validation.status === "error" ? (
+        <div className={cn("rounded-md border p-3", toneClassNames.danger)}>
+          Could not validate attached file paths: {validation.message}
+        </div>
+      ) : null}
+
+      {error ? <div className={cn("rounded-md border p-3", toneClassNames.danger)}>{error}</div> : null}
     </div>
   );
 }
@@ -2043,12 +2116,12 @@ function ActionErrorDialog({
   );
 }
 
-function invalidDuplicateFiles(validation: DuplicateRunValidationState): FileValidationResult["files"] {
+function invalidReusedInputFiles(validation: ReusedInputValidationState): FileValidationResult["files"] {
   return validation.files.filter((file) => !file.exists || !file.isFile);
 }
 
-function canDuplicateRun(validation: DuplicateRunValidationState): boolean {
-  return validation.status === "ready" && invalidDuplicateFiles(validation).length === 0;
+function canUseReusedInputFiles(validation: ReusedInputValidationState): boolean {
+  return validation.status === "ready" && invalidReusedInputFiles(validation).length === 0;
 }
 
 function ChatGptArtifactPairs({
@@ -3166,13 +3239,13 @@ function RunRow({
   selected,
   workflowAvailability,
   onSelect,
-  onDuplicate
+  onResubmit
 }: {
   run: RunRecord;
   selected: boolean;
   workflowAvailability: RunWorkflowAvailability;
   onSelect: () => void;
-  onDuplicate: () => void;
+  onResubmit: () => void;
 }): JSX.Element {
   const workflowUnavailable = workflowAvailability.status === "missing" || workflowAvailability.status === "version-mismatch";
   const motionActive = isMotionActiveStatus(run.status);
@@ -3208,12 +3281,12 @@ function RunRow({
             type="button"
             variant="outline"
             size="sm"
-            onClick={onDuplicate}
+            onClick={onResubmit}
             disabled={workflowUnavailable}
-            title={workflowUnavailable ? workflowAvailability.message : "Duplicate Run Configuration"}
+            title={workflowUnavailable ? workflowAvailability.message : "Resubmit New"}
           >
             <Copy className="h-4 w-4" />
-            Duplicate config
+            Resubmit New
           </Button>
         </div>
       </div>
