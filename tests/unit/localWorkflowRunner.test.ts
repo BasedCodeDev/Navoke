@@ -79,8 +79,9 @@ describe("LocalWorkflowRunner", () => {
       workflowInput: { message: "test" }
     });
 
-    expect(path.basename(run.runDir!)).toMatch(/^Runner-test-[\w]{8}$/);
+    expect(path.basename(run.runDir!)).toMatch(/^1-Runner-test-[\w]{8}$/);
     expect(path.basename(run.runDir!)).not.toContain(" ");
+    expect(run.runNumber).toBe(1);
     expect(run.workflowVersion).toBe("0.0.0");
     expect(run.pluginId).toBe("test.plugin");
     expect(run.pluginVersion).toBe("1.2.3");
@@ -554,8 +555,9 @@ describe("LocalWorkflowRunner", () => {
 
     await waitFor(() => store.getRun(run.id)?.status === "completed");
 
-    expect(path.basename(run.runDir!)).toMatch(/^Prompt-Copy-Test-[\w]{8}$/);
+    expect(path.basename(run.runDir!)).toMatch(/^1-Prompt-Copy-Test-[\w]{8}$/);
     expect(path.basename(run.runDir!)).not.toContain(" ");
+    expect(run.runNumber).toBe(1);
     const storedInput = store.getRun(run.id)?.input as { subjectImages: string[] };
     expect(storedInput.subjectImages[0]).toBe(path.join(run.runDir!, "inputs", "subjectImages", "01-subject.png"));
     const promptsPath = path.join(run.runDir!, "prompts.json");
@@ -583,7 +585,7 @@ describe("LocalWorkflowRunner", () => {
     const store = await SqliteStore.open(paths.dbPath);
     const runner = new LocalWorkflowRunner(new Map(), store, paths, new RuntimeEventBus());
     const runId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-    const oldRunDir = getRunDir(paths, "Old Run Name", runId);
+    const oldRunDir = getRunDir(paths, "Old Run Name", runId, 7);
     const inputPath = path.join(oldRunDir, "inputs", "images", "01-source.png");
     const artifactPath = path.join(oldRunDir, "artifacts", "result.json");
     const promptsPath = path.join(oldRunDir, "prompts.json");
@@ -601,6 +603,7 @@ describe("LocalWorkflowRunner", () => {
       id: runId,
       workflowId: "test.workflow",
       name: "Old Run Name",
+      runNumber: 7,
       runDir: oldRunDir,
       status: "completed",
       input: { images: [inputPath] }
@@ -617,23 +620,89 @@ describe("LocalWorkflowRunner", () => {
     });
 
     const renamed = runner.renameRun(run.id, "New Run Name");
-    const newRunDir = getRunDir(paths, "New Run Name", run.id);
+    const newRunDir = getRunDir(paths, "New Run Name", run.id, 7);
 
     expect(renamed.name).toBe("New Run Name");
+    expect(renamed.runNumber).toBe(7);
     expect(renamed.runDir).toBe(newRunDir);
     expect(fs.existsSync(oldRunDir)).toBe(false);
     expect(fs.existsSync(newRunDir)).toBe(true);
-    expect(path.basename(newRunDir)).toBe("New-Run-Name-aaaaaaaa");
+    expect(path.basename(newRunDir)).toBe("7-New-Run-Name-aaaaaaaa");
     expect((renamed.input as { images: string[] }).images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
     expect((renamed.output as { resultPath: string }).resultPath).toBe(path.join(newRunDir, "artifacts", "result.json"));
     expect(store.getArtifact(artifact.id)?.path).toBe(path.join(newRunDir, "artifacts", "result.json"));
     expect(store.getArtifact(artifact.id)?.metadata).toEqual({ artifactDir: path.join(newRunDir, "artifacts") });
     const prompts = JSON.parse(fs.readFileSync(path.join(newRunDir, "prompts.json"), "utf8")) as {
       runName: string;
+      runNumber: number;
       runDir: string;
       input: { copied: { images: string[] } };
     };
     expect(prompts.runName).toBe("New Run Name");
+    expect(prompts.runNumber).toBe(7);
+    expect(prompts.runDir).toBe(newRunDir);
+    expect(prompts.input.copied.images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
+
+    store.close();
+  });
+
+  it("backfills numbered folders and rewrites stored run paths", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const runId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    const oldRunDir = getRunDir(paths, "Legacy Run", runId);
+    const inputPath = path.join(oldRunDir, "inputs", "images", "01-source.png");
+    const artifactPath = path.join(oldRunDir, "artifacts", "result.json");
+    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    fs.writeFileSync(inputPath, "image");
+    fs.writeFileSync(artifactPath, "{}");
+    fs.writeFileSync(
+      path.join(oldRunDir, "prompts.json"),
+      `${JSON.stringify({ runName: "Legacy Run", runDir: oldRunDir, input: { copied: { images: [inputPath] } } }, null, 2)}\n`,
+      "utf8"
+    );
+    const run = store.createRun({
+      id: runId,
+      workflowId: "test.workflow",
+      name: "Legacy Run",
+      runDir: oldRunDir,
+      status: "completed",
+      input: { images: [inputPath] }
+    });
+    store.updateRun(run.id, { output: { resultPath: artifactPath } });
+    store.addArtifact({
+      id: "artifact-backfill",
+      runId,
+      kind: "json",
+      name: "result.json",
+      path: artifactPath,
+      mimeType: "application/json",
+      metadata: { artifactDir: path.dirname(artifactPath) }
+    });
+
+    new LocalWorkflowRunner(new Map(), store, paths, new RuntimeEventBus());
+
+    const migrated = store.getRun(run.id)!;
+    const newRunDir = getRunDir(paths, "Legacy Run", run.id, migrated.runNumber);
+    expect(migrated.runNumber).toBe(1);
+    expect(migrated.runDir).toBe(newRunDir);
+    expect(fs.existsSync(oldRunDir)).toBe(false);
+    expect(fs.existsSync(newRunDir)).toBe(true);
+    expect((migrated.input as { images: string[] }).images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
+    expect((migrated.output as { resultPath: string }).resultPath).toBe(path.join(newRunDir, "artifacts", "result.json"));
+    expect(store.getArtifact("artifact-backfill")?.path).toBe(path.join(newRunDir, "artifacts", "result.json"));
+    expect(store.getArtifact("artifact-backfill")?.metadata).toEqual({ artifactDir: path.join(newRunDir, "artifacts") });
+    const prompts = JSON.parse(fs.readFileSync(path.join(newRunDir, "prompts.json"), "utf8")) as {
+      runName: string;
+      runNumber: number;
+      runDir: string;
+      input: { copied: { images: string[] } };
+    };
+    expect(prompts.runName).toBe("Legacy Run");
+    expect(prompts.runNumber).toBe(1);
     expect(prompts.runDir).toBe(newRunDir);
     expect(prompts.input.copied.images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
 

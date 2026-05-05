@@ -19,7 +19,7 @@ function buildNewExtensionTabUrl(routingToken) {
 }
 function createDefaultExtensionTabTarget() {
     const routingToken = (0, node_crypto_1.randomUUID)();
-    return { mode: "new", routingToken, url: buildNewExtensionTabUrl(routingToken) };
+    return { mode: "new", routingToken, url: buildNewExtensionTabUrl(routingToken), openMode: "window" };
 }
 function createWorkflows(sdk) {
     const { z } = sdk.schema;
@@ -41,6 +41,9 @@ function createWorkflows(sdk) {
         title: z.string().optional(),
         clientId: z.string().optional(),
         routingToken: z.string().optional(),
+        controllerId: z.string().optional(),
+        tabId: z.number().optional(),
+        windowId: z.number().optional(),
         capturedAt: z.string().min(1)
     });
     const outputMappingSchema = z.object({
@@ -75,7 +78,8 @@ function createWorkflows(sdk) {
             mode: z.literal("new"),
             routingToken: z.string().trim().min(8, "New-tab routing token is required."),
             url: z.string().trim().optional(),
-            title: z.string().trim().optional()
+            title: z.string().trim().optional(),
+            openMode: z.enum(["window", "tab"]).optional().default("window")
         })
     ])
         .default(createDefaultExtensionTabTarget);
@@ -124,6 +128,7 @@ function createWorkflows(sdk) {
         sourceImages: z.array(z.string()).length(1, "Choose exactly one source image."),
         prompts: promptSequenceSchema,
         masterPrompt: z.string().optional().default("").transform((value) => value.trim()),
+        masterPromptSuffix: z.string().optional().default("").transform((value) => value.trim()),
         timeoutMinutes: z.number().min(1).max(240).optional().default(60),
         extensionTab: extensionTabSchema,
         selectors: selectorsSchema
@@ -153,7 +158,7 @@ function createWorkflows(sdk) {
                     name: "extensionTab",
                     label: "ChatGPT tab",
                     type: "select",
-                    help: "Target a compatible open ChatGPT tab, or open a new tab for this run."
+                    help: "Target a compatible open ChatGPT tab, or open a new extension-owned window for this run."
                 },
                 { name: "masterPrompt", label: "Master prompt", type: "textarea", required: true },
                 { name: "subjectInstruction", label: "Per-subject instruction", type: "textarea" },
@@ -285,7 +290,19 @@ function createWorkflows(sdk) {
                             latestChatGptPage = page;
                             await persistCheckpointOutput(`Tracking ChatGPT page before ${phase}.`);
                         }
-                        return { target: buildRecoverableTarget(target, page), client };
+                        const recoverableTarget = buildRecoverableTarget(target, page);
+                        try {
+                            await chatgpt.focusTarget(recoverableTarget, { signal: ctx.signal, timeoutMs: 10_000 });
+                        }
+                        catch (focusError) {
+                            if (isOperationCancelled(focusError))
+                                throw focusError;
+                            await ctx.event("extension.focus", "Could not focus ChatGPT browser surface before task.", {
+                                phase,
+                                message: focusError instanceof Error ? focusError.message : String(focusError)
+                            });
+                        }
+                        return { target: recoverableTarget, client };
                     }
                     catch (error) {
                         await persistCheckpointOutput(`Waiting for ChatGPT browser controller before ${phase}.`);
@@ -492,13 +509,19 @@ function createWorkflows(sdk) {
                     name: "extensionTab",
                     label: "ChatGPT tab",
                     type: "select",
-                    help: "Target a compatible open ChatGPT tab, or open a new tab for this run."
+                    help: "Target a compatible open ChatGPT tab, or open a new extension-owned window for this run."
                 },
                 {
                     name: "masterPrompt",
                     label: "Setup prompt",
                     type: "textarea",
                     help: "Optional global setup sent with the source image before the prompt sequence."
+                },
+                {
+                    name: "masterPromptSuffix",
+                    label: "Setup prompt suffix",
+                    type: "textarea",
+                    help: "Optional text appended to the setup prompt before submission."
                 },
                 {
                     name: "prompts",
@@ -544,7 +567,7 @@ function createWorkflows(sdk) {
                 registeredOutputs.push(restoredMapping.output);
                 usedOutputNames.add(node_path_1.default.basename(restoredMapping.mapping.outputPath));
             }
-            setupCompleted = input.masterPrompt ? restored.setupCompleted : true;
+            setupCompleted = restored.setupCompleted;
             latestChatGptPage = restored.chatGptPage ?? latestChatGptPage;
             pausedPrompt = restored.pausedPrompt;
             const checkpointOutput = (summary) => ({
@@ -607,6 +630,8 @@ function createWorkflows(sdk) {
                         pairId,
                         taskId,
                         masterPrompt: input.masterPrompt,
+                        masterPromptSuffix: input.masterPromptSuffix,
+                        effectiveMasterPrompt: sequenceSetupPrompt(input),
                         prompts: input.prompts,
                         extensionMetadata: output.metadata ?? null
                     }
@@ -645,7 +670,19 @@ function createWorkflows(sdk) {
                             latestChatGptPage = page;
                             await persistCheckpointOutput(`Tracking ChatGPT page before ${phase}.`);
                         }
-                        return { target: buildRecoverableTarget(target, page), client };
+                        const recoverableTarget = buildRecoverableTarget(target, page);
+                        try {
+                            await chatgpt.focusTarget(recoverableTarget, { signal: ctx.signal, timeoutMs: 10_000 });
+                        }
+                        catch (focusError) {
+                            if (isOperationCancelled(focusError))
+                                throw focusError;
+                            await ctx.event("extension.focus", "Could not focus ChatGPT browser surface before task.", {
+                                phase,
+                                message: focusError instanceof Error ? focusError.message : String(focusError)
+                            });
+                        }
+                        return { target: recoverableTarget, client };
                     }
                     catch (error) {
                         await persistCheckpointOutput(`Waiting for ChatGPT browser controller before ${phase}.`);
@@ -700,9 +737,10 @@ function createWorkflows(sdk) {
                         latestChatGptPage = buildChatGptPage(target, result.metadata, client) ?? latestChatGptPage;
                         const pausedMetadata = readPausedTaskMetadata(result.metadata);
                         if (pausedMetadata && phase === "subject" && phaseInput.subjectIndex !== undefined) {
+                            const pausedInputImagePath = phaseInput.inputImagePath ?? phaseInput.subjectImagePath;
                             pausedPrompt = {
                                 promptIndex: phaseInput.subjectIndex,
-                                ...(phaseInput.subjectImagePath ? { inputImage: phaseInput.subjectImagePath } : {}),
+                                ...(pausedInputImagePath ? { inputImage: pausedInputImagePath } : {}),
                                 ...(pausedMetadata.reason ? { reason: pausedMetadata.reason } : {}),
                                 ...(pausedMetadata.baseline !== undefined ? { baseline: pausedMetadata.baseline } : {}),
                                 ...(pausedMetadata.captureDiagnostics !== undefined
@@ -719,9 +757,10 @@ function createWorkflows(sdk) {
                     catch (error) {
                         if (error instanceof ImmediateChatGptPauseError) {
                             if (phase === "subject" && phaseInput.subjectIndex !== undefined) {
+                                const pausedInputImagePath = phaseInput.inputImagePath ?? phaseInput.subjectImagePath;
                                 pausedPrompt = {
                                     promptIndex: phaseInput.subjectIndex,
-                                    ...(phaseInput.subjectImagePath ? { inputImage: phaseInput.subjectImagePath } : {}),
+                                    ...(pausedInputImagePath ? { inputImage: pausedInputImagePath } : {}),
                                     reason: "Paused immediately. Resume will inspect the current ChatGPT page for an output before resubmitting this prompt.",
                                     ...(phaseInput.subjectBaseline !== undefined ? { baseline: phaseInput.subjectBaseline } : {})
                                 };
@@ -753,14 +792,10 @@ function createWorkflows(sdk) {
                 }
             };
             await persistCheckpointOutput("Preparing ChatGPT image sequence workflow.");
-            if (!input.masterPrompt) {
-                setupCompleted = true;
-                await persistCheckpointOutput("No ChatGPT sequence setup prompt was provided.");
-            }
-            else if (!setupCompleted) {
+            if (!setupCompleted) {
                 await ctx.pauseIfRequested("Paused before ChatGPT sequence setup.", manualActionData("setup"));
                 await runPhaseTask("setup", "sequence setup", {
-                    masterPrompt: input.masterPrompt,
+                    masterPrompt: sequenceSetupPrompt(input),
                     referenceImagePaths: [sourceImage]
                 });
                 setupCompleted = true;
@@ -788,6 +823,7 @@ function createWorkflows(sdk) {
                         await runPhaseTask("subject", `${phaseLabel} capture`, {
                             subjectMode: "capture-existing",
                             subjectImagePath: captureInputImagePath,
+                            inputImagePath: captureInputImagePath,
                             subjectIndex: promptIndex,
                             ...(captureBaseline !== undefined ? { subjectBaseline: captureBaseline } : {})
                         });
@@ -802,9 +838,11 @@ function createWorkflows(sdk) {
                         await ctx.event("chatgpt.capture_existing.missed", `Could not capture an existing ChatGPT output for ${phaseLabel}; resubmitting the prompt.`);
                     }
                     inputImagesByPrompt.set(promptIndex, currentInputImagePath);
+                    const attachedInputImagePath = promptIndex === 0 ? undefined : currentInputImagePath;
                     await runPhaseTask("subject", phaseLabel, {
                         subjectMode: "submit-and-capture",
-                        subjectImagePath: currentInputImagePath,
+                        ...(attachedInputImagePath ? { subjectImagePath: attachedInputImagePath } : {}),
+                        inputImagePath: currentInputImagePath,
                         subjectIndex: promptIndex,
                         subjectInstruction: prompt
                     });
@@ -825,6 +863,8 @@ function createWorkflows(sdk) {
             const manifestPath = node_path_1.default.join(artifactDir, "chatgpt-extension-sequence-manifest.json");
             writeJson(manifestPath, {
                 masterPrompt: input.masterPrompt,
+                masterPromptSuffix: input.masterPromptSuffix,
+                effectiveMasterPrompt: sequenceSetupPrompt(input),
                 sourceImages: input.sourceImages,
                 prompts: input.prompts,
                 extensionTab: redactTargetForManifest(input.extensionTab),
@@ -968,7 +1008,7 @@ function createWorkflows(sdk) {
             restoredMappings.push(restored);
         }
         const completedPrompts = new Set(restoredMappings.map((mapping) => mapping.output.subjectIndex));
-        const setupCompleted = input.masterPrompt ? Boolean(output.checkpoint?.setupCompleted) : true;
+        const setupCompleted = Boolean(output.checkpoint?.setupCompleted) || completedPrompts.size > 0;
         const pausedPrompt = resolvePausedPromptForResume(output.checkpoint?.pausedPrompt, input, completedPrompts, setupCompleted);
         return {
             artifactIds: [...artifactIds],
@@ -1097,6 +1137,7 @@ function createWorkflows(sdk) {
     }
     return [chatGptExtensionImageTransformWorkflow, chatGptExtensionImageSequenceWorkflow];
 }
+const CHATGPT_FOCUS_THROTTLE_MS = 20_000;
 function createChatGptBrowserController(browser, sleep) {
     const tasks = new Map();
     const eventListeners = new Map();
@@ -1157,12 +1198,16 @@ function createChatGptBrowserController(browser, sleep) {
         },
         ensureRoutedTab(target, options) {
             return browser.ensureRoutedTab(target, options);
+        },
+        focusTarget(target, options) {
+            return browser.focusTarget(target, options);
         }
     };
 }
 async function runChatGptBrowserTask(browser, sleep, task, options, emit) {
     const target = task.target ?? { mode: "any" };
     const selectors = normalizeChatGptSelectors(task.selectors);
+    await focusChatGptTarget(browser, target, task, options.signal, emit, true);
     const baseline = task.subjectBaseline && typeof task.subjectBaseline === "object"
         ? task.subjectBaseline
         : await extractChatGptImageBaseline(browser, target, selectors, options.signal);
@@ -1181,14 +1226,22 @@ async function runChatGptBrowserTask(browser, sleep, task, options, emit) {
     }
     if (!Number.isInteger(task.subjectIndex))
         throw new Error("ChatGPT subject task requires subjectIndex.");
+    let captureBaseline = baseline;
     if (task.subjectMode !== "capture-existing") {
-        if (!task.subjectImagePath)
-            throw new Error("ChatGPT subject task requires subjectImagePath.");
         await removeChatGptComposerAttachments(browser, sleep, target, selectors, options.signal, task, emit);
-        await attachAndSubmitChatGptSubjectImage(browser, sleep, target, selectors, task, options, emit);
+        if (task.subjectImagePath) {
+            captureBaseline = await attachAndSubmitChatGptSubjectImage(browser, sleep, target, selectors, task, options, emit);
+        }
+        else {
+            let submitBaseline;
+            await submitChatGptPrompt(browser, sleep, target, selectors, task.subjectInstruction ?? "", options, task, emit, async () => {
+                submitBaseline = await captureChatGptSubmitBaseline(browser, target, selectors, task, options.signal, emit);
+            });
+            captureBaseline = submitBaseline ?? captureBaseline;
+        }
         await waitForChatGptIdle(browser, sleep, target, selectors, options, task);
     }
-    const captured = await waitForChatGptOutput(browser, sleep, target, selectors, baseline, options, task);
+    const captured = await waitForChatGptOutput(browser, sleep, target, selectors, captureBaseline, options, task);
     return {
         outputs: [
             {
@@ -1200,14 +1253,39 @@ async function runChatGptBrowserTask(browser, sleep, task, options, emit) {
                 metadata: {
                     source: "generic-browser-extension",
                     fingerprint: captured.fingerprint,
+                    stableSourceId: captured.stableSourceId,
                     src: captured.src,
                     width: captured.width,
-                    height: captured.height
+                    height: captured.height,
+                    alt: captured.alt,
+                    domIndex: captured.domIndex,
+                    messageRole: captured.messageRole,
+                    selectionReason: captured.selectionReason,
+                    captureDiagnostics: captured.diagnostics
                 }
             }
         ],
         metadata: pageMetadata(normalizeRecord(await browser.inspect(target, { signal: options.signal, timeoutMs: 30_000 })))
     };
+}
+async function focusChatGptTarget(browser, target, task, signal, emit, force = false) {
+    const now = Date.now();
+    if (!force && task.lastFocusedAt && now - task.lastFocusedAt < CHATGPT_FOCUS_THROTTLE_MS)
+        return;
+    task.lastFocusedAt = now;
+    try {
+        await browser.focusTarget(target, { signal, timeoutMs: 10_000 });
+        emit?.(task.id, "browser.task.focused", "Focused ChatGPT browser surface", redactTargetForManifest(target));
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (isOperationCancelled(error))
+            throw error;
+        emit?.(task.id, "browser.task.focus_failed", "Could not focus ChatGPT browser surface", {
+            message,
+            target: redactTargetForManifest(target)
+        });
+    }
 }
 async function attachAndSubmitChatGptSubjectImage(browser, sleep, target, selectors, task, options, emit) {
     if (!task.subjectImagePath)
@@ -1215,12 +1293,15 @@ async function attachAndSubmitChatGptSubjectImage(browser, sleep, target, select
     const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         throwIfTaskStopped(task);
+        let submitBaseline;
         const files = browser.stageFiles([task.subjectImagePath]);
         await browser.action(target, { kind: "attach-file", selector: selectors.fileInput, files }, { signal: options.signal, timeoutMs: 30_000 });
         emit(task.id, "browser.task.files_attached", "Attached ChatGPT subject image", { count: files.length, attempt });
         try {
-            await submitChatGptPrompt(browser, sleep, target, selectors, task.subjectInstruction ?? "", options, task, emit);
-            return;
+            await submitChatGptPrompt(browser, sleep, target, selectors, task.subjectInstruction ?? "", options, task, emit, async () => {
+                submitBaseline = await captureChatGptSubmitBaseline(browser, target, selectors, task, options.signal, emit);
+            });
+            return submitBaseline ?? (await extractChatGptImageBaseline(browser, target, selectors, options.signal));
         }
         catch (error) {
             if (attempt >= maxAttempts || !isSubmitReadinessTimeout(error))
@@ -1233,6 +1314,16 @@ async function attachAndSubmitChatGptSubjectImage(browser, sleep, target, select
             await sleep(1_000, options.signal);
         }
     }
+    throw new Error("ChatGPT subject image submit did not complete.");
+}
+async function captureChatGptSubmitBaseline(browser, target, selectors, task, signal, emit) {
+    const baseline = normalizeChatGptImageBaseline(await extractChatGptImageBaseline(browser, target, selectors, signal));
+    emit(task.id, "browser.task.output_baseline", "Captured ChatGPT image baseline immediately before subject submit", {
+        imageCount: baseline.imageCount,
+        fingerprintCount: baseline.imageFingerprints.length,
+        stableSourceIdCount: baseline.stableSourceIds.length
+    });
+    return baseline;
 }
 async function removeChatGptComposerAttachments(browser, sleep, target, selectors, signal, task, emit) {
     for (let removed = 0; removed < 6; removed += 1) {
@@ -1248,6 +1339,9 @@ async function removeChatGptComposerAttachments(browser, sleep, target, selector
 function isSubmitReadinessTimeout(error) {
     return error instanceof Error && /Timed out waiting for ChatGPT submit control to become ready/i.test(error.message);
 }
+function isOperationCancelled(error) {
+    return error instanceof Error && /Operation cancelled/i.test(error.message);
+}
 function normalizeChatGptSelectors(selectors) {
     return {
         fileInput: stringValue(selectors?.fileInput) || "input[type='file']",
@@ -1260,11 +1354,12 @@ function normalizeChatGptSelectors(selectors) {
         outputImage: stringValue(selectors?.outputImage) || "img"
     };
 }
-async function submitChatGptPrompt(browser, sleep, target, selectors, prompt, options, task, emit) {
+async function submitChatGptPrompt(browser, sleep, target, selectors, prompt, options, task, emit, beforeSubmit) {
     if (prompt.trim()) {
         await fillAndVerifyPrompt(browser, target, selectors, prompt, options, task, emit);
     }
     await waitForChatGptSubmitReady(browser, sleep, target, selectors, options, task);
+    await beforeSubmit?.();
     await browser.action(target, { kind: "click", selector: selectors.submitButton }, { signal: options.signal, timeoutMs: 30_000 });
 }
 async function fillAndVerifyPrompt(browser, target, selectors, prompt, options, task, emit) {
@@ -1286,6 +1381,7 @@ async function waitForChatGptSubmitReady(browser, sleep, target, selectors, opti
     const deadline = Date.now() + Math.min(options.timeoutMs, 120_000);
     while (Date.now() < deadline) {
         throwIfTaskStopped(task);
+        await focusChatGptTarget(browser, target, task, options.signal);
         const submit = normalizeRecord(await browser.extract(target, { kind: "element-state", selector: selectors.submitButton }, { signal: options.signal, timeoutMs: 10_000 }));
         const stop = await elementStateOrNull(browser, target, selectors.stopButton, options.signal);
         if (submit.visible === true && submit.disabled !== true && stop?.visible !== true)
@@ -1298,6 +1394,7 @@ async function waitForChatGptIdle(browser, sleep, target, selectors, options, ta
     const deadline = Date.now() + Math.min(options.timeoutMs, 300_000);
     while (Date.now() < deadline) {
         throwIfTaskStopped(task);
+        await focusChatGptTarget(browser, target, task, options.signal);
         const stop = await elementStateOrNull(browser, target, selectors.stopButton, options.signal);
         if (stop?.visible !== true)
             return;
@@ -1306,9 +1403,13 @@ async function waitForChatGptIdle(browser, sleep, target, selectors, options, ta
 }
 async function waitForChatGptOutput(browser, sleep, target, selectors, baseline, options, task) {
     const previousFingerprints = baselineFingerprints(baseline);
+    const previousStableSourceIds = baselineStableSourceIds(baseline);
+    const uploadedSubjectKey = imageFileBase64IdentityKey(task.subjectImagePath);
     const deadline = Date.now() + options.timeoutMs;
+    let lastDiagnostics;
     while (Date.now() < deadline) {
         throwIfTaskStopped(task);
+        await focusChatGptTarget(browser, target, task, options.signal);
         const result = normalizeRecord(await browser.extract(target, {
             kind: "images",
             selector: selectors.outputImage,
@@ -1316,32 +1417,233 @@ async function waitForChatGptOutput(browser, sleep, target, selectors, baseline,
             minHeight: 128,
             includeBase64: true,
             excludeFingerprints: previousFingerprints,
-            latestFirst: true,
-            maxImages: 6,
+            excludeStableSourceIds: previousStableSourceIds,
             fetchTimeoutMs: 8_000
         }, { signal: options.signal, timeoutMs: 120_000 }));
         const images = Array.isArray(result.images) ? result.images.map(normalizeRecord) : [];
-        const captured = [...images].reverse().find((image) => stringValue(image.base64));
+        const selection = selectChatGptOutputCandidate(images, baseline, uploadedSubjectKey, task);
+        lastDiagnostics = selection.diagnostics;
+        const captured = selection.candidate;
         if (captured) {
             return {
-                src: stringValue(captured.src),
-                fingerprint: stringValue(captured.fingerprint),
-                width: numberValue(captured.width),
-                height: numberValue(captured.height),
-                mimeType: stringValue(captured.mimeType) || "image/png",
-                base64: stringValue(captured.base64),
-                name: "chatgpt-output.png"
+                src: captured.src,
+                fingerprint: captured.fingerprint,
+                stableSourceId: captured.stableSourceId,
+                alt: captured.alt,
+                width: captured.width,
+                height: captured.height,
+                mimeType: captured.mimeType || "image/png",
+                base64: captured.base64,
+                name: "chatgpt-output.png",
+                domIndex: captured.domIndex,
+                messageRole: captured.messageRole,
+                selectionReason: selection.reason,
+                diagnostics: selection.diagnostics
             };
         }
         await sleep(1_500, options.signal);
     }
-    throw new Error("Timed out waiting for a new ChatGPT output image.");
+    throw new Error(`Timed out waiting for a new ChatGPT output image. Capture diagnostics: ${JSON.stringify(summarizeCaptureDiagnostics(lastDiagnostics))}`);
 }
 async function extractChatGptImageBaseline(browser, target, selectors, signal) {
-    const result = normalizeRecord(await browser.extract(target, { kind: "images", selector: selectors.outputImage }, { signal, timeoutMs: 30_000 }));
+    const result = normalizeRecord(await browser.extract(target, { kind: "images", selector: selectors.outputImage, minWidth: 128, minHeight: 128 }, { signal, timeoutMs: 30_000 }));
     const images = Array.isArray(result.images) ? result.images.map(normalizeRecord) : [];
+    return normalizeChatGptImageBaseline({
+        imageFingerprints: uniqueStrings(images.map((image) => stringValue(image.fingerprint)).filter(Boolean)),
+        stableSourceIds: uniqueStrings(images.map((image) => stringValue(image.stableSourceId)).filter(Boolean)),
+        imageCount: images.length
+    });
+}
+function normalizeChatGptImageBaseline(value) {
+    const record = normalizeRecord(value);
     return {
-        imageFingerprints: images.map((image) => stringValue(image.fingerprint)).filter(Boolean)
+        imageFingerprints: baselineFingerprints(record),
+        stableSourceIds: baselineStableSourceIds(record),
+        imageCount: numberValue(record.imageCount)
+    };
+}
+function selectChatGptOutputCandidate(images, baseline, uploadedSubjectKey, task) {
+    const baselineFingerprintSet = new Set(baselineFingerprints(baseline));
+    const baselineStableSourceIdSet = new Set(baselineStableSourceIds(baseline));
+    const rawCandidates = images.map((image) => normalizeChatGptImageCandidate(image, baselineFingerprintSet, baselineStableSourceIdSet, uploadedSubjectKey));
+    const candidates = dedupeChatGptImageCandidates(rawCandidates);
+    const diagnostics = buildCaptureDiagnostics(candidates, baselineFingerprintSet.size, baselineStableSourceIdSet.size, rawCandidates.length);
+    const eligible = candidates.filter((candidate) => candidate.rejectionReasons.length === 0);
+    const generated = eligible.filter((candidate) => candidate.generated);
+    if (generated.length === 1)
+        return { candidate: generated[0], reason: "generated-image-label", diagnostics };
+    if (generated.length > 1)
+        throw multipleChatGptOutputCandidatesError(task, generated, diagnostics, "generated image candidates");
+    const assistant = eligible.filter((candidate) => candidate.assistantLike);
+    if (assistant.length === 1)
+        return { candidate: assistant[0], reason: "assistant-context", diagnostics };
+    if (assistant.length > 1)
+        throw multipleChatGptOutputCandidatesError(task, assistant, diagnostics, "assistant image candidates");
+    if (eligible.length === 1)
+        return { candidate: eligible[0], reason: "single-unambiguous-fallback", diagnostics };
+    if (eligible.length > 1)
+        throw multipleChatGptOutputCandidatesError(task, eligible, diagnostics, "fallback image candidates");
+    return { reason: "no-eligible-candidate", diagnostics };
+}
+function normalizeChatGptImageCandidate(image, baselineFingerprintSet, baselineStableSourceIdSet, uploadedSubjectKey) {
+    const base64 = stringValue(image.base64);
+    const fingerprint = stringValue(image.fingerprint);
+    const stableSourceId = stringValue(image.stableSourceId);
+    const alt = stringValue(image.alt);
+    const ancestor = normalizeRecord(image.ancestor);
+    const ancestorAttributes = normalizeRecord(ancestor.attributes);
+    const messageRole = firstNonEmptyString(stringValue(image.messageRole), stringValue(ancestorAttributes["data-message-author-role"])) ?? "";
+    const ancestorText = stringValue(ancestor.text);
+    const ancestorRole = firstNonEmptyString(stringValue(ancestor.role), stringValue(ancestorAttributes.role)) ?? "";
+    const ancestorAriaLabel = firstNonEmptyString(stringValue(ancestor.ariaLabel), stringValue(ancestorAttributes["aria-label"])) ?? "";
+    const insideForm = booleanValue(image.insideForm);
+    const insideEditable = booleanValue(image.insideEditable);
+    const uploadLike = isUploadLikeImageCandidate({
+        messageRole,
+        ancestorText,
+        ancestorRole,
+        ancestorAriaLabel,
+        insideForm,
+        insideEditable
+    });
+    const generated = /generated image/i.test(`${alt} ${ancestorAriaLabel}`);
+    const assistantLike = /^assistant$/i.test(messageRole) ||
+        generated ||
+        (/chatgpt said/i.test(ancestorText) && !/^user$/i.test(messageRole) && !/\byou said\b/i.test(ancestorText));
+    const rejectionReasons = [];
+    if (!base64)
+        rejectionReasons.push("missing-base64");
+    if (fingerprint && baselineFingerprintSet.has(fingerprint))
+        rejectionReasons.push("baseline-fingerprint");
+    if (stableSourceId && baselineStableSourceIdSet.has(stableSourceId))
+        rejectionReasons.push("baseline-stable-source-id");
+    if (uploadedSubjectKey && base64 && base64IdentityKey(base64) === uploadedSubjectKey)
+        rejectionReasons.push("uploaded-byte-identical");
+    if (uploadLike)
+        rejectionReasons.push("upload-or-user-context");
+    return {
+        src: stringValue(image.src),
+        fingerprint,
+        stableSourceId,
+        alt,
+        width: numberValue(image.width),
+        height: numberValue(image.height),
+        mimeType: stringValue(image.mimeType) || "image/png",
+        base64,
+        domIndex: numberValue(image.domIndex),
+        messageRole,
+        ancestorText,
+        ancestorRole,
+        ancestorAriaLabel,
+        insideForm,
+        insideEditable,
+        insideButton: booleanValue(image.insideButton),
+        insideLink: booleanValue(image.insideLink),
+        generated,
+        assistantLike,
+        uploadLike,
+        rejectionReasons
+    };
+}
+function isUploadLikeImageCandidate(input) {
+    if (input.insideForm || input.insideEditable)
+        return true;
+    if (/^user$/i.test(input.messageRole))
+        return true;
+    const label = `${input.ancestorRole} ${input.ancestorAriaLabel}`.toLowerCase();
+    if (/\b(?:composer|prompt|attachment|uploaded|upload|input)\b/.test(label))
+        return true;
+    const text = input.ancestorText.toLowerCase();
+    return /\byou said\b/.test(text) && !/\bchatgpt said\b/.test(text);
+}
+function dedupeChatGptImageCandidates(candidates) {
+    const byIdentity = new Map();
+    for (const candidate of candidates) {
+        const key = chatGptImageCandidateIdentity(candidate);
+        const existing = byIdentity.get(key);
+        byIdentity.set(key, existing ? mergeChatGptImageCandidates(existing, candidate) : candidate);
+    }
+    return [...byIdentity.values()].sort((a, b) => a.domIndex - b.domIndex);
+}
+function chatGptImageCandidateIdentity(candidate) {
+    return (firstNonEmptyString(candidate.stableSourceId ? `stable:${candidate.stableSourceId}` : "", candidate.fingerprint ? `fingerprint:${candidate.fingerprint}` : "", candidate.src ? `src:${candidate.src}` : "", candidate.base64 ? `base64:${base64IdentityKey(candidate.base64)}` : "") ?? `dom:${candidate.domIndex}`);
+}
+function mergeChatGptImageCandidates(a, b) {
+    const chosen = chatGptImageCandidateScore(b) > chatGptImageCandidateScore(a) ? b : a;
+    const rejectionReasons = uniqueStrings([...a.rejectionReasons, ...b.rejectionReasons]).filter((reason) => reason !== "missing-base64" || !chosen.base64);
+    return {
+        ...chosen,
+        domIndex: Math.min(a.domIndex, b.domIndex),
+        generated: a.generated || b.generated,
+        assistantLike: a.assistantLike || b.assistantLike,
+        uploadLike: a.uploadLike || b.uploadLike,
+        rejectionReasons
+    };
+}
+function chatGptImageCandidateScore(candidate) {
+    return ((candidate.rejectionReasons.length === 0 ? 32 : 0) +
+        (candidate.generated ? 16 : 0) +
+        (candidate.assistantLike ? 8 : 0) +
+        (candidate.base64 ? 4 : 0) +
+        (!candidate.uploadLike ? 2 : 0) -
+        candidate.domIndex / 10000);
+}
+function buildCaptureDiagnostics(candidates, baselineFingerprintCount, baselineStableSourceIdCount, totalImages = candidates.length) {
+    const eligible = candidates.filter((candidate) => candidate.rejectionReasons.length === 0);
+    return {
+        totalImages,
+        uniqueImageCount: candidates.length,
+        duplicateImageCount: Math.max(0, totalImages - candidates.length),
+        eligibleCount: eligible.length,
+        generatedCount: eligible.filter((candidate) => candidate.generated).length,
+        assistantCount: eligible.filter((candidate) => candidate.assistantLike).length,
+        fallbackCount: eligible.length,
+        rejectedCount: candidates.length - eligible.length,
+        baselineFingerprintCount,
+        baselineStableSourceIdCount,
+        candidates: candidates.map(summarizeImageCandidate)
+    };
+}
+function multipleChatGptOutputCandidatesError(task, candidates, diagnostics, candidateKind) {
+    const label = Number.isInteger(task.subjectIndex) ? `prompt ${task.subjectIndex + 1}` : "the current prompt";
+    return new Error(`ChatGPT returned ${candidates.length} distinct output image candidates for ${label}. ` +
+        `This workflow expects exactly one result per prompt. Candidate kind: ${candidateKind}. ` +
+        `Candidate images: ${JSON.stringify(candidates.map(summarizeImageCandidate))}. ` +
+        `Capture diagnostics: ${JSON.stringify(summarizeCaptureDiagnostics(diagnostics))}`);
+}
+function summarizeImageCandidate(candidate) {
+    return {
+        src: candidate.src,
+        fingerprint: candidate.fingerprint,
+        stableSourceId: candidate.stableSourceId,
+        alt: candidate.alt,
+        width: candidate.width,
+        height: candidate.height,
+        domIndex: candidate.domIndex,
+        messageRole: candidate.messageRole,
+        generated: candidate.generated,
+        assistantLike: candidate.assistantLike,
+        uploadLike: candidate.uploadLike,
+        insideForm: candidate.insideForm,
+        insideEditable: candidate.insideEditable,
+        rejectionReasons: candidate.rejectionReasons
+    };
+}
+function summarizeCaptureDiagnostics(value) {
+    if (!value)
+        return null;
+    return {
+        totalImages: value.totalImages,
+        eligibleCount: value.eligibleCount,
+        generatedCount: value.generatedCount,
+        assistantCount: value.assistantCount,
+        fallbackCount: value.fallbackCount,
+        rejectedCount: value.rejectedCount,
+        baselineFingerprintCount: value.baselineFingerprintCount,
+        baselineStableSourceIdCount: value.baselineStableSourceIdCount,
+        uniqueImageCount: value.uniqueImageCount,
+        duplicateImageCount: value.duplicateImageCount,
+        candidates: value.candidates.slice(0, 12)
     };
 }
 async function elementStateOrNull(browser, target, selector, signal) {
@@ -1367,6 +1669,14 @@ function baselineFingerprints(value) {
         ? record.imageFingerprints.filter((item) => typeof item === "string")
         : [];
 }
+function baselineStableSourceIds(value) {
+    if (!value || typeof value !== "object")
+        return [];
+    const record = value;
+    return Array.isArray(record.stableSourceIds)
+        ? record.stableSourceIds.filter((item) => typeof item === "string")
+        : [];
+}
 function pageMetadata(page) {
     return {
         url: stringValue(page.url),
@@ -1382,31 +1692,42 @@ function stringValue(value) {
 function numberValue(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
+function booleanValue(value) {
+    return value === true;
+}
+function optionalNumber(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function uniqueStrings(values) {
+    return [...new Set(values)];
+}
 function buildRecoverableTarget(target, page) {
     const url = page?.url ?? targetUrl(target);
     const title = page?.title ?? targetTitle(target);
-    if (page?.clientId) {
-        return {
-            mode: "existing",
-            clientId: page.clientId,
-            ...(url ? { url } : {}),
-            ...(title ? { title } : {})
-        };
-    }
-    if (target.mode === "existing") {
-        return {
-            mode: "existing",
-            clientId: page?.clientId ?? target.clientId,
-            ...(url ? { url } : {}),
-            ...(title ? { title } : {})
-        };
-    }
-    if (target.mode === "new") {
+    const targetRecord = target;
+    const routingToken = page?.routingToken ?? (target.mode === "new" ? target.routingToken : undefined);
+    if (routingToken) {
         return {
             mode: "new",
-            routingToken: page?.routingToken ?? target.routingToken,
+            routingToken,
             ...(url ? { url } : {}),
-            ...(title ? { title } : {})
+            ...(title ? { title } : {}),
+            openMode: targetRecord.openMode ?? "window",
+            ...(page?.clientId ?? targetRecord.clientId ? { clientId: page?.clientId ?? targetRecord.clientId } : {}),
+            ...(page?.controllerId ?? targetRecord.controllerId ? { controllerId: page?.controllerId ?? targetRecord.controllerId } : {}),
+            ...(page?.tabId ?? targetRecord.tabId ? { tabId: page?.tabId ?? targetRecord.tabId } : {}),
+            ...(page?.windowId ?? targetRecord.windowId ? { windowId: page?.windowId ?? targetRecord.windowId } : {})
+        };
+    }
+    if (target.mode === "existing" || page?.clientId) {
+        return {
+            mode: "existing",
+            clientId: page?.clientId ?? targetRecord.clientId ?? "",
+            ...(url ? { url } : {}),
+            ...(title ? { title } : {}),
+            ...(page?.controllerId ?? targetRecord.controllerId ? { controllerId: page?.controllerId ?? targetRecord.controllerId } : {}),
+            ...(page?.tabId ?? targetRecord.tabId ? { tabId: page?.tabId ?? targetRecord.tabId } : {}),
+            ...(page?.windowId ?? targetRecord.windowId ? { windowId: page?.windowId ?? targetRecord.windowId } : {})
         };
     }
     return target;
@@ -1416,7 +1737,10 @@ function chatGptPageChanged(next, previous) {
         next.url !== previous.url ||
         next.title !== previous.title ||
         next.clientId !== previous.clientId ||
-        next.routingToken !== previous.routingToken);
+        next.routingToken !== previous.routingToken ||
+        next.controllerId !== previous.controllerId ||
+        next.tabId !== previous.tabId ||
+        next.windowId !== previous.windowId);
 }
 function targetUrl(target) {
     return target.mode === "existing" || target.mode === "new" ? target.url : undefined;
@@ -1436,13 +1760,19 @@ function buildChatGptPage(target, metadata, targetClient) {
     if (!url)
         return undefined;
     const title = firstNonEmptyString(pageMetadata.title, targetClient?.title, targetRecord.title);
-    const clientId = firstNonEmptyString(targetClient?.id, target.mode === "existing" ? target.clientId : undefined);
-    const routingToken = firstNonEmptyString(target.mode === "new" ? target.routingToken : undefined, targetClient?.routingToken);
+    const clientId = firstNonEmptyString(targetClient?.id, pageMetadata.clientId, targetRecord.clientId);
+    const routingToken = firstNonEmptyString(target.mode === "new" ? target.routingToken : undefined, targetClient?.routingToken, pageMetadata.routingToken, targetRecord.routingToken);
+    const controllerId = firstNonEmptyString(targetClient?.controllerId, pageMetadata.controllerId, targetRecord.controllerId);
+    const tabId = optionalNumber(targetClient?.tabId) ?? pageMetadata.tabId ?? optionalNumber(targetRecord.tabId);
+    const windowId = optionalNumber(targetClient?.windowId) ?? pageMetadata.windowId ?? optionalNumber(targetRecord.windowId);
     return {
         url,
         ...(title ? { title } : {}),
         ...(clientId ? { clientId } : {}),
         ...(routingToken ? { routingToken } : {}),
+        ...(controllerId ? { controllerId } : {}),
+        ...(tabId !== undefined ? { tabId } : {}),
+        ...(windowId !== undefined ? { windowId } : {}),
         capturedAt: new Date().toISOString()
     };
 }
@@ -1452,7 +1782,12 @@ function readPageMetadata(metadata) {
     const record = metadata;
     return {
         url: typeof record.url === "string" ? record.url : undefined,
-        title: typeof record.title === "string" ? record.title : undefined
+        title: typeof record.title === "string" ? record.title : undefined,
+        clientId: typeof record.clientId === "string" ? record.clientId : undefined,
+        routingToken: typeof record.routingToken === "string" ? record.routingToken : undefined,
+        controllerId: typeof record.controllerId === "string" ? record.controllerId : undefined,
+        tabId: optionalNumber(record.tabId),
+        windowId: optionalNumber(record.windowId)
     };
 }
 function readPausedTaskMetadata(metadata) {
@@ -1511,6 +1846,11 @@ function outputFileNameForPrompt(sourceImage, promptIndex, extension, usedNames)
     }
     usedNames.add(candidate);
     return candidate;
+}
+function sequenceSetupPrompt(input) {
+    if (!input.masterPrompt || !input.masterPromptSuffix)
+        return input.masterPrompt;
+    return `${input.masterPrompt}\n\n${input.masterPromptSuffix}`;
 }
 function normalizeChatGptExtensionOutputs(outputs, subjectImages) {
     const outputsBySubject = new Map();
@@ -1581,6 +1921,18 @@ function normalizeChatGptExtensionSequenceOutputs(outputs, prompts) {
     });
 }
 function outputIdentityKey(output) {
-    const hash = (0, node_crypto_1.createHash)("sha256").update(output.base64).digest("hex");
-    return `${output.mimeType ?? "image/png"}:${hash}`;
+    return `${output.mimeType ?? "image/png"}:${base64IdentityKey(output.base64)}`;
+}
+function imageFileBase64IdentityKey(filePath) {
+    if (!filePath)
+        return null;
+    try {
+        return base64IdentityKey(node_fs_1.default.readFileSync(filePath).toString("base64"));
+    }
+    catch {
+        return null;
+    }
+}
+function base64IdentityKey(base64) {
+    return (0, node_crypto_1.createHash)("sha256").update(base64).digest("hex");
 }

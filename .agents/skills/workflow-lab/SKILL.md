@@ -49,6 +49,8 @@ Workflow Lab learns the page; the BLINK CLI proves the installed workflow. Use b
 
 This loop should continue until a real run produces the intended artifact. A selector is not considered calibrated just because it matches once in isolation; it must work in the workflow phase where the automation uses it.
 
+For `based-blink.chatgpt.extension-image-sequence` calibration, keep setup and sequence prompts separate in CLI inputs. `masterPromptSuffix` belongs to the optional setup phase: it is appended to `masterPrompt` only when both are non-empty, and it should not be treated as a `prompts[]` entry. When a non-empty setup prompt is used and the user has not cleared the guardrail, include `masterPromptSuffix` with: `Only generate images, one at a time, no text responses after the first response to this message. Respond "Ready" when you're ready to proceed.`
+
 ## Trace-Backed Calibration
 
 When a run fails after the browser closes, use the trace as the page-state source of truth:

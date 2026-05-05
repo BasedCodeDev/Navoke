@@ -90,6 +90,23 @@ For workflow input, create a JSON file that matches the selected workflow's sche
 }
 ```
 
+For `based-blink.chatgpt.extension-image-sequence`, the CLI input should treat `masterPromptSuffix` as part of the optional setup prompt, not as a sequence prompt. The renderer pre-fills this value when a setup prompt is entered, but CLI runs only receive what is present in the JSON input. When `masterPrompt` is non-empty and you want image-only sequence behavior, include the suffix explicitly:
+
+```json
+{
+  "sourceImages": ["C:\\path\\to\\character.png"],
+  "masterPrompt": "Use the attached source image as the identity reference for the whole sequence.",
+  "masterPromptSuffix": "Only generate images, one at a time, no text responses after the first response to this message. Respond \"Ready\" when you're ready to proceed.",
+  "prompts": [
+    "Change the perspective to back view. Do not change the character.",
+    "Change the perspective to side view. Do not change the character."
+  ],
+  "extensionTab": { "mode": "new", "routingToken": "replace-with-a-stable-routing-token" }
+}
+```
+
+The workflow appends `masterPromptSuffix` to `masterPrompt` only when both are non-empty. It does not append the suffix to each item in `prompts`, and it has no effect when the setup prompt is blank.
+
 If a run reaches `waiting_manual`, complete the requested browser action in the app or target browser, then run `blink --project <project-dir> resume <runId>` and continue watching.
 
 ### Agent Skill

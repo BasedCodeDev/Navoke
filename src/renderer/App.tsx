@@ -95,7 +95,11 @@ import {
   supportsChatGptArtifactPairing,
   type ChatGptRunInputModel
 } from "@/lib/chatGptArtifactPairing";
-import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "@/lib/duplicateRunConfiguration";
+import {
+  DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX,
+  buildDuplicateRunConfiguration,
+  collectRunInputFilePaths
+} from "@/lib/duplicateRunConfiguration";
 import {
   DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
   DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG_JSON,
@@ -153,7 +157,7 @@ const APP_ICON_SRC = "/assets/app-icon.png";
 
 type ExtensionTabInput =
   | { mode: "existing"; clientId: string; url?: string; title?: string }
-  | { mode: "new"; routingToken: string; url?: string; title?: string };
+  | { mode: "new"; routingToken: string; url?: string; title?: string; openMode?: "window" | "tab" };
 
 function createRoutingToken(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -180,7 +184,7 @@ function buildExtensionTabInput(
     };
   }
   const routingToken = createRoutingToken();
-  return { mode: "new", routingToken, url: buildNewExtensionTabUrl(targetUrl, routingToken) };
+  return { mode: "new", routingToken, url: buildNewExtensionTabUrl(targetUrl, routingToken), openMode: "window" };
 }
 
 function extensionTabOptionLabel(client: SystemInfo["extension"]["connectedClients"][number]): string {
@@ -245,6 +249,7 @@ export default function App(): JSX.Element {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [masterPrompt, setMasterPrompt] = useState("");
+  const [masterPromptSuffix, setMasterPromptSuffix] = useState(DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX);
   const [subjectInstruction, setSubjectInstruction] = useState("");
   const [sequencePrompts, setSequencePrompts] = useState<string[]>([]);
   const [modelName, setModelName] = useState("Demo model");
@@ -385,7 +390,7 @@ export default function App(): JSX.Element {
             ? { images: selectedFiles, prompt, profileName, pauseForManualLogin }
           : workflowHasCapability(selectedWorkflow, "extension.tabRouting")
               ? isChatGptSequenceWorkflow
-                ? { sourceImages: sourceFiles, prompts: sequencePrompts, masterPrompt, extensionTab }
+                ? { sourceImages: sourceFiles, prompts: sequencePrompts, masterPrompt, masterPromptSuffix, extensionTab }
                 : { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, extensionTab }
               : { images: selectedFiles, prompt, modelName, delayMs: 1_200 };
 
@@ -550,6 +555,7 @@ export default function App(): JSX.Element {
     setSourceFiles([]);
     setPrompt("");
     setMasterPrompt("");
+    setMasterPromptSuffix(DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX);
     setSubjectInstruction("");
     setSequencePrompts([]);
     setModelName("Demo model");
@@ -615,6 +621,7 @@ export default function App(): JSX.Element {
     setSourceFiles(duplicate.sourceFiles);
     setPrompt(duplicate.prompt);
     setMasterPrompt(duplicate.masterPrompt);
+    setMasterPromptSuffix(duplicate.masterPromptSuffix);
     setSubjectInstruction(duplicate.subjectInstruction);
     setSequencePrompts(duplicate.sequencePrompts);
     setModelName(duplicate.modelName);
@@ -751,6 +758,17 @@ export default function App(): JSX.Element {
                 placeholder="Optional global setup sent with the source image before the sequence."
               />
             </div>
+            {masterPrompt.trim() ? (
+              <div className="space-y-1.5">
+                <Label>Append to setup prompt</Label>
+                <Textarea
+                  className="min-h-12 py-1.5"
+                  value={masterPromptSuffix}
+                  onChange={(event) => setMasterPromptSuffix(event.target.value)}
+                  placeholder="Optional text appended to the setup prompt before submission."
+                />
+              </div>
+            ) : null}
             <PromptSequenceEditor prompts={sequencePrompts} onChange={setSequencePrompts} />
           </>
         ) : (
@@ -1157,6 +1175,15 @@ function RunStatusBadge({ status }: { status: RunRecord["status"] }): JSX.Elemen
   );
 }
 
+function RunNumberBadge({ runNumber }: { runNumber: RunRecord["runNumber"] }): JSX.Element | null {
+  if (runNumber === null) return null;
+  return (
+    <Badge className="border border-border bg-muted/40 font-mono text-[11px] font-medium text-muted-foreground">
+      #{runNumber}
+    </Badge>
+  );
+}
+
 function AgentActivityPanel({ runs, onSelectRun }: { runs: RunRecord[]; onSelectRun(runId: string): void }): JSX.Element {
   return (
     <Card className="shrink-0">
@@ -1178,7 +1205,10 @@ function AgentActivityPanel({ runs, onSelectRun }: { runs: RunRecord[]; onSelect
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">{run.name}</div>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <RunNumberBadge runNumber={run.runNumber} />
+                    <div className="truncate text-sm font-medium">{run.name}</div>
+                  </div>
                   <div className="truncate text-xs text-muted-foreground">{run.workflowId}</div>
                   <div className="mt-1 truncate text-sm text-muted-foreground">{run.currentStep ?? "Queued"}</div>
                   {command ? <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{command}</div> : null}
@@ -1766,7 +1796,7 @@ function RunDetailModal({
                 Run Detail
               </h2>
               <div className="truncate text-sm text-muted-foreground">
-                {run ? `${run.name} | ${run.workflowId}` : `Run ${runId}`}
+                {run ? `${run.runNumber === null ? "" : `Run #${run.runNumber} | `}${run.name} | ${run.workflowId}` : `Run ${runId}`}
               </div>
             </div>
             <Button type="button" variant="ghost" size="icon" aria-label="Close run detail" onClick={onClose}>
@@ -1834,6 +1864,7 @@ function RunDetailModal({
                         ) : null}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
+                        <RunNumberBadge runNumber={run.runNumber} />
                         {isCliRun(run) ? <Badge className={cn("border", toneClassNames.neutral)}>{runOriginLabel(run)}</Badge> : null}
                         <RunStatusBadge status={run.status} />
                       </div>
@@ -2137,6 +2168,13 @@ function canUseReusedInputFiles(validation: ReusedInputValidationState): boolean
   return validation.status === "ready" && invalidReusedInputFiles(validation).length === 0;
 }
 
+function chatGptSequenceSetupPrompt(masterPrompt: string, masterPromptSuffix: string): string {
+  const prompt = masterPrompt.trim();
+  const suffix = masterPromptSuffix.trim();
+  if (!prompt || !suffix) return prompt;
+  return `${prompt}\n\n${suffix}`;
+}
+
 function ChatGptArtifactPairs({
   run,
   artifacts,
@@ -2151,6 +2189,7 @@ function ChatGptArtifactPairs({
   const pairing = buildChatGptArtifactPairing(input, artifacts);
   if (input.kind === "sequence") {
     const sourceImage = input.sourceImages[0] ?? "";
+    const setupPrompt = chatGptSequenceSetupPrompt(input.masterPrompt, input.masterPromptSuffix);
     return (
       <div className="space-y-4">
         <div className="rounded-md border border-border bg-background p-4">
@@ -2159,7 +2198,7 @@ function ChatGptArtifactPairs({
             <div>
               <div className="mb-1 text-xs font-medium text-muted-foreground">Setup prompt sent first</div>
               <div className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">
-                {input.masterPrompt || "No setup prompt was sent."}
+                {setupPrompt || "No setup prompt was sent."}
               </div>
             </div>
             <div>
@@ -3114,11 +3153,11 @@ function ExtensionTabRoutingPanel({
             <div className="invisible absolute left-0 top-6 z-30 w-80 max-w-[calc(100vw-3rem)] rounded-md border border-border bg-card p-3 text-xs text-foreground opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
               <div className="space-y-3">
                 <p className="leading-5 text-muted-foreground">
-                  Choose an open compatible browser tab for this run, or let the BLINK browser controller open a new token-routed tab. Other browser tabs keep
+                  Choose an open compatible browser tab for this run, or let the BLINK browser controller open a new token-routed window. Other browser tabs keep
                   polling but will not receive the task.
                 </p>
                 <p className="leading-5 text-muted-foreground">
-                  New tabs are opened by the installed extension profile and are matched when the extension reports the run token.
+                  New windows are opened by the installed extension profile and are matched when the extension reports the run token.
                 </p>
                 {incompatibleClients.length > 0 ? (
                   <p className={cn("font-medium leading-5", toneTextClassNames.danger)}>
@@ -3246,7 +3285,10 @@ function RunRow({
       <div className="flex items-start justify-between gap-4">
         <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
           <div className="min-w-0 space-y-1">
-            <div className="truncate font-medium">{run.name}</div>
+            <div className="flex min-w-0 items-center gap-2">
+              <RunNumberBadge runNumber={run.runNumber} />
+              <div className="truncate font-medium">{run.name}</div>
+            </div>
             {workflowUnavailable ? (
               <div className={cn("truncate text-xs", toneTextClassNames.danger)}>{workflowAvailability.message}</div>
             ) : run.pluginId ? (

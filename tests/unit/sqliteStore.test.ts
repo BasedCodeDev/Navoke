@@ -41,6 +41,7 @@ describe("SqliteStore", () => {
     expect(event.id).toBeGreaterThan(0);
     expect(event.runId).toBe(run.id);
     expect(run.runDir).toBe(path.join(dir, "Test run - run-1"));
+    expect(run.runNumber).toBe(1);
     expect(run.pluginId).toBe("test.plugin");
     expect(run.pluginVersion).toBe("1.0.0");
     expect(store.listEvents(run.id)).toHaveLength(1);
@@ -79,6 +80,48 @@ describe("SqliteStore", () => {
     expect(store.listArtifacts(run.id)).toHaveLength(0);
     expect(store.getArtifact(artifact.id)).toBeNull();
 
+    store.close();
+  });
+
+  it("backfills run numbers by creation order and never reuses deleted numbers", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-store-"));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, "workflow.sqlite");
+    let store = await SqliteStore.open(dbPath);
+
+    const first = store.createRun({
+      id: "run-a",
+      workflowId: "test.workflow",
+      name: "First",
+      status: "completed",
+      input: {}
+    });
+    const second = store.createRun({
+      id: "run-b",
+      workflowId: "test.workflow",
+      name: "Second",
+      status: "completed",
+      input: {}
+    });
+    (store as unknown as { db: { run(sql: string): void } }).db.run("update runs set run_number = null");
+    (store as unknown as { db: { run(sql: string): void } }).db.run("delete from metadata where key = 'runNumberCounter'");
+    store.close();
+
+    store = await SqliteStore.open(dbPath);
+    expect(store.getRun(first.id)?.runNumber).toBe(1);
+    expect(store.getRun(second.id)?.runNumber).toBe(2);
+
+    store.deleteRunCascade(second.id);
+    const third = store.createRun({
+      id: "run-c",
+      workflowId: "test.workflow",
+      name: "Third",
+      status: "completed",
+      input: {}
+    });
+
+    expect(third.runNumber).toBe(3);
+    expect(store.getRun(first.id)?.runNumber).toBe(1);
     store.close();
   });
 });

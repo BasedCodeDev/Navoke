@@ -45,6 +45,7 @@ export interface RunRecord {
   pluginApiVersion?: string | null;
   pluginSource?: PluginSource | "unknown" | null;
   origin: RunOrigin;
+  runNumber: number | null;
   name: string;
   runDir: string | null;
   status: RunStatus;

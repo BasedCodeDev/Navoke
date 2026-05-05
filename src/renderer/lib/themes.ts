@@ -7,6 +7,7 @@ export type ThemeId =
   | "tokyo-night-oled"
   | "matte-black"
   | "based-code"
+  | "graphite-lavender"
   | "kanagawa"
   | "nord"
   | "evergarden"
@@ -354,6 +355,36 @@ export const appThemes: ThemeDefinition[] = [
     }
   },
   {
+    id: "graphite-lavender",
+    name: "Graphite Lavender",
+    description: "Near-black graphite panels with a soft lavender CTA.",
+    appearance: "dark",
+    swatches: ["#050505", "#0B0B0B", "#111111", "#1F1F1F", "#B58AC7", "#F2F2F2"],
+    tokens: {
+      background: "#050505",
+      foreground: "#F2F2F2",
+      card: "#111111",
+      cardForeground: "#F2F2F2",
+      border: "#1F1F1F",
+      muted: "#171717",
+      mutedForeground: "#A7A7A7",
+      primary: "#B58AC7",
+      primaryForeground: "#0A0A0A",
+      destructive: "#D89ACF",
+      destructiveForeground: "#0A0A0A",
+      tones: darkAccentTones({
+        surface: "#111111",
+        border: "#2A2A2A",
+        info: "#A7A7A7",
+        success: "#B58AC7",
+        warning: "#C4A46D",
+        danger: "#D89ACF",
+        lab: "#B58AC7",
+        neutralForeground: "#D8D8D8"
+      })
+    }
+  },
+  {
     id: "kanagawa",
     name: "Kanagawa",
     description: "Japanese-inspired ink palette with muted blue accents.",
@@ -547,6 +578,7 @@ export function isThemeId(value: string | null | undefined): value is ThemeId {
 
 export function resolveThemeId(storedTheme: string | null | undefined, prefersDark: boolean): ThemeId {
   if (storedTheme === "matte-purple") return "based-code";
+  if (storedTheme === "codex-graphite") return "graphite-lavender";
   if (isThemeId(storedTheme)) return storedTheme;
   return prefersDark ? "dark" : "light";
 }

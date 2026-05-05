@@ -7,6 +7,13 @@ description: Use when driving the Based BLINK browser workflow automation app fr
 
 Use `blink` only when the Based BLINK desktop app is already running with a project open. The CLI talks to the app's local API and does not start a separate runtime.
 
+If `blink` is not on `PATH`, build the CLI and invoke it directly from the repo:
+
+```powershell
+npm.cmd run build:cli
+node .\dist\cli\index.js <command> ...
+```
+
 ## Runtime Discovery
 
 Prefer this order:
@@ -24,7 +31,32 @@ blink --project <project-dir> status
 
 All output is JSON. Parse stdout as JSON for normal commands and newline-delimited JSON for `blink watch` or `blink run --wait`.
 
-Mutating or control commands must not rely on the default port fallback. For `run`, `plugin-install`, `pause`, `resume`, `cancel`, and `delete`, pass `--project <project-dir>`, pass `--api-url <url>`, or use `BASED_BLINK_API_URL`.
+Successful command output includes `runtimeSource` and may include `runtimeFile` or `staleRuntimeFile`. If output shows `runtimeSource: "default"` or a `staleRuntimeFile`, treat the target as ambiguous. Mutating or control commands must not rely on the default port fallback; the CLI refuses `run`, `plugin-install`, `pause`, `resume`, `cancel`, and `delete` unless you pass `--project <project-dir>`, pass `--api-url <url>`, or use `BASED_BLINK_API_URL`.
+
+Exit codes:
+
+- `0`: command succeeded, or a watched run completed.
+- `1`: command failed, or a watched run ended in a non-completed state.
+- `2`: CLI usage error, including unsafe default-runtime mutation attempts.
+
+## Command Surface
+
+Current commands:
+
+- `blink help`
+- `blink status`
+- `blink workflows`
+- `blink workflow <workflowId>`
+- `blink run <workflowId> --input <json-file> [--name <name>] [--agent <name>] [--wait]`
+- `blink runs [--active]`
+- `blink get <runId>`
+- `blink watch <runId>`
+- `blink pause <runId>`
+- `blink resume <runId>`
+- `blink cancel <runId>`
+- `blink delete <runId>`
+- `blink plugins`
+- `blink plugin-install <path>`
 
 ## Run Workflow
 
@@ -40,7 +72,7 @@ blink --project <project-dir> workflows
 blink --project <project-dir> workflow <workflowId>
 ```
 
-3. Create an input JSON file that matches the workflow schema. Use absolute paths for file inputs unless the workflow documentation explicitly accepts relative paths.
+3. Create an input JSON file that matches the workflow schema. The `--input` file path is resolved relative to the shell's current directory, not the BLINK project directory. Use absolute paths for file inputs unless the workflow documentation explicitly accepts relative paths.
 
 4. Start and watch the run:
 
@@ -49,6 +81,29 @@ blink --project <project-dir> run <workflowId> --input input.json --agent codex 
 ```
 
 Use `--name <name>` when a human-readable run name helps identify the output in the UI. Use `--agent <name>` so the UI can show who is driving the run.
+
+## ChatGPT Image Sequence Inputs
+
+For `based-blink.chatgpt.extension-image-sequence`, build CLI JSON with one `sourceImages` entry, an optional `masterPrompt`, an optional `masterPromptSuffix`, and a non-empty `prompts` array.
+
+Current extension-backed workflows use `extensionTab`, not the older `chatGptTab` field name. Include `extensionTab` when you need an explicit tab mode or stable routing token.
+
+`masterPromptSuffix` is a setup-prompt companion field. It is appended to `masterPrompt` only when both strings are non-empty; it is not a prompt row, and it must not be appended to each `prompts[]` item. The renderer pre-fills this field for UI-created runs, but CLI-created runs only receive the JSON you provide. When setting a non-empty `masterPrompt` and the user has not asked to clear or change the guardrail, include:
+
+```json
+{
+  "sourceImages": ["C:\\path\\to\\source.png"],
+  "masterPrompt": "Use the attached source image as the identity reference for the whole sequence.",
+  "masterPromptSuffix": "Only generate images, one at a time, no text responses after the first response to this message. Respond \"Ready\" when you're ready to proceed.",
+  "prompts": [
+    "Change the perspective to back view. Do not change the character.",
+    "Change the perspective to side view. Do not change the character."
+  ],
+  "extensionTab": { "mode": "new", "routingToken": "replace-with-a-stable-routing-token" }
+}
+```
+
+If `masterPrompt` is blank, omit `masterPromptSuffix` or set it to an empty string because it has no effect. Prompt 1 uses the source image; each later prompt uses the previous prompt's saved output artifact as its input image.
 
 ## Plugin Calibration Loop
 
@@ -71,9 +126,19 @@ For plugin reloads, try `blink --project <project-dir> plugin-install <plugin-di
 - Run details, events, and artifacts: `blink --project <project-dir> get <runId>`
 - Watch an existing run: `blink --project <project-dir> watch <runId>`
 - Pause/resume/cancel/delete: `blink --project <project-dir> pause <runId>`, `blink --project <project-dir> resume <runId>`, `blink --project <project-dir> cancel <runId>`, `blink --project <project-dir> delete <runId>`
+- Installed plugins: `blink --project <project-dir> plugins`
 - Install a workflow plugin: `blink --project <project-dir> plugin-install <path>`
 
-When a run reaches `waiting_manual`, report the current step to the user and wait for them to complete the browser action. After they confirm, call `blink --project <project-dir> resume <runId>` and continue watching.
+`blink watch` and `blink run --wait` emit newline-delimited JSON. Event types agents should handle:
+
+- `run.created`: the run was created by `run --wait`.
+- `run.snapshot`: initial run, event, and artifact state for a watch stream.
+- `event`: workflow event appended during execution.
+- `artifact.added`: artifact registration notification.
+- `run.updated`: run status, step, or progress changed.
+- `manual_action.required`: run entered `waiting_manual` and needs user action.
+
+When a run reaches `waiting_manual` or emits `manual_action.required`, report the current step to the user and wait for them to complete the browser action. After they confirm, call `blink --project <project-dir> resume <runId>` and continue watching.
 
 ## Artifacts
 

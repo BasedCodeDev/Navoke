@@ -59,6 +59,22 @@ blink.cmd --project <project-dir> workflow <workflowId>
 
 Use real input files and absolute paths. Keep the input stable across reruns so selector and wait changes are the only variable. If PowerShell writes the JSON, use an encoding that does not add a BOM.
 
+For `based-blink.chatgpt.extension-image-sequence`, remember that CLI input does not inherit renderer prefilled values. If you provide a non-empty `masterPrompt` and want the standard image-only setup guardrail, include `masterPromptSuffix` explicitly:
+
+```json
+{
+  "sourceImages": ["C:\\path\\to\\source.png"],
+  "masterPrompt": "Use the attached source image as the identity reference for the whole sequence.",
+  "masterPromptSuffix": "Only generate images, one at a time, no text responses after the first response to this message. Respond \"Ready\" when you're ready to proceed.",
+  "prompts": [
+    "Change the perspective to back view. Do not change the character.",
+    "Change the perspective to side view. Do not change the character."
+  ]
+}
+```
+
+The suffix is appended only to `masterPrompt` during setup. It is not a `prompts[]` entry, and it has no effect when the setup prompt is blank.
+
 3. Run the installed plugin:
 
 ```powershell

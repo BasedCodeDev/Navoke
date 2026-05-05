@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { inferMimeType } from "../utils/files";
 
-export const BLINK_EXTENSION_PROTOCOL_VERSION = 1;
+export const BLINK_EXTENSION_PROTOCOL_VERSION = 3;
 export const BLINK_ROUTING_TOKEN_PARAM = "based-blink-tab";
 
 const CLIENT_TTL_MS = 30_000;
@@ -18,8 +18,18 @@ export type ExtensionCommandStatus = "pending" | "running" | "completed" | "fail
 
 export type ExtensionBrowserTarget =
   | { mode: "any" }
-  | { mode: "existing"; clientId: string; url?: string; title?: string }
-  | { mode: "new"; routingToken: string; url?: string; title?: string };
+  | { mode: "existing"; clientId: string; url?: string; title?: string; tabId?: number; windowId?: number; controllerId?: string }
+  | {
+      mode: "new";
+      routingToken: string;
+      url?: string;
+      title?: string;
+      openMode?: "window" | "tab";
+      clientId?: string;
+      tabId?: number;
+      windowId?: number;
+      controllerId?: string;
+    };
 
 export type ExtensionTaskTarget = ExtensionBrowserTarget;
 
@@ -31,6 +41,9 @@ export interface ExtensionClientStatus {
   protocolVersion: number | null;
   extensionVersion: string;
   routingToken?: string;
+  controllerId?: string;
+  tabId?: number;
+  windowId?: number;
   compatible: boolean;
   incompatibilityReason?: string;
   lastSeenAt: string;
@@ -48,7 +61,10 @@ export interface ExtensionControllerStatus {
   capabilities: string[];
 }
 
-export type ExtensionControllerCommandInput = { kind: "open-tab"; url: string; active?: boolean };
+export type ExtensionControllerCommandInput =
+  | { kind: "open-tab"; url: string; active?: boolean }
+  | { kind: "open-window"; url: string; focused?: boolean }
+  | { kind: "focus-tab"; tabId: number; windowId?: number; focused?: boolean };
 
 export interface ExtensionControllerCommandPayload {
   id: string;
@@ -84,6 +100,7 @@ export type ExtensionBrowserExtractQuery =
       minHeight?: number;
       includeBase64?: boolean;
       excludeFingerprints?: string[];
+      excludeStableSourceIds?: string[];
       latestFirst?: boolean;
       maxImages?: number;
       fetchTimeoutMs?: number;
@@ -184,6 +201,9 @@ export class ExtensionBridge {
     const capabilities = Array.isArray(record.capabilities)
       ? record.capabilities.filter((capability): capability is string => typeof capability === "string")
       : [];
+    const controllerId = firstNonEmptyString(record.controllerId) ?? undefined;
+    const tabId = optionalNumber(record.tabId);
+    const windowId = optionalNumber(record.windowId);
     const previous = this.clients.get(clientId);
     const routingToken =
       firstNonEmptyString(record.routingToken) ?? routingTokenFromUrl(url) ?? previous?.routingToken ?? undefined;
@@ -197,6 +217,9 @@ export class ExtensionBridge {
       protocolVersion,
       extensionVersion,
       ...(routingToken ? { routingToken } : {}),
+      ...(controllerId ? { controllerId } : previous?.controllerId ? { controllerId: previous.controllerId } : {}),
+      ...(tabId !== undefined ? { tabId } : previous?.tabId !== undefined ? { tabId: previous.tabId } : {}),
+      ...(windowId !== undefined ? { windowId } : previous?.windowId !== undefined ? { windowId: previous.windowId } : {}),
       compatible,
       ...(compatible
         ? {}
@@ -225,7 +248,10 @@ export class ExtensionBridge {
     const capabilities = Array.isArray(record.capabilities)
       ? record.capabilities.filter((capability): capability is string => typeof capability === "string")
       : [];
-    const compatible = protocolVersion === BLINK_EXTENSION_PROTOCOL_VERSION && capabilities.includes("open-tab");
+    const compatible =
+      protocolVersion === BLINK_EXTENSION_PROTOCOL_VERSION &&
+      capabilities.includes("open-window") &&
+      capabilities.includes("focus-tab");
     const status: ExtensionControllerStatus = {
       id: controllerId,
       status: compatible ? "connected" : "incompatible",
@@ -235,7 +261,7 @@ export class ExtensionBridge {
       ...(compatible
         ? {}
         : {
-            incompatibilityReason: `Reload the unpacked BLINK browser extension. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION} with open-tab support.`
+            incompatibilityReason: `Reload the unpacked BLINK browser extension. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION} with open-window and focus-tab support.`
           }),
       lastSeenAt: new Date().toISOString(),
       capabilities
@@ -282,44 +308,100 @@ export class ExtensionBridge {
     if (target.mode === "any") return clients[0];
 
     if (target.mode === "existing") {
+      const exact = clients.find((client) => client.id === target.clientId);
+      if (exact) return exact;
       if (target.url) {
         const sameUrlClient = clients.find((client) => sameUrl(client.url, target.url));
         if (sameUrlClient) return sameUrlClient;
       }
-      const exact = clients.find((client) => client.id === target.clientId);
-      if (exact) return exact;
       return undefined;
     }
 
+    if (target.clientId) {
+      const exact = clients.find((client) => client.id === target.clientId);
+      if (exact) return exact;
+    }
     const byToken = clients.find((client) => client.routingToken === target.routingToken);
     if (byToken) return byToken;
-    if (target.url) return clients.find((client) => sameUrl(client.url, target.url));
     return undefined;
   }
 
-  findCompatibleController(): ExtensionControllerStatus | undefined {
+  findCompatibleController(
+    capability?: "open-tab" | "open-window" | "focus-tab",
+    preferredControllerId?: string
+  ): ExtensionControllerStatus | undefined {
     this.prune();
-    return [...this.controllers.values()]
-      .filter((controller) => controller.compatible)
-      .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))[0];
+    const candidates = [...this.controllers.values()].filter(
+      (controller) => controller.compatible && (!capability || controller.capabilities.includes(capability))
+    );
+    if (preferredControllerId) {
+      const preferred = candidates.find((controller) => controller.id === preferredControllerId);
+      if (preferred) return preferred;
+    }
+    return candidates.sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))[0];
   }
 
   async openTabWithController(input: {
     url: string;
     active?: boolean;
+    controllerId?: string;
     timeoutMs?: number;
     signal?: AbortSignal;
   }): Promise<unknown> {
     const url = safeExtensionTabUrl(input.url);
-    const controller = this.findCompatibleController();
+    const controller = this.findCompatibleController("open-tab", input.controllerId);
     if (!controller) {
       throw new Error(
-        "No compatible BLINK browser controller is connected. Reload the unpacked extension, open any page in that browser profile, then retry."
+        "No compatible BLINK browser controller with open-tab support is connected. Reload the unpacked extension, open any page in that browser profile, then retry."
       );
     }
     return this.executeControllerCommand({
       controllerId: controller.id,
       command: { kind: "open-tab", url, active: input.active ?? true },
+      timeoutMs: input.timeoutMs,
+      signal: input.signal
+    });
+  }
+
+  async focusBrowserSurfaceWithController(input: {
+    tabId: number;
+    windowId?: number;
+    controllerId?: string;
+    focused?: boolean;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<unknown> {
+    const controller = this.findCompatibleController("focus-tab", input.controllerId);
+    if (!controller) {
+      throw new Error(
+        "No compatible BLINK browser controller with focus-tab support is connected. Reload the unpacked extension, open any page in that browser profile, then retry."
+      );
+    }
+    return this.executeControllerCommand({
+      controllerId: controller.id,
+      command: { kind: "focus-tab", tabId: input.tabId, ...(input.windowId !== undefined ? { windowId: input.windowId } : {}), focused: input.focused ?? true },
+      timeoutMs: input.timeoutMs,
+      signal: input.signal
+    });
+  }
+
+  async openWindowWithController(input: {
+    url: string;
+    focused?: boolean;
+    controllerId?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<unknown> {
+    const url = safeExtensionTabUrl(input.url);
+    const controller = this.findCompatibleController("open-window", input.controllerId);
+    if (!controller) {
+      throw new Error(
+        "No compatible BLINK browser controller with open-window support is connected. Reload the unpacked extension, open any page in that browser profile, then retry."
+      );
+    }
+    return this.executeControllerCommand({
+      controllerId: controller.id,
+      command: { kind: "open-window", url, focused: input.focused ?? true },
       timeoutMs: input.timeoutMs,
       signal: input.signal
     });
@@ -338,12 +420,23 @@ export class ExtensionBridge {
       throw new Error("No compatible BLINK browser extension tab is connected for the requested target.");
     }
 
-    await this.openTabWithController({
-      url,
-      active: true,
-      timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
-      signal: input.signal
-    });
+    if (input.target.mode === "new" && input.target.openMode !== "tab") {
+      await this.openWindowWithController({
+        url,
+        focused: true,
+        controllerId: input.target.controllerId,
+        timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
+        signal: input.signal
+      });
+    } else {
+      await this.openTabWithController({
+        url,
+        active: true,
+        controllerId: input.target.mode === "any" ? undefined : input.target.controllerId,
+        timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
+        signal: input.signal
+      });
+    }
 
     const timeoutMs = input.timeoutMs ?? ROUTED_TAB_CONNECT_TIMEOUT_MS;
     const startedAt = Date.now();
@@ -354,7 +447,7 @@ export class ExtensionBridge {
     }
 
     throw new Error(
-      "Opened a routed BLINK browser tab, but no compatible page client connected. Reload the unpacked extension and refresh the opened tab."
+      "Opened a routed BLINK browser window, but no compatible page client connected. Reload the unpacked extension and refresh the opened page."
     );
   }
 
@@ -460,7 +553,9 @@ export class ExtensionBridge {
       controllerId: input.controllerId,
       command: {
         ...input.command,
-        ...(input.command.kind === "open-tab" ? { url: safeExtensionTabUrl(input.command.url) } : {})
+        ...(input.command.kind === "open-tab" || input.command.kind === "open-window"
+          ? { url: safeExtensionTabUrl(input.command.url) }
+          : {})
       },
       status: "pending",
       createdAt: now,
@@ -520,7 +615,19 @@ export class ExtensionBridge {
   }
 
   async focusClient(clientId: string): Promise<unknown> {
-    this.requireCompatibleClient(clientId);
+    const client = this.requireCompatibleClient(clientId);
+    if (client.tabId !== undefined) {
+      try {
+        return await this.focusBrowserSurfaceWithController({
+          tabId: client.tabId,
+          windowId: client.windowId,
+          controllerId: client.controllerId,
+          focused: true
+        });
+      } catch {
+        // Fall back to the content-script focus path for existing clients if the controller cannot focus by tab id.
+      }
+    }
     const now = new Date().toISOString();
     const command: ExtensionFocusCommand = {
       id: randomUUID(),
@@ -531,6 +638,26 @@ export class ExtensionBridge {
     };
     this.focusCommands.set(command.id, command);
     return this.waitForCommand(this.focusCommands, this.focusWaiters, command.id, FOCUS_COMMAND_LEASE_MS);
+  }
+
+  async focusTarget(input: { target: ExtensionBrowserTarget; timeoutMs?: number; signal?: AbortSignal }): Promise<unknown> {
+    const client = this.findCompatibleClientForTarget(input.target);
+    if (!client) throw new Error("No compatible BLINK browser extension tab is connected for the requested target.");
+    if (client.tabId !== undefined) {
+      try {
+        return await this.focusBrowserSurfaceWithController({
+          tabId: client.tabId,
+          windowId: client.windowId,
+          controllerId: client.controllerId,
+          focused: true,
+          timeoutMs: input.timeoutMs,
+          signal: input.signal
+        });
+      } catch {
+        // Fall back to the client command below; the caller should treat focus failures as diagnostic only.
+      }
+    }
+    return this.focusClient(client.id);
   }
 
   nextFocusCommand(clientId: string): ExtensionFocusCommandPayload | null {
@@ -741,6 +868,10 @@ function firstNonEmptyString(...values: unknown[]): string | undefined {
     if (trimmed) return trimmed;
   }
   return undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function routingTokenFromUrl(value: string): string | undefined {

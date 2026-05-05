@@ -1,4 +1,4 @@
-const BLINK_EXTENSION_PROTOCOL_VERSION = 1;
+const BLINK_EXTENSION_PROTOCOL_VERSION = 3;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const API_BASE_URL = "http://127.0.0.1:39201";
 const ROUTING_TOKEN_PARAM = "based-blink-tab";
@@ -53,6 +53,7 @@ async function apiFetch(path, options = {}) {
 
 async function heartbeat() {
   try {
+    const tabInfo = await currentTabInfoForHeartbeat();
     await apiFetch("/api/extension/heartbeat", {
       method: "POST",
       body: JSON.stringify({
@@ -62,12 +63,24 @@ async function heartbeat() {
         url: location.href,
         title: document.title,
         routingToken: routingTokenForHeartbeat(),
+        ...(typeof tabInfo.controllerId === "string" ? { controllerId: tabInfo.controllerId } : {}),
+        ...(typeof tabInfo.tabId === "number" ? { tabId: tabInfo.tabId } : {}),
+        ...(typeof tabInfo.windowId === "number" ? { windowId: tabInfo.windowId } : {}),
         capabilities: ["inspect", "action", "wait", "extract", "focus"]
       })
     });
     void chrome.runtime.sendMessage({ type: "controller-heartbeat" }).catch(() => undefined);
   } catch {
     // The Electron app may not be running. Keep polling quietly.
+  }
+}
+
+async function currentTabInfoForHeartbeat() {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "current-tab-info" });
+    return result?.ok ? result : {};
+  } catch {
+    return {};
   }
 }
 
@@ -547,6 +560,109 @@ async function waitForCondition(condition) {
   };
 }
 
+function textSnippet(value, maxLength = 240) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function imageSourceStableId(src) {
+  if (!src) return "";
+  try {
+    const url = new URL(src, location.href);
+    for (const key of ["id", "file", "file_id", "asset", "asset_id"]) {
+      const value = url.searchParams.get(key);
+      if (value) return `${key}:${value}`;
+    }
+    const pathParts = url.pathname.split("/").filter(Boolean);
+    const lastPart = pathParts[pathParts.length - 1] || "";
+    if (/^[A-Za-z0-9_-]{16,}$/.test(lastPart) && !/\.(?:png|jpe?g|webp|gif|avif|svg)$/i.test(lastPart)) {
+      return `path:${lastPart}`;
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function safeClosest(element, selector) {
+  try {
+    return typeof element?.closest === "function" ? element.closest(selector) : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeGetAttribute(element, name) {
+  try {
+    return element?.getAttribute?.(name) || "";
+  } catch {
+    return "";
+  }
+}
+
+function usefulImageAttributes(element) {
+  const attributes = {};
+  for (const attribute of Array.from(element?.attributes || [])) {
+    if (
+      ["id", "class", "role", "name", "type", "href", "src", "alt", "title", "aria-label"].includes(attribute.name) ||
+      attribute.name.startsWith("data-")
+    ) {
+      attributes[attribute.name] = String(attribute.value || "").slice(0, 240);
+    }
+  }
+  return attributes;
+}
+
+function imageAncestorSummary(image) {
+  let current = image.parentElement;
+  for (let depth = 0; current && depth < 8; depth += 1) {
+    const attributes = usefulImageAttributes(current);
+    const role = safeGetAttribute(current, "role");
+    const ariaLabel = safeGetAttribute(current, "aria-label");
+    const text = textSnippet(current.innerText || current.textContent || "", 260);
+    if (role || ariaLabel || Object.keys(attributes).length > 0 || text) {
+      return {
+        tagName: String(current.tagName || "").toLowerCase(),
+        role,
+        ariaLabel,
+        text,
+        attributes
+      };
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function imageBounds(image) {
+  const rect = image.getBoundingClientRect?.();
+  if (!rect) return undefined;
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height)
+  };
+}
+
+function imageExtractionRecord(image, domIndex) {
+  const src = image.currentSrc || image.src;
+  return {
+    src,
+    alt: image.alt || "",
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+    fingerprint: imageFingerprint(image),
+    stableSourceId: imageSourceStableId(src),
+    domIndex,
+    bounds: imageBounds(image),
+    insideForm: Boolean(safeClosest(image, "form")),
+    insideEditable: Boolean(safeClosest(image, "[contenteditable='true'], textarea, input")),
+    insideButton: Boolean(safeClosest(image, "button, [role='button']")),
+    insideLink: Boolean(safeClosest(image, "a[href]")),
+    ancestor: imageAncestorSummary(image)
+  };
+}
+
 async function extract(query) {
   if (!query || typeof query !== "object") throw new Error("BLINK browser extract query is required.");
   if (query.kind === "element-state") {
@@ -571,18 +687,14 @@ async function extract(query) {
   }
   if (query.kind === "images") {
     const previous = new Set(query.excludeFingerprints || []);
+    const previousStableSourceIds = new Set(query.excludeStableSourceIds || []);
     let images = Array.from(document.querySelectorAll(query.selector || "img"))
       .filter((image) => image instanceof HTMLImageElement)
       .filter((image) => image.naturalWidth >= (query.minWidth || 1) && image.naturalHeight >= (query.minHeight || 1))
       .filter((image) => Boolean(image.currentSrc || image.src))
-      .map((image) => ({
-        src: image.currentSrc || image.src,
-        alt: image.alt || "",
-        width: image.naturalWidth,
-        height: image.naturalHeight,
-        fingerprint: imageFingerprint(image)
-      }))
-      .filter((image) => !previous.has(image.fingerprint));
+      .map(imageExtractionRecord)
+      .filter((image) => !previous.has(image.fingerprint))
+      .filter((image) => !image.stableSourceId || !previousStableSourceIds.has(image.stableSourceId));
     if (query.latestFirst) images = images.reverse();
     if (Number.isInteger(query.maxImages) && query.maxImages > 0) images = images.slice(0, query.maxImages);
     if (!query.includeBase64) return { images };

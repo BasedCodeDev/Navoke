@@ -50,6 +50,26 @@ blink --project <project-dir> run <workflowId> --input input.json --agent claude
 
 Use `--name <name>` when a human-readable run name helps identify the output in the UI. Use `--agent <name>` so the UI can show who is driving the run.
 
+## ChatGPT Image Sequence Inputs
+
+For `based-blink.chatgpt.extension-image-sequence`, build CLI JSON with one `sourceImages` entry, an optional `masterPrompt`, an optional `masterPromptSuffix`, and a non-empty `prompts` array.
+
+`masterPromptSuffix` is a setup-prompt companion field. It is appended to `masterPrompt` only when both strings are non-empty; it is not a prompt row, and it must not be appended to each `prompts[]` item. The renderer pre-fills this field for UI-created runs, but CLI-created runs only receive the JSON you provide. When setting a non-empty `masterPrompt` and the user has not asked to clear or change the guardrail, include:
+
+```json
+{
+  "sourceImages": ["C:\\path\\to\\source.png"],
+  "masterPrompt": "Use the attached source image as the identity reference for the whole sequence.",
+  "masterPromptSuffix": "Only generate images, one at a time, no text responses after the first response to this message. Respond \"Ready\" when you're ready to proceed.",
+  "prompts": [
+    "Change the perspective to back view. Do not change the character.",
+    "Change the perspective to side view. Do not change the character."
+  ]
+}
+```
+
+If `masterPrompt` is blank, omit `masterPromptSuffix` or set it to an empty string because it has no effect. Prompt 1 uses the source image; each later prompt uses the previous prompt's saved output artifact as its input image.
+
 ## Plugin Calibration Loop
 
 Use this loop with Workflow Lab when a browser plugin workflow is being built, calibrated, or fixed:

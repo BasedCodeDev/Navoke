@@ -222,7 +222,25 @@ export function parseBlinkArgs(argv: string[]): ParsedCommand {
 
 export async function watchRun(apiUrl: string, runId: string, options: WatchRunOptions): Promise<RunRecordLike> {
   let detail = await options.request<RunDetailLike>(apiUrl, "GET", `/api/runs/${encodeURIComponent(runId)}`);
+  let lastManualActionKey: string | null = null;
+  const writeManualActionIfNeeded = (run: RunRecordLike): void => {
+    if (run.status !== "waiting_manual") {
+      lastManualActionKey = null;
+      return;
+    }
+    const key = `${run.id}:${String(run.currentStep ?? "")}`;
+    if (lastManualActionKey === key) return;
+    lastManualActionKey = key;
+    writeJson(options.stdout, {
+      type: "manual_action.required",
+      runId: run.id,
+      status: run.status,
+      currentStep: typeof run.currentStep === "string" ? run.currentStep : null,
+      run
+    });
+  };
   writeJson(options.stdout, { type: "run.snapshot", run: detail.run, events: detail.events, artifacts: detail.artifacts });
+  writeManualActionIfNeeded(detail.run);
   if (TERMINAL_STATUSES.has(detail.run.status)) return detail.run;
 
   const response = await fetch(`${apiUrl}/api/events`);
@@ -250,6 +268,7 @@ export async function watchRun(apiUrl: string, runId: string, options: WatchRunO
         if (envelope.kind === "run-updated" && envelope.runId === runId) {
           detail = await options.request<RunDetailLike>(apiUrl, "GET", `/api/runs/${encodeURIComponent(runId)}`);
           writeJson(options.stdout, { type: "run.updated", run: detail.run });
+          writeManualActionIfNeeded(detail.run);
           if (TERMINAL_STATUSES.has(detail.run.status)) return detail.run;
         }
       }

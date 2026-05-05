@@ -9,6 +9,8 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+const RUN_NUMBER_COUNTER_KEY = "runNumberCounter";
+
 function parseJson(value: unknown): unknown {
   if (typeof value !== "string" || value.length === 0) return null;
   return JSON.parse(value);
@@ -24,6 +26,7 @@ function rowToRun(row: Record<string, unknown>): RunRecord {
     pluginApiVersion: row.plugin_api_version ? String(row.plugin_api_version) : null,
     pluginSource: row.plugin_source ? (String(row.plugin_source) as RunRecord["pluginSource"]) : null,
     origin: normalizeRunOrigin(parseJson(row.origin_json)),
+    runNumber: row.run_number === null || row.run_number === undefined ? null : Number(row.run_number),
     name: String(row.name),
     runDir: row.run_dir ? String(row.run_dir) : null,
     status: String(row.status) as RunStatus,
@@ -94,17 +97,19 @@ export class SqliteStore {
     pluginApiVersion?: string | null;
     pluginSource?: RunRecord["pluginSource"];
     origin?: RunOrigin;
+    runNumber?: number | null;
     name: string;
     runDir?: string | null;
     status: RunStatus;
     input: unknown;
   }): RunRecord {
     const createdAt = nowIso();
+    const runNumber = Number.isInteger(input.runNumber) && Number(input.runNumber) > 0 ? Number(input.runNumber) : this.nextRunNumber();
     this.db.run(
       `insert into runs (
         id, workflow_id, workflow_version, plugin_id, plugin_version, plugin_api_version, plugin_source,
-        origin_json, name, run_dir, status, current_step, progress, input_json, output_json, error, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, 0, ?, null, null, ?, ?)`,
+        origin_json, run_number, name, run_dir, status, current_step, progress, input_json, output_json, error, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, 0, ?, null, null, ?, ?)`,
       [
         input.id,
         input.workflowId,
@@ -114,6 +119,7 @@ export class SqliteStore {
         input.pluginApiVersion ?? null,
         input.pluginSource ?? null,
         JSON.stringify(normalizeRunOrigin(input.origin)),
+        runNumber,
         input.name,
         input.runDir ?? null,
         input.status,
@@ -122,6 +128,7 @@ export class SqliteStore {
         createdAt
       ]
     );
+    this.setRunNumberCounterAtLeast(runNumber);
     this.persist();
     const run = this.getRun(input.id);
     if (!run) throw new Error("Failed to create run");
@@ -129,7 +136,14 @@ export class SqliteStore {
   }
 
   listRuns(): RunRecord[] {
-    return this.all<Record<string, unknown>>("select * from runs order by created_at desc").map(rowToRun);
+    return this.all<Record<string, unknown>>("select * from runs order by run_number desc, created_at desc").map(rowToRun);
+  }
+
+  nextRunNumber(): number {
+    const nextRunNumber = Math.max(this.maxRunNumber(), this.metadataNumber(RUN_NUMBER_COUNTER_KEY)) + 1;
+    this.setMetadataNumber(RUN_NUMBER_COUNTER_KEY, nextRunNumber);
+    this.persist();
+    return nextRunNumber;
   }
 
   getRun(id: string): RunRecord | null {
@@ -298,6 +312,7 @@ export class SqliteStore {
         plugin_api_version text,
         plugin_source text,
         origin_json text,
+        run_number integer,
         name text not null,
         run_dir text,
         status text not null,
@@ -333,6 +348,11 @@ export class SqliteStore {
         foreign key (run_id) references runs(id)
       );
 
+      create table if not exists metadata (
+        key text primary key,
+        value text not null
+      );
+
       create index if not exists idx_runs_status on runs(status);
       create index if not exists idx_events_run_id on events(run_id);
       create index if not exists idx_artifacts_run_id on artifacts(run_id);
@@ -344,6 +364,41 @@ export class SqliteStore {
     this.addColumnIfMissing("runs", "plugin_api_version text");
     this.addColumnIfMissing("runs", "plugin_source text");
     this.addColumnIfMissing("runs", "origin_json text");
+    this.addColumnIfMissing("runs", "run_number integer");
+    this.backfillRunNumbers();
+    this.setRunNumberCounterAtLeast(this.maxRunNumber());
+  }
+
+  private backfillRunNumbers(): void {
+    let nextRunNumber = Math.max(this.maxRunNumber(), this.metadataNumber(RUN_NUMBER_COUNTER_KEY)) + 1;
+    const missingRuns = this.all<Record<string, unknown>>(
+      "select id from runs where run_number is null order by created_at asc, id asc"
+    );
+    for (const run of missingRuns) {
+      this.db.run("update runs set run_number = ? where id = ?", [nextRunNumber, String(run.id)]);
+      nextRunNumber += 1;
+    }
+  }
+
+  private maxRunNumber(): number {
+    const row = this.get<Record<string, unknown>>("select max(run_number) as max_run_number from runs");
+    const maxRunNumber = Number(row?.max_run_number ?? 0);
+    return Number.isFinite(maxRunNumber) ? maxRunNumber : 0;
+  }
+
+  private metadataNumber(key: string): number {
+    const row = this.get<Record<string, unknown>>("select value from metadata where key = ?", [key]);
+    const value = Number(row?.value ?? 0);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  private setRunNumberCounterAtLeast(value: number): void {
+    if (!Number.isFinite(value) || value <= this.metadataNumber(RUN_NUMBER_COUNTER_KEY)) return;
+    this.setMetadataNumber(RUN_NUMBER_COUNTER_KEY, value);
+  }
+
+  private setMetadataNumber(key: string, value: number): void {
+    this.db.run("insert or replace into metadata (key, value) values (?, ?)", [key, String(Math.trunc(value))]);
   }
 
   private addColumnIfMissing(table: string, columnDefinition: string): void {

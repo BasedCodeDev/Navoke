@@ -26,6 +26,7 @@ function run(origin: RunRecord["origin"], status: RunRecord["status"] = "queued"
     id: `${origin.source}-${status}`,
     workflowId: "test.workflow",
     origin,
+    runNumber: 1,
     name: "Run",
     runDir: null,
     status,

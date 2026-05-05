@@ -8,6 +8,7 @@ describe("theme registry", () => {
     expect(ids).toContain("light");
     expect(ids).toContain("dark");
     expect(ids).toContain("based-code");
+    expect(ids).toContain("graphite-lavender");
     expect(ids).toContain("tokyo-night-oled");
     expect(appThemes.every((theme) => theme.swatches.length >= 5)).toBe(true);
   });
@@ -16,6 +17,7 @@ describe("theme registry", () => {
     expect(resolveThemeId("light", true)).toBe("light");
     expect(resolveThemeId("dark", false)).toBe("dark");
     expect(resolveThemeId("matte-purple", false)).toBe("based-code");
+    expect(resolveThemeId("codex-graphite", false)).toBe("graphite-lavender");
   });
 
   it("falls back to system preference for invalid stored values", () => {

@@ -60,8 +60,12 @@ export function shortRunId(runId: string): string {
   return (compact || runId).slice(0, 8);
 }
 
-export function getRunDir(paths: RuntimePaths, runName: string, runId: string): string {
-  return path.join(paths.runRootDir, `${safeRunFolderName(runName)}-${shortRunId(runId)}`);
+export function getRunDir(paths: RuntimePaths, runName: string, runId: string, runNumber?: number | null): string {
+  const baseName = `${safeRunFolderName(runName)}-${shortRunId(runId)}`;
+  if (Number.isInteger(runNumber) && Number(runNumber) > 0) {
+    return path.join(paths.runRootDir, `${runNumber}-${baseName}`);
+  }
+  return path.join(paths.runRootDir, baseName);
 }
 
 export function getRunInputDir(runDir: string): string {

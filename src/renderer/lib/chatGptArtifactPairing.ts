@@ -15,6 +15,7 @@ export interface ChatGptSequenceRunInputModel {
   sourceImages: string[];
   prompts: string[];
   masterPrompt: string;
+  masterPromptSuffix: string;
 }
 
 export interface ChatGptOutputMetadata {
@@ -59,7 +60,8 @@ export function getChatGptRunInput(input: unknown): ChatGptRunInputModel | null 
       kind: "sequence",
       sourceImages,
       prompts,
-      masterPrompt: typeof record.masterPrompt === "string" ? record.masterPrompt : ""
+      masterPrompt: typeof record.masterPrompt === "string" ? record.masterPrompt : "",
+      masterPromptSuffix: typeof record.masterPromptSuffix === "string" ? record.masterPromptSuffix : ""
     };
   }
 

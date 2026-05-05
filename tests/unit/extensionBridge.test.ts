@@ -84,13 +84,13 @@ describe("ExtensionBridge", () => {
       controllerId: "controller-1",
       protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
-      capabilities: ["open-tab"]
+      capabilities: ["open-tab", "open-window", "focus-tab"]
     });
     bridge.controllerHeartbeat({
       controllerId: "old-controller",
       protocolVersion: 999,
       extensionVersion: "0.0.1",
-      capabilities: ["open-tab"]
+      capabilities: ["open-tab", "open-window", "focus-tab"]
     });
 
     expect(bridge.status()).toMatchObject({
@@ -106,7 +106,7 @@ describe("ExtensionBridge", () => {
       controllerId: "controller-1",
       protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
-      capabilities: ["open-tab"]
+      capabilities: ["open-tab", "open-window", "focus-tab"]
     });
 
     const wait = bridge.openTabWithController({ url: "https://example.test/#based-blink-tab=route-1", timeoutMs: 1_000 });
@@ -121,13 +121,34 @@ describe("ExtensionBridge", () => {
     await expect(wait).resolves.toMatchObject({ ok: true, tabId: 1 });
   });
 
-  it("opens a routed tab through the controller and waits for the page client", async () => {
+  it("queues open-window commands through a compatible browser controller", async () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
       protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
-      capabilities: ["open-tab"]
+      capabilities: ["open-window", "focus-tab"]
+    });
+
+    const wait = bridge.openWindowWithController({ url: "https://example.test/#based-blink-tab=route-1", timeoutMs: 1_000 });
+    const command = bridge.nextControllerCommand("controller-1");
+    expect(command).toMatchObject({
+      kind: "controller-command",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      command: { kind: "open-window", url: "https://example.test/#based-blink-tab=route-1", focused: true }
+    });
+
+    bridge.completeControllerCommand(command!.id, { ok: true, tabId: 1, windowId: 2 });
+    await expect(wait).resolves.toMatchObject({ ok: true, tabId: 1, windowId: 2 });
+  });
+
+  it("opens a routed window through the controller and waits for the page client", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.controllerHeartbeat({
+      controllerId: "controller-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      capabilities: ["open-window", "focus-tab"]
     });
 
     const wait = bridge.ensureRoutedTab({
@@ -135,7 +156,7 @@ describe("ExtensionBridge", () => {
       timeoutMs: 1_000
     });
     const command = bridge.nextControllerCommand("controller-1");
-    expect(command?.command).toMatchObject({ kind: "open-tab", url: "https://example.test/#based-blink-tab=route-1" });
+    expect(command?.command).toMatchObject({ kind: "open-window", url: "https://example.test/#based-blink-tab=route-1" });
     bridge.completeControllerCommand(command!.id, { ok: true });
     bridge.heartbeat({
       clientId: "routed-tab",
@@ -146,6 +167,56 @@ describe("ExtensionBridge", () => {
     });
 
     await expect(wait).resolves.toMatchObject({ id: "routed-tab", routingToken: "route-1" });
+  });
+
+  it("does not match arbitrary same-url tabs for routed run-owned targets", () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      clientId: "same-url",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/conversation/123"
+    });
+
+    expect(
+      bridge.findCompatibleClientForTarget({
+        mode: "new",
+        routingToken: "missing-route",
+        url: "https://example.test/conversation/123"
+      })
+    ).toBeUndefined();
+  });
+
+  it("reopens a missing recorded routed client by routing token", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.controllerHeartbeat({
+      controllerId: "controller-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      capabilities: ["open-window", "focus-tab"]
+    });
+
+    const wait = bridge.ensureRoutedTab({
+      target: {
+        mode: "new",
+        clientId: "closed-client",
+        routingToken: "route-1",
+        url: "https://example.test/#based-blink-tab=route-1"
+      },
+      timeoutMs: 1_000
+    });
+    const command = bridge.nextControllerCommand("controller-1");
+    expect(command?.command).toMatchObject({ kind: "open-window" });
+    bridge.completeControllerCommand(command!.id, { ok: true });
+    bridge.heartbeat({
+      clientId: "replacement-client",
+      routingToken: "route-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/"
+    });
+
+    await expect(wait).resolves.toMatchObject({ id: "replacement-client", routingToken: "route-1" });
   });
 
   it("fails routed tab opening when no compatible browser controller is connected", async () => {
@@ -241,6 +312,34 @@ describe("ExtensionBridge", () => {
     expect(command).toMatchObject({ kind: "focus-tab", protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION });
     bridge.completeFocusCommand(command!.id, { ok: true });
     await expect(wait).resolves.toMatchObject({ ok: true });
+  });
+
+  it("focuses known tab ids through the browser controller", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.controllerHeartbeat({
+      controllerId: "controller-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      capabilities: ["open-window", "focus-tab"]
+    });
+    bridge.heartbeat({
+      clientId: "tab-1",
+      routingToken: "route-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      tabId: 42,
+      windowId: 7,
+      controllerId: "controller-1"
+    });
+
+    const wait = bridge.focusTarget({ target: { mode: "new", routingToken: "route-1" }, timeoutMs: 1_000 });
+    const command = bridge.nextControllerCommand("controller-1");
+    expect(command).toMatchObject({
+      kind: "controller-command",
+      command: { kind: "focus-tab", tabId: 42, windowId: 7, focused: true }
+    });
+    bridge.completeControllerCommand(command!.id, { ok: true, action: "focus-tab" });
+    await expect(wait).resolves.toMatchObject({ ok: true, action: "focus-tab" });
   });
 
   it("fails commands with clear errors", async () => {

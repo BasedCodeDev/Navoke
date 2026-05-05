@@ -122,6 +122,7 @@ The current generic form supports:
 - `subjectImages`
 - `prompt`
 - `masterPrompt`
+- `masterPromptSuffix`
 - `subjectInstruction`
 - `modelName`
 - `profileName`

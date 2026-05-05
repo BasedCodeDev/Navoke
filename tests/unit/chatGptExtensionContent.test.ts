@@ -13,6 +13,7 @@ describe("generic browser extension content script", () => {
     const combined = files.join("\n");
     expect(combined).not.toMatch(/chatgpt\.com|chat\.openai\.com|hunyuanglobal|hunyuan\.tencent/i);
     expect(combined).not.toMatch(/chatgpt-image-transform|hunyuan-global-login-check/i);
+    expect(combined).not.toMatch(/messageRole|data-message-author-role/i);
   });
 
   it("exposes only generic command routes", () => {
@@ -215,6 +216,44 @@ describe("generic browser extension content script", () => {
     expect(result).toMatchObject({ ok: true, action: "click", selector: "button", candidateCount: 2, visibleCount: 1, enabledCount: 2 });
     expect(clicked).toEqual(["visible"]);
   });
+
+  it("extracts image context and stable source ids without site-specific logic", async () => {
+    const image = createFakeImageElement({
+      src: "https://images.example.test/content?id=file_1234567890abcdef&sig=old",
+      alt: "Generated image",
+      parent: createFakeDomAncestor({
+        tagName: "DIV",
+        textContent: "Assistant produced an image",
+        attributes: {
+          role: "article",
+          "data-example-owner": "assistant",
+          "aria-label": "Assistant response"
+        }
+      })
+    });
+    const harness = loadContentScriptHarness(image);
+
+    const result = await harness.extract({ kind: "images", selector: "img", minWidth: 128, minHeight: 128 });
+
+    expect(result).toMatchObject({
+      images: [
+        expect.objectContaining({
+          alt: "Generated image",
+          stableSourceId: "id:file_1234567890abcdef",
+          domIndex: 0,
+          insideForm: false,
+          insideEditable: false,
+          ancestor: expect.objectContaining({
+            tagName: "div",
+            role: "article",
+            ariaLabel: "Assistant response",
+            text: "Assistant produced an image",
+            attributes: expect.objectContaining({ "data-example-owner": "assistant" })
+          })
+        })
+      ]
+    });
+  });
 });
 
 function loadContentScriptHarness(
@@ -263,6 +302,7 @@ function loadContentScriptHarness(
       execCommand: options.execCommand ?? (() => false)
     },
     getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+    HTMLImageElement: Object,
     InputEvent: class {
       type: string;
       constructor(type: string) {
@@ -305,6 +345,65 @@ function loadContentScriptHarness(
     extract(query: unknown): Promise<unknown>;
     routingTokenForHeartbeat(): string | undefined;
     location: { href: string; search: string; hash: string };
+  };
+}
+
+function createFakeDomAncestor(input: {
+  tagName: string;
+  textContent?: string;
+  attributes?: Record<string, string>;
+  parentElement?: unknown;
+}): {
+  tagName: string;
+  textContent: string;
+  innerText: string;
+  parentElement?: unknown;
+  attributes: Array<{ name: string; value: string }>;
+  getAttribute(name: string): string | null;
+} {
+  const attributes = input.attributes ?? {};
+  return {
+    tagName: input.tagName,
+    textContent: input.textContent ?? "",
+    innerText: input.textContent ?? "",
+    parentElement: input.parentElement,
+    attributes: Object.entries(attributes).map(([name, value]) => ({ name, value })),
+    getAttribute: (name) => attributes[name] ?? null
+  };
+}
+
+function createFakeImageElement(input: {
+  src: string;
+  alt?: string;
+  parent?: ReturnType<typeof createFakeDomAncestor>;
+}): {
+  currentSrc: string;
+  src: string;
+  alt: string;
+  naturalWidth: number;
+  naturalHeight: number;
+  parentElement?: ReturnType<typeof createFakeDomAncestor>;
+  attributes: Array<{ name: string; value: string }>;
+  getBoundingClientRect(): { width: number; height: number; x: number; y: number };
+  getAttribute(name: string): string | null;
+  closest(selector: string): unknown;
+} {
+  return {
+    currentSrc: input.src,
+    src: input.src,
+    alt: input.alt ?? "",
+    naturalWidth: 512,
+    naturalHeight: 512,
+    parentElement: input.parent,
+    attributes: [],
+    getBoundingClientRect: () => ({ width: 256, height: 256, x: 10, y: 20 }),
+    getAttribute: () => null,
+    closest: (selector) => {
+      if (selector === "form" || selector.includes("contenteditable") || selector.includes("button") || selector.includes("a[href]")) {
+        return null;
+      }
+      return null;
+    }
   };
 }
 

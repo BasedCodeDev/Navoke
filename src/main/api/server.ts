@@ -289,9 +289,9 @@ export class ApiServer {
 
     app.post("/api/extension/tabs/open", (req, res, next) => {
       void this.options.extensionBridge
-        .openTabWithController({
+        .openWindowWithController({
           url: String(req.body?.url ?? ""),
-          active: req.body?.active !== false
+          focused: req.body?.active !== false
         })
         .then((result) => res.json({ ok: true, result }))
         .catch(next);

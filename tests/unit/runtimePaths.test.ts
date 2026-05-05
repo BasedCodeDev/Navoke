@@ -38,7 +38,7 @@ describe("runtime paths", () => {
 
     expect(safeRunFolderName('Bad: Run / Name * ? "')).toBe("Bad-Run-Name");
     expect(safeRunFolderName(".blink")).toBe("blink");
-    expect(getRunDir(paths, "Same Name", "11111111-aaaa")).toBe(path.join(path.resolve(projectDir), "Same-Name-11111111"));
+    expect(getRunDir(paths, "Same Name", "11111111-aaaa", 12)).toBe(path.join(path.resolve(projectDir), "12-Same-Name-11111111"));
     expect(getRunDir(paths, "Same Name", "22222222-bbbb")).toBe(path.join(path.resolve(projectDir), "Same-Name-22222222"));
   });
 });

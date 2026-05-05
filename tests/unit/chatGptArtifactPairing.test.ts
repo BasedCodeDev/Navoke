@@ -82,7 +82,8 @@ describe("ChatGPT artifact pairing", () => {
       kind: "sequence",
       sourceImages: ["C:\\tmp\\source.png"],
       prompts: ["Back view", "Side view"],
-      masterPrompt: ""
+      masterPrompt: "",
+      masterPromptSuffix: ""
     };
     const first = artifact("prompt-out-1", 0, "C:\\tmp\\source.png");
     first.metadata = {

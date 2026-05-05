@@ -39,7 +39,9 @@ export interface HunyuanRunFormState {
   extensionTab?: ExtensionTabInput;
 }
 
-export type ExtensionTabInput = { mode: "new"; routingToken: string; url?: string; title?: string } | { mode: "existing"; clientId: string; url?: string; title?: string };
+export type ExtensionTabInput =
+  | { mode: "new"; routingToken: string; url?: string; title?: string; openMode?: "window" | "tab" }
+  | { mode: "existing"; clientId: string; url?: string; title?: string };
 
 export interface HunyuanSelectorAssignment {
   key: string;

@@ -1,4 +1,4 @@
-const BLINK_EXTENSION_PROTOCOL_VERSION = 1;
+const BLINK_EXTENSION_PROTOCOL_VERSION = 3;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const API_BASE_URL = "http://127.0.0.1:39201";
 const CONTROLLER_ID_STORAGE_KEY = "basedBlinkBrowserControllerId";
@@ -48,7 +48,7 @@ async function controllerHeartbeat() {
       controllerId,
       protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: EXTENSION_VERSION,
-      capabilities: ["open-tab"]
+      capabilities: ["open-tab", "open-window", "focus-tab"]
     })
   });
 }
@@ -78,8 +78,34 @@ async function performControllerCommand(payload) {
     throw new Error("Unsupported BLINK controller command payload.");
   }
   const command = payload.command;
-  if (!command || command.kind !== "open-tab") {
+  if (!command || (command.kind !== "open-tab" && command.kind !== "open-window" && command.kind !== "focus-tab")) {
     throw new Error(`Unsupported BLINK controller command kind: ${command?.kind || "unknown"}`);
+  }
+  if (command.kind === "focus-tab") {
+    if (typeof command.tabId !== "number") throw new Error("BLINK focus-tab command requires tabId.");
+    const tab = await chrome.tabs.update(command.tabId, { active: true });
+    const windowId = typeof command.windowId === "number" ? command.windowId : tab.windowId;
+    if (typeof windowId === "number") await chrome.windows.update(windowId, { focused: command.focused !== false });
+    return {
+      ok: true,
+      action: "focus-tab",
+      tabId: command.tabId,
+      windowId: windowId ?? null,
+      url: tab.url || "",
+      title: tab.title || ""
+    };
+  }
+  if (command.kind === "open-window") {
+    const win = await chrome.windows.create({ url: command.url, focused: command.focused !== false });
+    const tab = Array.isArray(win.tabs) ? win.tabs[0] : null;
+    return {
+      ok: true,
+      action: "open-window",
+      tabId: tab?.id ?? null,
+      windowId: win.id ?? tab?.windowId ?? null,
+      url: tab?.url || command.url,
+      title: tab?.title || ""
+    };
   }
   const tab = await chrome.tabs.create({ url: command.url, active: command.active !== false });
   return {
@@ -102,6 +128,20 @@ async function tickController() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "current-tab-info") {
+    getControllerId()
+      .then((controllerId) =>
+        sendResponse({
+          ok: true,
+          controllerId,
+          tabId: sender.tab?.id ?? null,
+          windowId: sender.tab?.windowId ?? null
+        })
+      )
+      .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+
   if (message?.type === "focus-current-tab") {
     const tabId = sender.tab?.id;
     const windowId = sender.tab?.windowId;

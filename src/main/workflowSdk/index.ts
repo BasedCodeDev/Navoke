@@ -91,6 +91,14 @@ export interface WorkflowSdk {
         url: string,
         options?: { active?: boolean; signal?: AbortSignal; timeoutMs?: number }
       ): Promise<unknown>;
+      openWindow(
+        url: string,
+        options?: { focused?: boolean; signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<unknown>;
+      focusTarget(
+        target: ExtensionBrowserTarget,
+        options?: { signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<unknown>;
       stageFiles(filePaths: string[]): ExtensionCommandFilePayload[];
       executeCommand(
         target: ExtensionBrowserTarget,
@@ -160,6 +168,19 @@ export function createWorkflowSdk(): WorkflowSdk {
           extensionBridge.openTabWithController({
             url,
             active: options?.active,
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
+        openWindow: (url, options) =>
+          extensionBridge.openWindowWithController({
+            url,
+            focused: options?.focused,
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
+        focusTarget: (target, options) =>
+          extensionBridge.focusTarget({
+            target,
             timeoutMs: options?.timeoutMs,
             signal: options?.signal
           }),

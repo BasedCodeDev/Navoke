@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { DEFAULT_API_URL, extractSseMessages, parseBlinkArgs, runCli, type WatchRunOptions } from "../../src/cli";
+import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_API_URL, extractSseMessages, parseBlinkArgs, runCli, watchRun, type WatchRunOptions } from "../../src/cli";
 
 describe("blink CLI", () => {
   it("parses global and run command options", () => {
@@ -256,5 +256,50 @@ describe("blink CLI", () => {
       messages: ['{"ok":true}', '{"kind":"run-updated","runId":"1"}'],
       remainder: "partial"
     });
+  });
+
+  it("emits a distinct manual action event while watching a run", async () => {
+    const stdout: string[] = [];
+    const originalFetch = globalThis.fetch;
+    let detailRequestCount = 0;
+    const encoder = new TextEncoder();
+    globalThis.fetch = vi.fn(async () => {
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ kind: "run-updated", runId: "run-1" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ kind: "run-updated", runId: "run-1" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ kind: "run-updated", runId: "run-1" })}\n\n`));
+          controller.close();
+        }
+      });
+      return new Response(stream, { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const finalRun = await watchRun("http://api", "run-1", {
+        stdout: (line) => stdout.push(line),
+        request: async <T>() => {
+          detailRequestCount += 1;
+          const run =
+            detailRequestCount === 1
+              ? { id: "run-1", status: "running", currentStep: "Starting" }
+              : detailRequestCount <= 3
+                ? { id: "run-1", status: "waiting_manual", currentStep: "Complete verification" }
+                : { id: "run-1", status: "completed", currentStep: "Completed" };
+          return { run, events: [], artifacts: [] } as T;
+        }
+      });
+
+      expect(finalRun).toMatchObject({ status: "completed" });
+      expect(stdout.map((line) => JSON.parse(line)).filter((item) => item.type === "manual_action.required")).toEqual([
+        expect.objectContaining({
+          runId: "run-1",
+          status: "waiting_manual",
+          currentStep: "Complete verification"
+        })
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

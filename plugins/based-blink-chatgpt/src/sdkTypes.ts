@@ -55,8 +55,18 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
 
 export type ExtensionBrowserTarget =
   | { mode: "any" }
-  | { mode: "existing"; clientId: string; url?: string; title?: string }
-  | { mode: "new"; routingToken: string; url?: string; title?: string };
+  | { mode: "existing"; clientId: string; url?: string; title?: string; tabId?: number; windowId?: number; controllerId?: string }
+  | {
+      mode: "new";
+      routingToken: string;
+      url?: string;
+      title?: string;
+      openMode?: "window" | "tab";
+      clientId?: string;
+      tabId?: number;
+      windowId?: number;
+      controllerId?: string;
+    };
 
 export type ChatGptExtensionTaskTarget = ExtensionBrowserTarget;
 export type ChatGptSubjectTaskMode = "submit-and-capture" | "capture-existing";
@@ -69,6 +79,9 @@ export interface ExtensionClientStatus {
   protocolVersion: number | null;
   extensionVersion: string;
   routingToken?: string;
+  controllerId?: string;
+  tabId?: number;
+  windowId?: number;
   compatible: boolean;
   incompatibilityReason?: string;
   lastSeenAt: string;
@@ -95,6 +108,8 @@ export interface WorkflowSdk {
       findCompatibleClientForTarget(target: ExtensionBrowserTarget): ExtensionClientStatus | undefined;
       ensureRoutedTab(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ExtensionClientStatus>;
       openTab(url: string, options?: { active?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      openWindow(url: string, options?: { focused?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      focusTarget(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
       stageFiles(filePaths: string[]): Array<{ id: string; name: string; mimeType: string; url: string }>;
       executeCommand(target: ExtensionBrowserTarget, command: unknown, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
       inspect(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;

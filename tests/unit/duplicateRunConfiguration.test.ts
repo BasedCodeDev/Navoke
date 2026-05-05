@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { RunRecord, SystemInfo, WorkflowSummary } from "../../src/renderer/lib/api";
-import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "../../src/renderer/lib/duplicateRunConfiguration";
+import {
+  DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX,
+  buildDuplicateRunConfiguration,
+  collectRunInputFilePaths
+} from "../../src/renderer/lib/duplicateRunConfiguration";
 
 type ExtensionClient = SystemInfo["extension"]["connectedClients"][number];
 const chatGptWorkflow = {
@@ -15,6 +19,7 @@ function run(input: Partial<RunRecord> & { workflowId: string; input: unknown })
     id: "run-1",
     workflowId: input.workflowId,
     origin: input.origin ?? { source: "ui" },
+    runNumber: input.runNumber ?? 1,
     name: input.name ?? "Source run",
     runDir: null,
     status: "completed",
@@ -178,6 +183,7 @@ describe("duplicate run configuration", () => {
           sourceImages: ["C:\\runs\\inputs\\source.png"],
           prompts: ["Back view", "Side view"],
           masterPrompt: "Keep the same character.",
+          masterPromptSuffix: "Only images.",
           extensionTab: { mode: "existing", clientId: "tab-1" }
         }
       }),
@@ -189,9 +195,45 @@ describe("duplicate run configuration", () => {
       sourceFiles: ["C:\\runs\\inputs\\source.png"],
       sequencePrompts: ["Back view", "Side view"],
       masterPrompt: "Keep the same character.",
+      masterPromptSuffix: "Only images.",
       extensionTabSelection: "tab-1"
     });
     expect(duplicate.filePaths).toEqual(["C:\\runs\\inputs\\source.png"]);
+  });
+
+  it("prefills the ChatGPT sequence setup suffix when old runs did not store one", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({
+        workflowId: "based-blink.chatgpt.extension-image-sequence",
+        input: {
+          sourceImages: ["C:\\runs\\inputs\\source.png"],
+          prompts: ["Back view"],
+          masterPrompt: "Keep the same character.",
+          extensionTab: { mode: "existing", clientId: "tab-1" }
+        }
+      }),
+      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
+    );
+
+    expect(duplicate.masterPromptSuffix).toBe(DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX);
+  });
+
+  it("preserves a cleared ChatGPT sequence setup suffix on resubmit", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({
+        workflowId: "based-blink.chatgpt.extension-image-sequence",
+        input: {
+          sourceImages: ["C:\\runs\\inputs\\source.png"],
+          prompts: ["Back view"],
+          masterPrompt: "Keep the same character.",
+          masterPromptSuffix: "",
+          extensionTab: { mode: "existing", clientId: "tab-1" }
+        }
+      }),
+      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
+    );
+
+    expect(duplicate.masterPromptSuffix).toBe("");
   });
 
   it("copies Hunyuan view images, prompt, profile, settings, and selectors", () => {

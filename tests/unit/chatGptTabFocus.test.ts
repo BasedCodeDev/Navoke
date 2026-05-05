@@ -11,6 +11,7 @@ function run(input: unknown, output: unknown = null, status: RunRecord["status"]
     id: "run-1",
     workflowId: "workflow",
     origin: { source: "ui" },
+    runNumber: 1,
     name: "Run",
     runDir: null,
     status,

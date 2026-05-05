@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from "electron";
 import { ApiServer } from "./api/server";
 import { SqliteStore } from "./db/sqliteStore";
 import { extensionBridge } from "./extension/extensionBridge";
@@ -9,15 +9,17 @@ import { PluginManager } from "./plugins/pluginManager";
 import { AppSettingsStore, projectDisplayName, renameProject as writeProjectName } from "./projectSettings";
 import { RuntimeEventBus } from "./runtime/eventBus";
 import { LocalWorkflowRunner } from "./runtime/localWorkflowRunner";
+import { attachManualWaitNotifications } from "./runtime/manualWaitNotifications";
 import { createRuntimePaths } from "./runtime/paths";
 import { removeRuntimePointer, writeRuntimePointer } from "./runtime/runtimePointer";
-import type { RuntimePaths, WorkflowRegistry } from "./runtime/types";
+import type { RunRecord, RuntimePaths, WorkflowRegistry } from "./runtime/types";
 import { createWorkflowRegistry } from "./workflows";
 
 interface RuntimeState {
   apiServer: ApiServer;
   eventBus: RuntimeEventBus;
   paths: RuntimePaths;
+  manualWaitNotifications: () => void;
   runner: LocalWorkflowRunner;
   store: SqliteStore;
   workflowLab: WorkflowLab;
@@ -124,6 +126,9 @@ async function openProject(projectDir: string): Promise<AppConfig> {
   const eventBus = new RuntimeEventBus();
   const store = await SqliteStore.open(paths.dbPath);
   const runner = new LocalWorkflowRunner(workflows, store, paths, eventBus);
+  const manualWaitNotifications = attachManualWaitNotifications(eventBus, store, {
+    notify: showManualWaitNotification
+  });
   const workflowLab = new WorkflowLab(paths, extensionBridge);
   const apiServer = new ApiServer({
     store,
@@ -139,7 +144,7 @@ async function openProject(projectDir: string): Promise<AppConfig> {
   await apiServer.start();
   writeRuntimePointer(paths, apiServer.baseUrl);
 
-  runtime = { apiServer, eventBus, paths, runner, store, workflowLab };
+  runtime = { apiServer, eventBus, paths, manualWaitNotifications, runner, store, workflowLab };
   settingsStore?.setLastProjectDir(paths.projectDir);
   return getConfig();
 }
@@ -173,6 +178,7 @@ async function closeRuntime(): Promise<void> {
   } catch (error) {
     shutdownError = error;
   }
+  current.manualWaitNotifications();
   await current.apiServer.stop();
   removeRuntimePointer(current.paths);
   current.store.close();
@@ -278,6 +284,20 @@ function createWindow(): BrowserWindow {
   });
 
   return window;
+}
+
+function showManualWaitNotification(run: RunRecord): void {
+  if (!Notification.isSupported()) return;
+  const runLabel = run.runNumber === null ? run.name : `Run #${run.runNumber}: ${run.name}`;
+  const notification = new Notification({
+    title: "Based BLINK needs manual action",
+    body: `${runLabel}\n${run.currentStep ?? "Manual action required."}`,
+    ...(resolveAppIconPath() ? { icon: resolveAppIconPath() } : {})
+  });
+  notification.on("click", () => {
+    focusExistingWindow();
+  });
+  notification.show();
 }
 
 function focusExistingWindow(): void {

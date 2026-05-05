@@ -21,6 +21,7 @@ export interface DuplicateRunConfiguration {
   sourceFiles: string[];
   prompt: string;
   masterPrompt: string;
+  masterPromptSuffix: string;
   subjectInstruction: string;
   sequencePrompts: string[];
   modelName: string;
@@ -46,6 +47,8 @@ interface DuplicateRunOptions {
 
 const DEFAULT_MODEL_NAME = "Demo model";
 const DEFAULT_PROFILE_NAME = "default";
+export const DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX =
+  'Only generate images, one at a time, no text responses after the first response to this message. Respond "Ready" when you\'re ready to proceed.';
 
 export function buildDuplicateRunConfiguration(run: RunRecord, options: DuplicateRunOptions): DuplicateRunConfiguration {
   const input = asRecord(run.input);
@@ -58,6 +61,7 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     sourceFiles: [],
     prompt: "",
     masterPrompt: "",
+    masterPromptSuffix: DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX,
     subjectInstruction: "",
     sequencePrompts: [],
     modelName: DEFAULT_MODEL_NAME,
@@ -78,12 +82,20 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     if ("sourceImages" in input || "prompts" in input) {
       base.sourceFiles = stringArrayField(input, "sourceImages");
       base.sequencePrompts = stringArrayField(input, "prompts");
+      base.masterPrompt = stringField(input, "masterPrompt");
+      base.masterPromptSuffix =
+        "masterPromptSuffix" in input
+          ? stringField(input, "masterPromptSuffix")
+          : base.masterPrompt
+            ? DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX
+            : "";
     } else {
       base.referenceFiles = stringArrayField(input, "referenceImages");
       base.subjectFiles = stringArrayField(input, "subjectImages");
       base.subjectInstruction = stringField(input, "subjectInstruction");
+      base.masterPrompt = stringField(input, "masterPrompt");
+      base.masterPromptSuffix = DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX;
     }
-    base.masterPrompt = stringField(input, "masterPrompt");
     base.extensionTabSelection = resolveDuplicateExtensionTabSelection(input, options);
   } else if (isHunyuanWorkflowInput(run.workflowId, input, options.workflow)) {
     base.hunyuanViewFiles = readHunyuanViewFiles(input);

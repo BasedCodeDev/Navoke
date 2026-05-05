@@ -67,6 +67,7 @@ export class LocalWorkflowRunner {
     private readonly eventBus: RuntimeEventBus
   ) {
     this.workflows = normalizeWorkflowRegistry(workflows);
+    this.backfillNumberedRunFolders();
   }
 
   enqueue(input: { workflowId: string; name?: string; workflowInput: unknown; origin?: unknown }): RunRecord {
@@ -82,7 +83,8 @@ export class LocalWorkflowRunner {
 
     const runId = createId();
     const runName = input.name?.trim() || workflow.manifest.title;
-    const runDir = getRunDir(this.paths, runName, runId);
+    const runNumber = this.store.nextRunNumber();
+    const runDir = getRunDir(this.paths, runName, runId, runNumber);
     const { inputDir, artifactDir } = ensureRunDataDirs(runDir);
     const preparedInput = copyWorkflowInputFiles(workflow, parsed.data, inputDir);
     const promptsPath = path.join(runDir, "prompts.json");
@@ -91,6 +93,7 @@ export class LocalWorkflowRunner {
       buildPromptsDocument({
         workflow,
         runId,
+        runNumber,
         runName,
         runDir,
         plugin: registration.plugin,
@@ -110,6 +113,7 @@ export class LocalWorkflowRunner {
       pluginApiVersion: registration.plugin.apiVersion,
       pluginSource: registration.plugin.source,
       origin,
+      runNumber,
       name: runName,
       runDir,
       status: "queued",
@@ -333,8 +337,17 @@ export class LocalWorkflowRunner {
     }
 
     const oldRunDir = path.resolve(run.runDir);
+    const newRunDir = path.resolve(getRunDir(this.paths, runName, run.id, run.runNumber));
+    return this.moveRunData(run, runName, oldRunDir, newRunDir);
+  }
+
+  private moveRunData(
+    run: RunRecord,
+    runName: string,
+    oldRunDir: string,
+    newRunDir: string
+  ): { runDir: string | null; input: unknown; output: unknown } {
     this.assertRunDirIsSafe(oldRunDir);
-    const newRunDir = path.resolve(getRunDir(this.paths, runName, run.id));
     const hasNewPath = !samePath(oldRunDir, newRunDir);
 
     if (hasNewPath) {
@@ -361,19 +374,57 @@ export class LocalWorkflowRunner {
       }
     }
 
-    rewritePromptsJson(finalRunDir, runName, oldRunDir, finalRunDir);
+    rewritePromptsJson(finalRunDir, runName, oldRunDir, finalRunDir, run.runNumber);
     return { runDir: finalRunDir, input, output };
   }
 
+  private backfillNumberedRunFolders(): void {
+    const runs = this.store
+      .listRuns()
+      .filter((run) => run.runNumber !== null)
+      .sort((left, right) => Number(left.runNumber) - Number(right.runNumber));
+
+    for (const run of runs) {
+      if (!run.runDir || run.runNumber === null) continue;
+      const oldRunDir = path.resolve(run.runDir);
+      if (!this.isRunDirSafe(oldRunDir) || !fs.existsSync(oldRunDir)) continue;
+
+      const newRunDir = path.resolve(getRunDir(this.paths, run.name, run.id, run.runNumber));
+      if (samePath(oldRunDir, newRunDir)) {
+        rewritePromptsJson(oldRunDir, run.name, oldRunDir, oldRunDir, run.runNumber);
+        continue;
+      }
+      if (fs.existsSync(newRunDir)) continue;
+
+      try {
+        const update = this.moveRunData(run, run.name, oldRunDir, newRunDir);
+        this.store.updateRun(run.id, {
+          runDir: update.runDir,
+          input: update.input,
+          output: update.output
+        });
+      } catch {
+        // Historical folders that cannot be safely moved should not block opening the project.
+      }
+    }
+  }
+
   private assertRunDirIsSafe(runDir: string): void {
+    if (!this.isRunDirSafe(runDir)) {
+      throw new Error(`Refusing to rename run path outside project directory: ${runDir}`);
+    }
+  }
+
+  private isRunDirSafe(runDir: string): boolean {
     const projectRoot = path.resolve(this.paths.runRootDir);
     const internalRoot = path.resolve(this.paths.internalDir);
     if (samePath(runDir, projectRoot) || !isSameOrChildPath(runDir, projectRoot)) {
-      throw new Error(`Refusing to rename run path outside project directory: ${runDir}`);
+      return false;
     }
     if (isSameOrChildPath(runDir, internalRoot)) {
-      throw new Error(`Refusing to rename internal project path as run data: ${runDir}`);
+      return false;
     }
+    return true;
   }
 
   private async drain(): Promise<void> {
@@ -582,6 +633,7 @@ function buildPromptsDocument(input: {
   plugin: WorkflowPluginMetadata;
   origin: RunOrigin;
   runId: string;
+  runNumber: number;
   runName: string;
   runDir: string;
   originalInput: unknown;
@@ -593,6 +645,7 @@ function buildPromptsDocument(input: {
 
   return {
     runId: input.runId,
+    runNumber: input.runNumber,
     runName: input.runName,
     workflowId: input.workflow.manifest.id,
     workflowVersion: input.workflow.manifest.version,
@@ -609,6 +662,7 @@ function buildPromptsDocument(input: {
     origin: input.origin,
     prompts: {
       masterPrompt: original.masterPrompt ?? null,
+      masterPromptSuffix: original.masterPromptSuffix ?? null,
       prompt: original.prompt ?? null,
       subjectInstruction: original.subjectInstruction ?? null,
       perSubjectInstruction: original.subjectInstruction ?? null,
@@ -675,7 +729,13 @@ function isWorkflowRegistration(value: WorkflowDefinition | WorkflowRegistration
   return Boolean(isRecord(value) && isRecord(value.definition) && isRecord(value.plugin));
 }
 
-function rewritePromptsJson(runDir: string, runName: string, oldRunDir: string, newRunDir: string): void {
+function rewritePromptsJson(
+  runDir: string,
+  runName: string,
+  oldRunDir: string,
+  newRunDir: string,
+  runNumber: number | null
+): void {
   const promptsPath = path.join(runDir, "prompts.json");
   if (!fs.existsSync(promptsPath)) return;
 
@@ -683,6 +743,8 @@ function rewritePromptsJson(runDir: string, runName: string, oldRunDir: string, 
     const prompts = replacePathReferences(JSON.parse(fs.readFileSync(promptsPath, "utf8")) as unknown, oldRunDir, newRunDir);
     if (isRecord(prompts)) {
       prompts.runName = runName;
+      prompts.runNumber = runNumber;
+      prompts.runDir = newRunDir;
     }
     writeJson(promptsPath, prompts);
   } catch {

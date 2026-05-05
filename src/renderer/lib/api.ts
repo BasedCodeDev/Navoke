@@ -83,6 +83,7 @@ export interface RunRecord {
   pluginApiVersion?: string | null;
   pluginSource?: PluginSource | "unknown" | null;
   origin: RunOrigin;
+  runNumber: number | null;
   name: string;
   runDir: string | null;
   status: "queued" | "running" | "pausing" | "waiting_manual" | "completed" | "failed" | "cancelled";
@@ -154,6 +155,9 @@ export interface SystemInfo {
       protocolVersion: number | null;
       extensionVersion: string;
       routingToken?: string;
+      controllerId?: string;
+      tabId?: number;
+      windowId?: number;
       compatible: boolean;
       incompatibilityReason?: string;
       lastSeenAt: string;
