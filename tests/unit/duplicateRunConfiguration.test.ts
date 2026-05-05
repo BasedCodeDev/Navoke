@@ -39,7 +39,7 @@ function client(input: Partial<ExtensionClient> & { id: string }): ExtensionClie
     url: input.url ?? "https://chatgpt.com/",
     title: input.title ?? "ChatGPT",
     status: input.status ?? "ready",
-    protocolVersion: input.protocolVersion ?? 8,
+    protocolVersion: input.protocolVersion ?? 4,
     extensionVersion: input.extensionVersion ?? "0.8.0",
     routingToken: input.routingToken,
     compatible: input.compatible ?? true,
@@ -274,6 +274,50 @@ describe("duplicate run configuration", () => {
       hunyuanExportFormat: "glb"
     });
     expect(JSON.parse(duplicate.hunyuanSelectorsJson)).toMatchObject({ generateButton: "button.generate" });
+  });
+
+  it("copies Hunyuan Global view images, settings, selectors, and routed tab selection", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({
+        workflowId: "based-blink.hunyuan.global.image-to-model",
+        input: {
+          frontImage: "C:\\runs\\inputs\\front.png",
+          backImage: "C:\\runs\\inputs\\back.png",
+          modelFaceCount: "50k",
+          retopologyType: "quad",
+          generateTexture: true,
+          autoRig: false,
+          exportFormat: "obj",
+          selectors: { loginStartText: "Start Using" },
+          extensionTab: {
+            mode: "new",
+            routingToken: "global-route",
+            url: "https://3d.hunyuanglobal.com/#based-blink-tab=global-route"
+          }
+        }
+      }),
+      {
+        workflow: chatGptWorkflow,
+        compatibleClients: [client({ id: "hunyuan-global-tab", routingToken: "global-route", url: "https://3d.hunyuanglobal.com/" })],
+        newExtensionTabValue: "__new__"
+      }
+    );
+
+    expect(duplicate).toMatchObject({
+      hunyuanViewFiles: {
+        frontImage: ["C:\\runs\\inputs\\front.png"],
+        backImage: ["C:\\runs\\inputs\\back.png"]
+      },
+      hunyuanModelFaceCount: "50k",
+      hunyuanRetopologyType: "quad",
+      hunyuanGenerateTexture: true,
+      hunyuanAutoRig: false,
+      hunyuanExportFormat: "obj",
+      extensionTabSelection: "hunyuan-global-tab",
+      referenceFiles: [],
+      subjectFiles: []
+    });
+    expect(JSON.parse(duplicate.hunyuanSelectorsJson)).toMatchObject({ loginStartText: "Start Using" });
   });
 
   it("collects unique input file paths across supported file fields", () => {

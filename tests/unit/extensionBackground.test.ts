@@ -16,12 +16,50 @@ describe("generic browser extension background controller", () => {
     const result = await harness.performControllerCommand({
       id: "command-1",
       kind: "controller-command",
-      protocolVersion: 3,
+      protocolVersion: 4,
       command: { kind: "open-tab", url: "https://example.test/#based-blink-tab=route-1", active: true }
     });
 
     expect(createdTabs).toEqual([{ url: "https://example.test/#based-blink-tab=route-1", active: true }]);
     expect(result).toMatchObject({ ok: true, action: "open-tab", tabId: 42, windowId: 7 });
+  });
+
+  it("injects the generic content script into opened tabs", async () => {
+    const injected: unknown[] = [];
+    const harness = loadBackgroundHarness({
+      tabsCreate: async (input: unknown) => ({ id: 42, windowId: 7, url: (input as { url: string }).url, title: "Opened tab" }),
+      tabsGet: async (tabId) => ({ id: tabId, windowId: 7, url: "https://example.test/#based-blink-tab=route-1", status: "complete" }),
+      scriptingExecuteScript: async (input: unknown) => {
+        injected.push(input);
+        return [];
+      }
+    });
+
+    const result = await harness.performControllerCommand({
+      id: "command-1",
+      kind: "controller-command",
+      protocolVersion: 4,
+      command: { kind: "open-tab", url: "https://example.test/#based-blink-tab=route-1", active: true }
+    });
+
+    expect(injected).toEqual([{ target: { tabId: 42 }, files: ["content.js"] }]);
+    expect(result).toMatchObject({ injection: { injected: true } });
+  });
+
+  it("injects the generic content script when a tab finishes loading", async () => {
+    const injected: unknown[] = [];
+    const harness = loadBackgroundHarness({
+      tabsCreate: async () => ({ id: 1 }),
+      tabsGet: async (tabId) => ({ id: tabId, windowId: 7, url: "https://3d.hunyuanglobal.com/", status: "complete" }),
+      scriptingExecuteScript: async (input: unknown) => {
+        injected.push(input);
+        return [];
+      }
+    });
+
+    await harness.sendTabUpdated(42, { status: "complete" }, { url: "https://3d.hunyuanglobal.com/" });
+
+    expect(injected).toEqual([{ target: { tabId: 42 }, files: ["content.js"] }]);
   });
 
   it("handles open-window controller commands through chrome.windows.create", async () => {
@@ -42,7 +80,7 @@ describe("generic browser extension background controller", () => {
     const result = await harness.performControllerCommand({
       id: "command-1",
       kind: "controller-command",
-      protocolVersion: 3,
+      protocolVersion: 4,
       command: { kind: "open-window", url: "https://example.test/#based-blink-tab=route-1", focused: true }
     });
 
@@ -68,7 +106,7 @@ describe("generic browser extension background controller", () => {
     const result = await harness.performControllerCommand({
       id: "command-1",
       kind: "controller-command",
-      protocolVersion: 3,
+      protocolVersion: 4,
       command: { kind: "focus-tab", tabId: 42, windowId: 7, focused: true }
     });
 
@@ -90,20 +128,25 @@ describe("generic browser extension background controller", () => {
 
 function loadBackgroundHarness(options: {
   tabsCreate(input: unknown): Promise<unknown>;
+  tabsGet?: (tabId: number) => Promise<unknown>;
   tabsUpdate?: (tabId: number, input: unknown) => Promise<unknown>;
   windowsCreate?: (input: unknown) => Promise<unknown>;
   windowsUpdate?: (windowId: number, input: unknown) => Promise<unknown>;
+  scriptingExecuteScript?: (input: unknown) => Promise<unknown>;
 }): {
   performControllerCommand(payload: unknown): Promise<unknown>;
   sendRuntimeMessage(message: unknown, sender?: unknown): Promise<unknown>;
+  sendTabUpdated(tabId: number, changeInfo: unknown, tab: unknown): Promise<void>;
 } {
   const background = fs.readFileSync(path.resolve(__dirname, "../../extension/background.js"), "utf8");
   const listeners: Array<(message: unknown, sender: unknown, sendResponse: (value: unknown) => void) => boolean> = [];
+  const tabUpdatedListeners: Array<(tabId: number, changeInfo: unknown, tab: unknown) => void> = [];
   const context = vm.createContext({
     console,
     crypto: { randomUUID: () => "controller-id" },
     fetch: vi.fn(async () => ({ status: 204, ok: true, text: async () => "" })),
     setInterval: vi.fn(),
+    setTimeout,
     chrome: {
       runtime: {
         getManifest: () => ({ version: "0.1.0" }),
@@ -119,12 +162,19 @@ function loadBackgroundHarness(options: {
       },
       tabs: {
         create: options.tabsCreate,
-        update: options.tabsUpdate ?? vi.fn()
+        get: options.tabsGet ?? vi.fn(),
+        update: options.tabsUpdate ?? vi.fn(),
+        onUpdated: { addListener: (listener: (tabId: number, changeInfo: unknown, tab: unknown) => void) => tabUpdatedListeners.push(listener) }
       },
       windows: {
         create: options.windowsCreate ?? vi.fn(),
         update: options.windowsUpdate ?? vi.fn()
-      }
+      },
+      scripting: options.scriptingExecuteScript
+        ? {
+            executeScript: options.scriptingExecuteScript
+          }
+        : undefined
     },
     globalThis: {}
   });
@@ -140,6 +190,10 @@ function loadBackgroundHarness(options: {
         const handled = listeners.some((listener) => listener(message, sender ?? {}, resolve));
         if (!handled) resolve(undefined);
       });
+    },
+    async sendTabUpdated(tabId: number, changeInfo: unknown, tab: unknown): Promise<void> {
+      for (const listener of tabUpdatedListeners) listener(tabId, changeInfo, tab);
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
   };
 }

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { inferMimeType } from "../utils/files";
 
-export const BLINK_EXTENSION_PROTOCOL_VERSION = 3;
+export const BLINK_EXTENSION_PROTOCOL_VERSION = 4;
 export const BLINK_ROUTING_TOKEN_PARAM = "based-blink-tab";
 
 const CLIENT_TTL_MS = 30_000;
@@ -82,7 +82,7 @@ export interface ExtensionCommandFilePayload {
 }
 
 export type ExtensionBrowserAction =
-  | { kind: "click"; selector: string }
+  | { kind: "click"; selector: string; text?: string; textMatch?: "contains" | "exact" | "regex"; caseSensitive?: boolean }
   | { kind: "fill"; selector: string; value: string }
   | { kind: "submit"; selector: string }
   | { kind: "select"; selector: string; value?: string; label?: string; index?: number }
@@ -420,8 +420,9 @@ export class ExtensionBridge {
       throw new Error("No compatible BLINK browser extension tab is connected for the requested target.");
     }
 
+    let openResult: unknown = null;
     if (input.target.mode === "new" && input.target.openMode !== "tab") {
-      await this.openWindowWithController({
+      openResult = await this.openWindowWithController({
         url,
         focused: true,
         controllerId: input.target.controllerId,
@@ -429,7 +430,7 @@ export class ExtensionBridge {
         signal: input.signal
       });
     } else {
-      await this.openTabWithController({
+      openResult = await this.openTabWithController({
         url,
         active: true,
         controllerId: input.target.mode === "any" ? undefined : input.target.controllerId,
@@ -446,8 +447,14 @@ export class ExtensionBridge {
       await wait(750, input.signal);
     }
 
+    const visibleClients = [...this.clients.values()]
+      .filter((client) => client.compatible)
+      .slice(0, 5)
+      .map((client) => ({ url: client.url, title: client.title, routingToken: client.routingToken }));
     throw new Error(
-      "Opened a routed BLINK browser window, but no compatible page client connected. Reload the unpacked extension and refresh the opened page."
+      `Opened a routed BLINK browser window, but no compatible page client connected. openResult=${JSON.stringify(
+        openResult
+      )}; knownClients=${JSON.stringify(visibleClients)}. Reload the unpacked extension, confirm site access is enabled for the opened page, and refresh the opened page.`
     );
   }
 

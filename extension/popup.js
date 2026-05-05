@@ -1,4 +1,4 @@
-const BLINK_EXTENSION_PROTOCOL_VERSION = 3;
+const BLINK_EXTENSION_PROTOCOL_VERSION = 4;
 const API_BASE_URL = "http://127.0.0.1:39201";
 
 async function refresh() {

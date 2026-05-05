@@ -172,7 +172,8 @@ function buildNewExtensionTabUrl(targetUrl: string | undefined, routingToken: st
 function buildExtensionTabInput(
   selection: string,
   clients: SystemInfo["extension"]["connectedClients"] = [],
-  targetUrl?: string
+  targetUrl?: string,
+  openMode: "window" | "tab" = "window"
 ): ExtensionTabInput {
   if (selection && selection !== NEW_EXTENSION_TAB_VALUE) {
     const client = clients.find((candidate) => candidate.id === selection);
@@ -184,7 +185,7 @@ function buildExtensionTabInput(
     };
   }
   const routingToken = createRoutingToken();
-  return { mode: "new", routingToken, url: buildNewExtensionTabUrl(targetUrl, routingToken), openMode: "window" };
+  return { mode: "new", routingToken, url: buildNewExtensionTabUrl(targetUrl, routingToken), openMode };
 }
 
 function extensionTabOptionLabel(client: SystemInfo["extension"]["connectedClients"][number]): string {

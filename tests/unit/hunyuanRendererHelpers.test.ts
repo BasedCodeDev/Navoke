@@ -56,6 +56,9 @@ describe("Hunyuan renderer helpers", () => {
     const parsed = JSON.parse(globalJson);
 
     expect(parsed).toMatchObject({
+      loginStartSelector: "button, a, [role='button']",
+      loginStartText: "Start Using",
+      loginReadyText: "Image to 3D",
       loginRequiredText: "Start Using HY 3D",
       generateButton: expect.stringContaining("Generate"),
       downloadButton: expect.stringContaining("Download")

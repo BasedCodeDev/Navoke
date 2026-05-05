@@ -78,7 +78,20 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     filePaths: []
   };
 
-  if (isChatGptWorkflowInput(input, options.workflow)) {
+  if (isHunyuanWorkflowInput(run.workflowId, input, options.workflow)) {
+    base.hunyuanViewFiles = readHunyuanViewFiles(input);
+    base.selectedFiles = Object.values(base.hunyuanViewFiles).flat();
+    base.prompt = stringField(input, "prompt");
+    base.profileName = stringField(input, "profileName") || DEFAULT_PROFILE_NAME;
+    base.pauseForManualLogin = booleanField(input, "pauseForManualLogin", true);
+    base.hunyuanModelFaceCount = enumField(input, "modelFaceCount", ["1.5m", "1m", "500k", "50k"], "50k");
+    base.hunyuanRetopologyType = enumField(input, "retopologyType", ["triangle", "quad"], "quad");
+    base.hunyuanGenerateTexture = booleanField(input, "generateTexture", true);
+    base.hunyuanAutoRig = booleanField(input, "autoRig", false);
+    base.hunyuanExportFormat = enumField(input, "exportFormat", ["obj", "glb"], "obj");
+    base.hunyuanSelectorsJson = selectorsJsonField(input, run.workflowId);
+    base.extensionTabSelection = resolveDuplicateExtensionTabSelection(input, options);
+  } else if (isChatGptWorkflowInput(input, options.workflow)) {
     if ("sourceImages" in input || "prompts" in input) {
       base.sourceFiles = stringArrayField(input, "sourceImages");
       base.sequencePrompts = stringArrayField(input, "prompts");
@@ -97,18 +110,6 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
       base.masterPromptSuffix = DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX;
     }
     base.extensionTabSelection = resolveDuplicateExtensionTabSelection(input, options);
-  } else if (isHunyuanWorkflowInput(run.workflowId, input, options.workflow)) {
-    base.hunyuanViewFiles = readHunyuanViewFiles(input);
-    base.selectedFiles = Object.values(base.hunyuanViewFiles).flat();
-    base.prompt = stringField(input, "prompt");
-    base.profileName = stringField(input, "profileName") || DEFAULT_PROFILE_NAME;
-    base.pauseForManualLogin = booleanField(input, "pauseForManualLogin", true);
-    base.hunyuanModelFaceCount = enumField(input, "modelFaceCount", ["1.5m", "1m", "500k", "50k"], "50k");
-    base.hunyuanRetopologyType = enumField(input, "retopologyType", ["triangle", "quad"], "quad");
-    base.hunyuanGenerateTexture = booleanField(input, "generateTexture", true);
-    base.hunyuanAutoRig = booleanField(input, "autoRig", false);
-    base.hunyuanExportFormat = enumField(input, "exportFormat", ["obj", "glb"], "obj");
-    base.hunyuanSelectorsJson = selectorsJsonField(input, run.workflowId);
   } else if (isBrowserProfileWorkflowInput(input, options.workflow)) {
     base.selectedFiles = stringArrayField(input, "images");
     base.prompt = stringField(input, "prompt");

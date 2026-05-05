@@ -271,7 +271,7 @@ describe("ChatGPT plugin browser-extension workflows", () => {
               url: "https://chatgpt.example/c/test-conversation",
               title: "ChatGPT test conversation",
               status: "connected",
-              protocolVersion: 3,
+              protocolVersion: 4,
               extensionVersion: "0.1.2",
               routingToken: target.mode === "new" ? target.routingToken : undefined,
               compatible: true,
@@ -286,7 +286,7 @@ describe("ChatGPT plugin browser-extension workflows", () => {
           url: "https://chatgpt.example/c/recovered",
           title: "Recovered ChatGPT tab",
           status: "connected",
-          protocolVersion: 3,
+          protocolVersion: 4,
           extensionVersion: "0.1.2",
           routingToken: target.mode === "new" ? target.routingToken : undefined,
           compatible: true,
@@ -483,6 +483,44 @@ describe("ChatGPT plugin browser-extension workflows", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("derives ChatGPT image roles from generic ancestor attributes", async () => {
+    const assistantBase64 = Buffer.from("assistant generated output image bytes").toString("base64");
+    const ambiguousBase64 = Buffer.from("ambiguous page image bytes").toString("base64");
+    const { artifacts, run } = runTransformWithFakeBrowser({
+      masterPrompt: "Setup prompt",
+      subjectInstruction: "",
+      imageExtractResult: {
+        images: [
+          {
+            src: "blob:ambiguous",
+            fingerprint: "blob:ambiguous|512x512",
+            width: 512,
+            height: 512,
+            mimeType: "image/png",
+            base64: ambiguousBase64
+          },
+          {
+            src: "blob:assistant-ancestor",
+            fingerprint: "blob:assistant-ancestor|512x512",
+            width: 512,
+            height: 512,
+            mimeType: "image/png",
+            base64: assistantBase64,
+            ancestor: {
+              attributes: {
+                "data-message-author-role": "assistant"
+              }
+            }
+          }
+        ]
+      }
+    });
+
+    await run;
+
+    expect(artifacts.map((artifact) => artifact.base64)).toEqual([assistantBase64]);
   });
 
   it("deduplicates repeated DOM nodes for the same generated image", async () => {
@@ -805,7 +843,7 @@ function runTransformWithFakeBrowser(input: {
     if (input.useFastTimeoutClock) fakeNow += Math.max(ms, 3_600_000);
   };
   sdk.extension.browser = {
-    protocolVersion: 3,
+    protocolVersion: 4,
     findCompatibleClientForTarget:
       input.findCompatibleClientForTarget ??
       ((target) => ({
@@ -982,7 +1020,7 @@ function runSequenceWithFakeBrowser(input: {
 
   sdk.sleep = async () => undefined;
   sdk.extension.browser = {
-    protocolVersion: 3,
+    protocolVersion: 4,
     findCompatibleClientForTarget: (target) => ({
       id: target.mode === "existing" ? target.clientId : "client-1",
       url: "https://chatgpt.example/c/test-conversation",

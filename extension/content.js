@@ -1,14 +1,37 @@
-const BLINK_EXTENSION_PROTOCOL_VERSION = 3;
+(() => {
+if (globalThis.__basedBlinkBrowserControllerContentStarted) return;
+globalThis.__basedBlinkBrowserControllerContentStarted = true;
+
+const BLINK_EXTENSION_PROTOCOL_VERSION = 4;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const API_BASE_URL = "http://127.0.0.1:39201";
 const ROUTING_TOKEN_PARAM = "based-blink-tab";
 const CLIENT_ID_STORAGE_KEY = "basedBlinkBrowserClientId";
 const ROUTING_TOKEN_STORAGE_KEY = "basedBlinkBrowserRoutingToken";
 
-let clientId = sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+const memoryStorage = new Map();
+
+function safeSessionGet(key) {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return memoryStorage.get(key) || null;
+  }
+}
+
+function safeSessionSet(key, value) {
+  memoryStorage.set(key, value);
+  try {
+    sessionStorage.setItem(key, value);
+  } catch {
+    // Some pages can make sessionStorage unavailable to content scripts.
+  }
+}
+
+let clientId = safeSessionGet(CLIENT_ID_STORAGE_KEY);
 if (!clientId) {
   clientId = crypto.randomUUID();
-  sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
+  safeSessionSet(CLIENT_ID_STORAGE_KEY, clientId);
 }
 
 function routingTokenFromLocation() {
@@ -19,12 +42,12 @@ function routingTokenFromLocation() {
 
 function rememberRoutingTokenFromLocation() {
   const routingToken = routingTokenFromLocation();
-  if (routingToken) sessionStorage.setItem(ROUTING_TOKEN_STORAGE_KEY, routingToken);
+  if (routingToken) safeSessionSet(ROUTING_TOKEN_STORAGE_KEY, routingToken);
   return routingToken;
 }
 
 function routingTokenForHeartbeat() {
-  return rememberRoutingTokenFromLocation() || sessionStorage.getItem(ROUTING_TOKEN_STORAGE_KEY) || undefined;
+  return rememberRoutingTokenFromLocation() || safeSessionGet(ROUTING_TOKEN_STORAGE_KEY) || undefined;
 }
 
 rememberRoutingTokenFromLocation();
@@ -157,17 +180,24 @@ function elementsForSelector(selector) {
   return Array.from(document.querySelectorAll(requireSelector(selector)));
 }
 
-function firstActionableElement(selector) {
+function firstActionableElement(selector, textFilter) {
   const candidates = elementsForSelector(selector);
   if (candidates.length === 0) throw new Error(`Element not found: ${selector}`);
-  const visibleElements = candidates.filter(isVisible);
-  const enabledElements = candidates.filter((element) => !isDisabled(element));
+  const textMatchedElements = textFilter ? candidates.filter((element) => elementMatchesTextFilter(element, textFilter)) : candidates;
+  const visibleElements = textMatchedElements.filter(isVisible);
+  const enabledElements = textMatchedElements.filter((element) => !isDisabled(element));
   const visibleEnabled = visibleElements.find((element) => !isDisabled(element));
+  if (textFilter && !visibleEnabled) {
+    throw new Error(
+      `No visible enabled text-matching element found for ${selector}; candidates=${candidates.length}; textMatches=${textMatchedElements.length}; visible=${visibleElements.length}; enabled=${enabledElements.length}; text=${textFilter.text}; textMatch=${textFilter.textMatch}; caseSensitive=${textFilter.caseSensitive}`
+    );
+  }
   return {
-    element: visibleEnabled || visibleElements[0] || enabledElements[0] || candidates[0],
+    element: visibleEnabled || visibleElements[0] || enabledElements[0] || textMatchedElements[0] || candidates[0],
     candidateCount: candidates.length,
     visibleCount: visibleElements.length,
-    enabledCount: enabledElements.length
+    enabledCount: enabledElements.length,
+    textMatchCount: textMatchedElements.length
   };
 }
 
@@ -181,6 +211,36 @@ function isVisible(element) {
 function isDisabled(element) {
   if (!element) return false;
   return Boolean(element.disabled) || element.getAttribute("aria-disabled") === "true";
+}
+
+function normalizedElementText(element) {
+  return String(element?.innerText ?? element?.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeForTextMatch(value, caseSensitive) {
+  return caseSensitive ? String(value) : String(value).toLowerCase();
+}
+
+function createTextFilter(action) {
+  if (typeof action?.text !== "string" || action.text.length === 0) return null;
+  const textMatch = ["contains", "exact", "regex"].includes(action.textMatch) ? action.textMatch : "contains";
+  return {
+    text: action.text,
+    textMatch,
+    caseSensitive: action.caseSensitive === true
+  };
+}
+
+function elementMatchesTextFilter(element, filter) {
+  const actual = normalizedElementText(element);
+  if (filter.textMatch === "regex") {
+    const flags = filter.caseSensitive ? "" : "i";
+    return new RegExp(filter.text, flags).test(actual);
+  }
+
+  const normalizedActual = normalizeForTextMatch(actual, filter.caseSensitive);
+  const normalizedExpected = normalizeForTextMatch(filter.text, filter.caseSensitive);
+  return filter.textMatch === "exact" ? normalizedActual === normalizedExpected : normalizedActual.includes(normalizedExpected);
 }
 
 function dispatchInputEvents(element) {
@@ -270,9 +330,18 @@ function fillElementDiagnostics(element) {
 async function performAction(action) {
   if (!action || typeof action !== "object") throw new Error("BLINK browser action is required.");
   if (action.kind === "click") {
-    const { element, candidateCount, visibleCount, enabledCount } = firstActionableElement(action.selector);
+    const textFilter = createTextFilter(action);
+    const { element, candidateCount, visibleCount, enabledCount, textMatchCount } = firstActionableElement(action.selector, textFilter);
     element.click();
-    return { ok: true, action: "click", selector: action.selector, candidateCount, visibleCount, enabledCount };
+    return {
+      ok: true,
+      action: "click",
+      selector: action.selector,
+      candidateCount,
+      visibleCount,
+      enabledCount,
+      ...(textFilter ? { text: textFilter.text, textMatch: textFilter.textMatch, caseSensitive: textFilter.caseSensitive, textMatchCount } : {})
+    };
   }
   if (action.kind === "fill") {
     const value = String(action.value ?? "");
@@ -752,3 +821,4 @@ globalThis.__BasedBlinkBrowserControllerTest = {
   isDisabled,
   routingTokenForHeartbeat
 };
+})();

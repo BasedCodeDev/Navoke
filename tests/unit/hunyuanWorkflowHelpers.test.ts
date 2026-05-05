@@ -9,6 +9,7 @@ import {
   inferHunyuanArtifactKind,
   mergeHunyuanSelectorConfig,
   missingHunyuanSelectorKeys,
+  resolveHunyuanExportFormat,
   createWorkflows
 } from "../../plugins/based-blink-hunyuan/src";
 import { createWorkflowSdk } from "../../src/main/workflowSdk";
@@ -62,7 +63,9 @@ describe("Hunyuan workflow helpers", () => {
     expect(selectors.retopologyTypeButtons?.quad).toContain(".qaUJkqcCF813NIqHGF3U:visible:has-text(\"四边面\")");
     expect(selectors.retopologyTypeButtons?.quad).not.toContain(":is(button, .t-button)");
     expect(selectors.exportFormatDropdown).toBe("button.download__dropdown__btn");
-    expect(selectors.exportFormatOptions?.obj).toBe('.download__dropdown li.t-dropdown__item:has-text("OBJ")');
+    expect(selectors.exportFormatOptions?.obj).toContain("OBJ");
+    expect(selectors.exportFormatOptions?.obj).toContain("li.t-dropdown__item");
+    expect(selectors.exportFormatOptions?.obj).toContain(".t-popup");
     expect(selectors.smartRetopologyButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.generateTextureButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.downloadButton).toContain(":not(.t-is-disabled):not([disabled])");
@@ -82,7 +85,9 @@ describe("Hunyuan workflow helpers", () => {
         selectors
       })
     ).toEqual([]);
-    expect(selectors.loginRequiredSelector).toContain("Start Using");
+    expect(selectors.loginStartSelector).toBe("button, a, [role='button']");
+    expect(selectors.loginStartText).toBe("Start Using");
+    expect(selectors.loginReadyText).toBe("Image to 3D");
     expect(selectors.loginRequiredSelector).toContain("email");
     expect(selectors.imageTo3dTab).toContain("Image to 3D");
     expect(selectors.multipleImagesTab).toContain("Multiple Images");
@@ -118,7 +123,8 @@ describe("Hunyuan workflow helpers", () => {
       extensionTab: {
         mode: "new",
         routingToken: expect.any(String),
-        url: expect.stringContaining("https://3d.hunyuanglobal.com/#based-blink-tab=")
+        url: expect.stringContaining("https://3d.hunyuanglobal.com/#based-blink-tab="),
+        openMode: "window"
       }
     });
   });
@@ -127,6 +133,7 @@ describe("Hunyuan workflow helpers", () => {
     const sdk = createWorkflowSdk() as any;
     let inspectCount = 0;
     let manualWaits = 0;
+    const actions: unknown[] = [];
     sdk.extension.browser = {
       ...sdk.extension.browser,
       findCompatibleClientForTarget: () => ({
@@ -152,16 +159,23 @@ describe("Hunyuan workflow helpers", () => {
       openTab: async () => ({ ok: true }),
       inspect: async () => {
         inspectCount += 1;
-        return inspectCount === 1
-          ? { url: "https://3d.hunyuanglobal.com/login-email", title: "Login" }
-          : { url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" };
+        if (inspectCount === 1) return { url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" };
+        if (inspectCount === 2) return { url: "https://3d.hunyuanglobal.com/login-email", title: "Login" };
+        return { url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" };
       },
       extract: async (_target: unknown, query: any) => {
-        if (query.kind === "element-state") return { visible: inspectCount > 1 };
-        if (query.kind === "text") return { text: inspectCount === 1 ? "Email Login" : "Image to 3D" };
+        if (query.kind === "element-state") return { visible: false };
+        if (query.kind === "text") {
+          if (inspectCount === 1) return { text: "Start Using" };
+          if (inspectCount === 2) return { text: "Start Using HY 3D" };
+          return { text: "Image to 3D" };
+        }
         return {};
       },
-      action: async () => ({ ok: true })
+      action: async (_target: unknown, action: unknown) => {
+        actions.push(action);
+        return { ok: true };
+      }
     };
 
     const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
@@ -186,6 +200,15 @@ describe("Hunyuan workflow helpers", () => {
     });
 
     expect(manualWaits).toBe(1);
+    expect(actions).toEqual([
+      {
+        kind: "click",
+        selector: "button, a, [role='button']",
+        text: "Start Using",
+        textMatch: "contains",
+        caseSensitive: false
+      }
+    ]);
     expect(result).toMatchObject({
       artifactIds: [],
       summary: expect.stringContaining("authenticated")
@@ -259,6 +282,21 @@ describe("Hunyuan workflow helpers", () => {
   it("infers model artifacts from model MIME types", () => {
     expect(inferHunyuanArtifactKind("model.glb", () => "model/gltf-binary")).toBe("model");
     expect(inferHunyuanArtifactKind("model.zip", () => "application/zip")).toBe("download");
+  });
+
+  it("falls back to OBJ when GLB is requested but the Hunyuan menu does not offer GLB", () => {
+    expect(resolveHunyuanExportFormat("glb", ["OBJ", "FBX", "STL", "USDZ", "MP4", "GIF"])).toMatchObject({
+      requested: "glb",
+      actual: "obj",
+      fallbackReason: expect.stringContaining("OBJ")
+    });
+  });
+
+  it("keeps GLB when Hunyuan offers a visible GLB export option", () => {
+    expect(resolveHunyuanExportFormat("glb", ["OBJ", "GLB"])).toMatchObject({
+      requested: "glb",
+      actual: "glb"
+    });
   });
 });
 

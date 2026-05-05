@@ -217,6 +217,49 @@ describe("generic browser extension content script", () => {
     expect(clicked).toEqual(["visible"]);
   });
 
+  it("clicks the first visible enabled selector match with matching text", async () => {
+    const clicked: string[] = [];
+    const earlier = createFakeElement({ isContentEditable: false, visible: true, id: "earlier-button", textContent: "Learn More", onClick: () => clicked.push("earlier") });
+    const startUsing = createFakeElement({ isContentEditable: false, visible: true, id: "start-button", textContent: "Start Using", onClick: () => clicked.push("start") });
+    const harness = loadContentScriptHarness([earlier, startUsing]);
+
+    const result = await harness.performAction({ kind: "click", selector: "button, a, [role='button']", text: "start using" });
+
+    expect(result).toMatchObject({
+      ok: true,
+      action: "click",
+      candidateCount: 2,
+      text: "start using",
+      textMatch: "contains",
+      caseSensitive: false,
+      textMatchCount: 1
+    });
+    expect(clicked).toEqual(["start"]);
+  });
+
+  it("ignores hidden or disabled text matches when clicking by text", async () => {
+    const clicked: string[] = [];
+    const hidden = createFakeElement({ isContentEditable: false, visible: false, textContent: "Start Using", onClick: () => clicked.push("hidden") });
+    const disabled = createFakeElement({ isContentEditable: false, visible: true, disabled: true, textContent: "Start Using", onClick: () => clicked.push("disabled") });
+    const visible = createFakeElement({ isContentEditable: false, visible: true, textContent: "Start Using Now", onClick: () => clicked.push("visible") });
+    const harness = loadContentScriptHarness([hidden, disabled, visible]);
+
+    const result = await harness.performAction({ kind: "click", selector: "button, a, [role='button']", text: "Start Using" });
+
+    expect(result).toMatchObject({ candidateCount: 3, textMatchCount: 3, visibleCount: 2, enabledCount: 2 });
+    expect(clicked).toEqual(["visible"]);
+  });
+
+  it("reports diagnostics when text-filtered click cannot find a visible enabled match", async () => {
+    const hidden = createFakeElement({ isContentEditable: false, visible: false, textContent: "Start Using" });
+    const disabled = createFakeElement({ isContentEditable: false, visible: true, disabled: true, textContent: "Start Using" });
+    const harness = loadContentScriptHarness([hidden, disabled]);
+
+    await expect(harness.performAction({ kind: "click", selector: "button, a, [role='button']", text: "Start Using" })).rejects.toThrow(
+      "candidates=2; textMatches=2; visible=1; enabled=1"
+    );
+  });
+
   it("extracts image context and stable source ids without site-specific logic", async () => {
     const image = createFakeImageElement({
       src: "https://images.example.test/content?id=file_1234567890abcdef&sig=old",

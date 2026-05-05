@@ -19,7 +19,17 @@ describe("ExtensionBridge", () => {
       extensionVersion: "0.0.1"
     });
 
-    expect(bridge.status()).toMatchObject({ connected: 2, compatible: 1, incompatible: 1 });
+    expect(BLINK_EXTENSION_PROTOCOL_VERSION).toBe(4);
+    expect(bridge.status()).toMatchObject({
+      requiredProtocolVersion: 4,
+      connected: 2,
+      compatible: 1,
+      incompatible: 1,
+      clients: expect.arrayContaining([
+        expect.objectContaining({ compatible: false, incompatibilityReason: expect.stringContaining("protocol 4") }),
+        expect.objectContaining({ compatible: true })
+      ])
+    });
     expect(bridge.findCompatibleClientForTarget({ mode: "new", routingToken: "route-1" })).toMatchObject({
       id: "tab-1",
       routingToken: "route-1",

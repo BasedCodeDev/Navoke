@@ -115,6 +115,11 @@ function hunyuanEnabledButtonSelector(label: string): string {
   return `:is(button, .t-button):not(.t-is-disabled):not([disabled]):has-text("${label}")`;
 }
 
+function hunyuanExportOptionSelector(label: string): string {
+  const escapedLabel = label.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `:is(.download__dropdown, .t-popup, .t-dropdown__menu) :is(li.t-dropdown__item, [role="menuitem"]):has-text("${escapedLabel}"), li.t-dropdown__item:has-text("${escapedLabel}")`;
+}
+
 export const DEFAULT_HUNYUAN_SELECTOR_CONFIG = {
   loginReadySelector: `label.t-radio-button:has-text("${HUNYUAN_TEXT.imageTo3d}")`,
   loginReadyText: "",
@@ -170,8 +175,8 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG = {
   autoRigReadyText: "",
   exportFormatDropdown: "button.download__dropdown__btn",
   exportFormatOptions: {
-    obj: '.download__dropdown li.t-dropdown__item:has-text("OBJ")',
-    glb: '.download__dropdown li.t-dropdown__item:has-text("GLB")'
+    obj: hunyuanExportOptionSelector("OBJ"),
+    glb: hunyuanExportOptionSelector("GLB")
   },
   downloadReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download),
   downloadReadyText: "",
@@ -181,9 +186,11 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG = {
 export const DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON = `${JSON.stringify(DEFAULT_HUNYUAN_SELECTOR_CONFIG, null, 2)}\n`;
 
 export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG = {
-  loginReadySelector: `label.t-radio-button:has-text("${HUNYUAN_GLOBAL_TEXT.imageTo3d}")`,
-  loginReadyText: "",
-  loginRequiredSelector: `button.login-btn:has-text("${HUNYUAN_GLOBAL_TEXT.login}"), input[placeholder*="email" i]`,
+  loginStartSelector: "button, a, [role='button']",
+  loginStartText: HUNYUAN_GLOBAL_TEXT.login,
+  loginReadySelector: "",
+  loginReadyText: HUNYUAN_GLOBAL_TEXT.imageTo3d,
+  loginRequiredSelector: `input[type="email"], input[placeholder*="email" i]`,
   loginRequiredText: HUNYUAN_GLOBAL_TEXT.emailLogin,
   imageTo3dTab: `label.t-radio-button:has-text("${HUNYUAN_GLOBAL_TEXT.imageTo3d}")`,
   multipleImagesTab: `text=/${HUNYUAN_GLOBAL_TEXT.multipleImages}/i`,
@@ -235,8 +242,8 @@ export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG = {
   autoRigReadyText: "",
   exportFormatDropdown: "button.download__dropdown__btn",
   exportFormatOptions: {
-    obj: '.download__dropdown li.t-dropdown__item:has-text("OBJ")',
-    glb: '.download__dropdown li.t-dropdown__item:has-text("GLB")'
+    obj: hunyuanExportOptionSelector("OBJ"),
+    glb: hunyuanExportOptionSelector("GLB")
   },
   downloadReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download),
   downloadReadyText: "",
@@ -254,6 +261,8 @@ export function defaultHunyuanSelectorConfigJsonForWorkflow(workflowId: string |
 }
 
 export const HUNYUAN_SELECTOR_ASSIGNMENTS: HunyuanSelectorAssignment[] = [
+  { key: "loginStartSelector", label: "Login start selector", path: ["loginStartSelector"] },
+  { key: "loginStartText", label: "Login start text", path: ["loginStartText"] },
   { key: "loginReadySelector", label: "Login ready selector", path: ["loginReadySelector"] },
   { key: "loginReadyText", label: "Login ready text", path: ["loginReadyText"] },
   { key: "loginRequiredSelector", label: "Login required selector", path: ["loginRequiredSelector"] },
