@@ -1,3 +1,5 @@
+import type { ArtifactRecord } from "./api";
+
 export const HUNYUAN_WORKFLOW_ID = "based-blink.hunyuan.image-to-model";
 export const HUNYUAN_GLOBAL_WORKFLOW_ID = "based-blink.hunyuan.global.image-to-model";
 
@@ -49,6 +51,27 @@ export interface HunyuanSelectorAssignment {
   path: string[];
 }
 
+export interface HunyuanInputImageEntry {
+  field: HunyuanViewField;
+  label: string;
+  filePath: string;
+  index: number;
+}
+
+export interface HunyuanArtifactViewModel {
+  inputImages: HunyuanInputImageEntry[];
+  modelArtifact: ArtifactRecord | null;
+  supportingArtifacts: ArtifactRecord[];
+}
+
+export interface HunyuanModelArtifactMetadata {
+  modelFormat?: string;
+  objFileName?: string;
+  mtlFileName?: string;
+  textureFileNames?: string[];
+  assetFileNames?: string[];
+}
+
 export const HUNYUAN_VIEW_FIELDS: HunyuanViewFieldDefinition[] = [
   { field: "frontImage", selectorKey: "front", label: "Front image", chooseLabel: "Choose front", required: true },
   { field: "backImage", selectorKey: "back", label: "Back image", chooseLabel: "Choose back" },
@@ -90,7 +113,8 @@ const HUNYUAN_TEXT = {
   smartRetopology: "\u667a\u80fd\u62d3\u6251",
   generateTexture: "\u751f\u6210\u7eb9\u7406",
   autoRig: "\u81ea\u52a8\u7ed1\u9aa8",
-  download: "\u4e0b\u8f7d"
+  download: "\u4e0b\u8f7d",
+  quotaExhausted: "\u751f\u6210\u6b21\u6570\u5df2\u7528\u5b8c"
 };
 
 const HUNYUAN_GLOBAL_TEXT = {
@@ -125,6 +149,8 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG = {
   loginReadyText: "",
   loginRequiredSelector: `button.login-btn:has-text("${HUNYUAN_TEXT.login}")`,
   loginRequiredText: "",
+  quotaExhaustedPopupText: HUNYUAN_TEXT.quotaExhausted,
+  quotaExhaustedPopupCloseButton: `:is(.invite-tooltip-full, .invite-tooltip-content):has-text("${HUNYUAN_TEXT.quotaExhausted}") .t-icon-close`,
   imageTo3dTab: `label.t-radio-button:has-text("${HUNYUAN_TEXT.imageTo3d}")`,
   multipleImagesTab: `text=${HUNYUAN_TEXT.multipleImages}`,
   addMultipleViewsButton: ".hy-multiple-views-upload-v2",
@@ -192,6 +218,8 @@ export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG = {
   loginReadyText: HUNYUAN_GLOBAL_TEXT.imageTo3d,
   loginRequiredSelector: `input[type="email"], input[placeholder*="email" i]`,
   loginRequiredText: HUNYUAN_GLOBAL_TEXT.emailLogin,
+  quotaExhaustedPopupText: "",
+  quotaExhaustedPopupCloseButton: "",
   imageTo3dTab: `label.t-radio-button:has-text("${HUNYUAN_GLOBAL_TEXT.imageTo3d}")`,
   multipleImagesTab: `text=/${HUNYUAN_GLOBAL_TEXT.multipleImages}/i`,
   addMultipleViewsButton: ".hy-multiple-views-upload-v2",
@@ -267,6 +295,8 @@ export const HUNYUAN_SELECTOR_ASSIGNMENTS: HunyuanSelectorAssignment[] = [
   { key: "loginReadyText", label: "Login ready text", path: ["loginReadyText"] },
   { key: "loginRequiredSelector", label: "Login required selector", path: ["loginRequiredSelector"] },
   { key: "loginRequiredText", label: "Login required text", path: ["loginRequiredText"] },
+  { key: "quotaExhaustedPopupText", label: "Quota popup text", path: ["quotaExhaustedPopupText"] },
+  { key: "quotaExhaustedPopupCloseButton", label: "Quota popup close", path: ["quotaExhaustedPopupCloseButton"] },
   { key: "imageTo3dTab", label: "Image-to-3D tab", path: ["imageTo3dTab"] },
   { key: "multipleImagesTab", label: "Multiple Images tab", path: ["multipleImagesTab"] },
   { key: "addMultipleViewsButton", label: "Add Multiple Views", path: ["addMultipleViewsButton"] },
@@ -357,6 +387,52 @@ export function assignHunyuanSelectorJson(currentJson: string, assignmentKey: st
 
 export function collectHunyuanInputFilePaths(input: Record<string, unknown>): string[] {
   return HUNYUAN_VIEW_FIELDS.map((field) => input[field.field]).filter((value): value is string => typeof value === "string" && value.length > 0);
+}
+
+export function buildHunyuanArtifactViewModel(input: unknown, output: unknown, artifacts: ArtifactRecord[]): HunyuanArtifactViewModel {
+  const modelArtifact = selectHunyuanModelArtifact(output, artifacts);
+  return {
+    inputImages: collectHunyuanInputImages(input),
+    modelArtifact,
+    supportingArtifacts: modelArtifact ? artifacts.filter((artifact) => artifact.id !== modelArtifact.id) : artifacts
+  };
+}
+
+export function collectHunyuanInputImages(input: unknown): HunyuanInputImageEntry[] {
+  if (!input || typeof input !== "object") return [];
+  const record = input as Record<string, unknown>;
+  return HUNYUAN_VIEW_FIELDS.flatMap((field) => {
+    const value = record[field.field];
+    if (typeof value !== "string" || value.length === 0) return [];
+    return [{ field: field.field, label: field.label, filePath: value, index: 0 }];
+  });
+}
+
+export function selectHunyuanModelArtifact(output: unknown, artifacts: ArtifactRecord[]): ArtifactRecord | null {
+  const outputRecord = output && typeof output === "object" ? (output as Record<string, unknown>) : {};
+  const modelArtifactId = typeof outputRecord.modelArtifactId === "string" ? outputRecord.modelArtifactId : null;
+  return artifacts.find((artifact) => artifact.id === modelArtifactId) ?? artifacts.find((artifact) => artifact.kind === "model") ?? null;
+}
+
+export function getHunyuanModelArtifactMetadata(metadata: unknown): HunyuanModelArtifactMetadata {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
+  const record = metadata as Record<string, unknown>;
+  return {
+    ...(typeof record.modelFormat === "string" ? { modelFormat: record.modelFormat } : {}),
+    ...(typeof record.objFileName === "string" ? { objFileName: record.objFileName } : {}),
+    ...(typeof record.mtlFileName === "string" ? { mtlFileName: record.mtlFileName } : {}),
+    ...(Array.isArray(record.textureFileNames) && record.textureFileNames.every((value) => typeof value === "string")
+      ? { textureFileNames: record.textureFileNames }
+      : {}),
+    ...(Array.isArray(record.assetFileNames) && record.assetFileNames.every((value) => typeof value === "string")
+      ? { assetFileNames: record.assetFileNames }
+      : {})
+  };
+}
+
+export function isHunyuanObjModelArtifact(artifact: ArtifactRecord): boolean {
+  const metadata = getHunyuanModelArtifactMetadata(artifact.metadata);
+  return metadata.modelFormat === "obj" || artifact.mimeType === "model/obj" || artifact.name.toLowerCase().endsWith(".obj");
 }
 
 function firstFile(files: string[]): string {

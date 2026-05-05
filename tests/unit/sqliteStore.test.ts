@@ -83,6 +83,52 @@ describe("SqliteStore", () => {
     store.close();
   });
 
+  it("persists workflow library entries independently from source runs", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-store-"));
+    tempDirs.push(dir);
+    const store = await SqliteStore.open(path.join(dir, "workflow.sqlite"));
+
+    const run = store.createRun({
+      id: "run-library-source",
+      workflowId: "test.workflow",
+      workflowVersion: "0.1.0",
+      pluginId: "test.plugin",
+      pluginVersion: "1.0.0",
+      pluginApiVersion: "1",
+      pluginSource: "user",
+      name: "Reusable run",
+      status: "completed",
+      input: { images: ["C:\\inputs\\copied.png"], prompt: "Reuse this" }
+    });
+    const entry = store.createWorkflowLibraryEntry({
+      id: "library-entry-1",
+      name: "Reusable template",
+      workflowId: run.workflowId,
+      workflowVersion: run.workflowVersion,
+      pluginId: run.pluginId,
+      pluginVersion: run.pluginVersion,
+      pluginApiVersion: run.pluginApiVersion,
+      pluginSource: run.pluginSource,
+      sourceRunId: run.id,
+      input: run.input
+    });
+
+    store.deleteRunCascade(run.id);
+
+    expect(store.getRun(run.id)).toBeNull();
+    expect(store.getWorkflowLibraryEntry(entry.id)).toMatchObject({
+      id: entry.id,
+      sourceRunId: run.id,
+      input: { images: ["C:\\inputs\\copied.png"], prompt: "Reuse this" }
+    });
+    expect(store.listWorkflowLibraryEntries()).toHaveLength(1);
+    expect(store.updateWorkflowLibraryEntry(entry.id, { name: "Renamed template" }).name).toBe("Renamed template");
+    store.deleteWorkflowLibraryEntry(entry.id);
+    expect(store.listWorkflowLibraryEntries()).toHaveLength(0);
+
+    store.close();
+  });
+
   it("backfills run numbers by creation order and never reuses deleted numbers", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-store-"));
     tempDirs.push(dir);

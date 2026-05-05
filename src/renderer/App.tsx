@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  BookOpen,
   Bot,
   Camera,
   CheckCircle2,
@@ -21,6 +22,7 @@ import {
   Play,
   Plus,
   RefreshCcw,
+  Save,
   Square,
   Trash2,
   X,
@@ -33,7 +35,9 @@ import {
   closeLabSession,
   createLabSession,
   createRun,
+  createRunFromWorkflowLibraryEntry,
   deleteRun,
+  deleteWorkflowLibraryEntry,
   focusExtensionClient,
   getConfig,
   getRun,
@@ -44,14 +48,17 @@ import {
   listPlugins,
   listRuns,
   listWorkflows,
+  listWorkflowLibraryEntries,
   openExtensionTab,
   openProject,
   pauseRun,
   renameProject,
   renameRun,
+  renameWorkflowLibraryEntry,
   resumeRun,
   runInputFileUrl,
   runLabAction,
+  saveRunToWorkflowLibrary,
   subscribeRuntimeEvents,
   uninstallPlugin,
   validateFilePaths,
@@ -65,6 +72,7 @@ import {
   type SystemInfo,
   type WorkflowLabProfileWorkflowId,
   type WorkflowLabInspectionResult,
+  type WorkflowLibraryEntry,
   type WorkflowSummary
 } from "@/lib/api";
 import { cn, formatDate, isMotionActiveStatus, statusTone } from "@/lib/utils";
@@ -109,9 +117,11 @@ import {
   HUNYUAN_SELECTOR_ASSIGNMENTS,
   HUNYUAN_VIEW_FIELDS,
   assignHunyuanSelectorJson,
+  buildHunyuanArtifactViewModel,
   buildHunyuanRunInput,
   defaultHunyuanSelectorConfigJsonForWorkflow,
   emptyHunyuanViewFiles,
+  isHunyuanObjModelArtifact,
   isHunyuanWorkflowId,
   type HunyuanExportFormat,
   type HunyuanFaceCount,
@@ -123,6 +133,7 @@ import { isRecoverableFailedExtensionRun, resolveExtensionFocusTarget } from "@/
 import { resolveExtensionTabSelection } from "@/lib/extensionTabRouting";
 import { activeCliAgentRuns, isCliRun, runOriginCommand, runOriginLabel } from "@/lib/runOrigin";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
+import { ObjModelViewer } from "@/components/ObjModelViewer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -235,6 +246,30 @@ function canUseRunWorkflow(availability: RunWorkflowAvailability | null): boolea
   return !availability || availability.status === "available" || availability.status === "legacy";
 }
 
+function libraryEntryToRunRecord(entry: WorkflowLibraryEntry, name = entry.name): RunRecord {
+  return {
+    id: entry.sourceRunId ?? entry.id,
+    workflowId: entry.workflowId,
+    workflowVersion: entry.workflowVersion ?? null,
+    pluginId: entry.pluginId ?? null,
+    pluginVersion: entry.pluginVersion ?? null,
+    pluginApiVersion: entry.pluginApiVersion ?? null,
+    pluginSource: entry.pluginSource ?? null,
+    origin: { source: "ui" },
+    runNumber: null,
+    name,
+    runDir: null,
+    status: "completed",
+    currentStep: null,
+    progress: 100,
+    input: entry.input,
+    output: null,
+    error: null,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt
+  };
+}
+
 export default function App(): JSX.Element {
   const queryClient = useQueryClient();
   const [themeId, setThemeId] = useState<ThemeId>(getInitialThemeId);
@@ -268,8 +303,9 @@ export default function App(): JSX.Element {
   const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
   const [newRunFocusError, setNewRunFocusError] = useState<string | null>(null);
   const [showProjectLanding, setShowProjectLanding] = useState(false);
-  const [newRunModalMode, setNewRunModalMode] = useState<"fresh" | "resubmit" | null>(null);
+  const [newRunModalMode, setNewRunModalMode] = useState<"fresh" | "resubmit" | "library" | null>(null);
   const [resubmitSourceRun, setResubmitSourceRun] = useState<RunRecord | null>(null);
+  const [librarySourceEntry, setLibrarySourceEntry] = useState<WorkflowLibraryEntry | null>(null);
   const [resubmitValidation, setResubmitValidation] = useState<ReusedInputValidationState>({ status: "idle", files: [] });
   const [resubmitError, setResubmitError] = useState<string | null>(null);
 
@@ -283,6 +319,11 @@ export default function App(): JSX.Element {
     queryFn: listRuns,
     enabled: hasProject,
     refetchInterval: hasProject ? 2_000 : false
+  });
+  const libraryQuery = useQuery({
+    queryKey: ["library", apiBaseUrl],
+    queryFn: listWorkflowLibraryEntries,
+    enabled: hasProject
   });
   const systemQuery = useQuery({
     queryKey: ["system", apiBaseUrl],
@@ -401,6 +442,7 @@ export default function App(): JSX.Element {
       setSelectedRunId(run.id);
       setNewRunModalMode(null);
       setResubmitSourceRun(null);
+      setLibrarySourceEntry(null);
       setResubmitValidation({ status: "idle", files: [] });
       setResubmitError(null);
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -440,6 +482,57 @@ export default function App(): JSX.Element {
     onError: (error) =>
       setActionError({
         title: "Could not rename run",
+        message: error instanceof Error ? error.message : String(error)
+      })
+  });
+
+  const saveRunToLibraryMutation = useMutation({
+    mutationFn: (runId: string) => saveRunToWorkflowLibrary({ runId }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["library"] });
+    },
+    onError: (error) =>
+      setActionError({
+        title: "Could not save run to library",
+        message: error instanceof Error ? error.message : String(error)
+      })
+  });
+
+  const renameLibraryEntryMutation = useMutation({
+    mutationFn: ({ entryId, nextName }: { entryId: string; nextName: string }) => renameWorkflowLibraryEntry(entryId, nextName),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["library"] });
+    },
+    onError: (error) =>
+      setActionError({
+        title: "Could not rename library entry",
+        message: error instanceof Error ? error.message : String(error)
+      })
+  });
+
+  const deleteLibraryEntryMutation = useMutation({
+    mutationFn: deleteWorkflowLibraryEntry,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["library"] });
+    },
+    onError: (error) =>
+      setActionError({
+        title: "Could not delete library entry",
+        message: error instanceof Error ? error.message : String(error)
+      })
+  });
+
+  const runLibraryEntryMutation = useMutation({
+    mutationFn: (entry: WorkflowLibraryEntry) => createRunFromWorkflowLibraryEntry({ entryId: entry.id }),
+    onSuccess: (run) => {
+      setSelectedRunId(run.id);
+      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["run"] });
+      void queryClient.invalidateQueries({ queryKey: ["system"] });
+    },
+    onError: (error) =>
+      setActionError({
+        title: "Could not run library entry",
         message: error instanceof Error ? error.message : String(error)
       })
   });
@@ -533,6 +626,7 @@ export default function App(): JSX.Element {
     void queryClient.invalidateQueries({ queryKey: ["workflows"] });
     void queryClient.invalidateQueries({ queryKey: ["plugins"] });
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
+    void queryClient.invalidateQueries({ queryKey: ["library"] });
     void queryClient.invalidateQueries({ queryKey: ["system"] });
     if (config.projectDir && !config.projectDialogCancelled) {
       setShowProjectLanding(false);
@@ -573,6 +667,7 @@ export default function App(): JSX.Element {
     setFormError(null);
     setNewRunFocusError(null);
     setResubmitSourceRun(null);
+    setLibrarySourceEntry(null);
     setResubmitValidation({ status: "idle", files: [] });
     setResubmitError(null);
   }
@@ -584,7 +679,7 @@ export default function App(): JSX.Element {
   }
 
   function markResubmitFileInputsChanged(): void {
-    if (newRunModalMode !== "resubmit") return;
+    if (newRunModalMode !== "resubmit" && newRunModalMode !== "library") return;
     setResubmitError(null);
     setResubmitValidation({ status: "ready", files: [] });
   }
@@ -601,21 +696,12 @@ export default function App(): JSX.Element {
     markResubmitFileInputsChanged();
   }
 
-  function applyRunConfigurationToForm(run: RunRecord): void {
-    const availability = resolveRunWorkflowAvailability(run, workflows);
-    if (availability.status === "missing" || availability.status === "version-mismatch") {
-      throw new Error(availability.message);
-    }
-
-    const duplicate = buildDuplicateRunConfiguration(run, {
-      workflow: availability.workflow ?? undefined,
-      compatibleClients: compatibleExtensionClients,
-      existingRuns: runsQuery.data ?? [],
-      newExtensionTabValue: NEW_EXTENSION_TAB_VALUE
-    });
-
+  function applyNewRunConfigurationToForm(
+    duplicate: ReturnType<typeof buildDuplicateRunConfiguration>,
+    nameOverride = duplicate.name
+  ): void {
     setSelectedWorkflowId(duplicate.workflowId);
-    setName(duplicate.name);
+    setName(nameOverride);
     setSelectedFiles(duplicate.selectedFiles);
     setReferenceFiles(duplicate.referenceFiles);
     setSubjectFiles(duplicate.subjectFiles);
@@ -642,10 +728,44 @@ export default function App(): JSX.Element {
     setSelectedRunId(null);
   }
 
+  function applyRunConfigurationToForm(run: RunRecord): void {
+    const availability = resolveRunWorkflowAvailability(run, workflows);
+    if (availability.status === "missing" || availability.status === "version-mismatch") {
+      throw new Error(availability.message);
+    }
+
+    const duplicate = buildDuplicateRunConfiguration(run, {
+      workflow: availability.workflow ?? undefined,
+      compatibleClients: compatibleExtensionClients,
+      existingRuns: runsQuery.data ?? [],
+      newExtensionTabValue: NEW_EXTENSION_TAB_VALUE
+    });
+
+    applyNewRunConfigurationToForm(duplicate);
+  }
+
+  function applyLibraryEntryConfigurationToForm(entry: WorkflowLibraryEntry): void {
+    const runLike = libraryEntryToRunRecord(entry, "");
+    const availability = resolveRunWorkflowAvailability(libraryEntryToRunRecord(entry), workflows);
+    if (availability.status === "missing" || availability.status === "version-mismatch") {
+      throw new Error(availability.message);
+    }
+
+    const duplicate = buildDuplicateRunConfiguration(runLike, {
+      workflow: availability.workflow ?? undefined,
+      compatibleClients: compatibleExtensionClients,
+      existingRuns: runsQuery.data ?? [],
+      newExtensionTabValue: NEW_EXTENSION_TAB_VALUE
+    });
+
+    applyNewRunConfigurationToForm(duplicate, entry.name);
+  }
+
   function closeNewRunModal(): void {
     if (createRunMutation.isPending) return;
     setNewRunModalMode(null);
     setResubmitSourceRun(null);
+    setLibrarySourceEntry(null);
     setResubmitValidation({ status: "idle", files: [] });
     setResubmitError(null);
   }
@@ -654,11 +774,41 @@ export default function App(): JSX.Element {
     const filePaths = collectRunInputFilePaths(run.input);
     setResubmitError(null);
     setResubmitSourceRun(run);
+    setLibrarySourceEntry(null);
     setResubmitValidation(filePaths.length === 0 ? { status: "ready", files: [] } : { status: "checking", files: [] });
     setNewRunModalMode("resubmit");
 
     try {
       applyRunConfigurationToForm(run);
+    } catch (error) {
+      setResubmitError(error instanceof Error ? error.message : String(error));
+      setResubmitValidation({ status: "error", files: [], message: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+
+    if (filePaths.length === 0) return;
+
+    void validateFilePaths(filePaths)
+      .then((result) => setResubmitValidation({ status: "ready", files: result.files }))
+      .catch((error) =>
+        setResubmitValidation({
+          status: "error",
+          files: [],
+        message: error instanceof Error ? error.message : String(error)
+        })
+      );
+  }
+
+  function openLibraryEntryModal(entry: WorkflowLibraryEntry): void {
+    const filePaths = collectRunInputFilePaths(entry.input);
+    setResubmitError(null);
+    setResubmitSourceRun(null);
+    setLibrarySourceEntry(entry);
+    setResubmitValidation(filePaths.length === 0 ? { status: "ready", files: [] } : { status: "checking", files: [] });
+    setNewRunModalMode("library");
+
+    try {
+      applyLibraryEntryConfigurationToForm(entry);
     } catch (error) {
       setResubmitError(error instanceof Error ? error.message : String(error));
       setResubmitValidation({ status: "error", files: [], message: error instanceof Error ? error.message : String(error) });
@@ -681,15 +831,20 @@ export default function App(): JSX.Element {
   const showLanding = showProjectLanding || !hasProject;
   const currentProjectDir = configQuery.data?.projectDir ?? "";
   const projectName = configQuery.data?.projectName ?? "Based BLINK";
-  const resubmitFileCount = resubmitSourceRun ? collectRunInputFilePaths(resubmitSourceRun.input).length : 0;
+  const reusedSourceInput = resubmitSourceRun?.input ?? librarySourceEntry?.input ?? null;
+  const reusedFileCount = reusedSourceInput ? collectRunInputFilePaths(reusedSourceInput).length : 0;
+  const hasReusedInputValidation = newRunModalMode === "resubmit" || newRunModalMode === "library";
   const canStartNewRun =
     Boolean(selectedWorkflow) &&
     !createRunMutation.isPending &&
-    (newRunModalMode !== "resubmit" || canUseReusedInputFiles(resubmitValidation));
-  const newRunModalTitle = newRunModalMode === "resubmit" ? "Resubmit New" : "New Run";
+    (!hasReusedInputValidation || canUseReusedInputFiles(resubmitValidation));
+  const newRunModalTitle =
+    newRunModalMode === "resubmit" ? "Resubmit New" : newRunModalMode === "library" ? "Use Library Entry" : "New Run";
   const newRunModalDescription =
     newRunModalMode === "resubmit" && resubmitSourceRun
       ? `Create a new run from ${resubmitSourceRun.name}.`
+      : newRunModalMode === "library" && librarySourceEntry
+        ? `Create a new run from ${librarySourceEntry.name}.`
       : "Configure and start a new workflow run.";
   const newRunForm = (
     <div className="space-y-3">
@@ -882,9 +1037,9 @@ export default function App(): JSX.Element {
         </div>
       ) : null}
 
-      {newRunModalMode === "resubmit" ? (
+      {hasReusedInputValidation ? (
         <ReusedInputValidationPanel
-          fileCount={resubmitFileCount}
+          fileCount={reusedFileCount}
           validation={resubmitValidation}
           error={resubmitError}
         />
@@ -1073,6 +1228,22 @@ export default function App(): JSX.Element {
                   New Run
                 </Button>
               </div>
+              {hasProject ? (
+                <WorkflowLibraryPanel
+                  entries={libraryQuery.data ?? []}
+                  runs={runsQuery.data ?? []}
+                  workflows={workflows}
+                  isLoading={libraryQuery.isLoading}
+                  runningEntryId={runLibraryEntryMutation.variables?.id ?? null}
+                  deletingEntryId={deleteLibraryEntryMutation.variables ?? null}
+                  onUse={openLibraryEntryModal}
+                  onRun={(entry) => runLibraryEntryMutation.mutate(entry)}
+                  onRename={(entryId, nextName) =>
+                    renameLibraryEntryMutation.mutateAsync({ entryId, nextName }).then(() => undefined)
+                  }
+                  onDelete={(entryId) => deleteLibraryEntryMutation.mutate(entryId)}
+                />
+              ) : null}
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                 {!hasProject ? (
                   <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">
@@ -1087,6 +1258,8 @@ export default function App(): JSX.Element {
                     workflowAvailability={resolveRunWorkflowAvailability(run, workflows)}
                     onSelect={() => setSelectedRunId(run.id)}
                     onResubmit={() => openResubmitNewModal(run)}
+                    onSaveToLibrary={() => saveRunToLibraryMutation.mutate(run.id)}
+                    isSavingToLibrary={saveRunToLibraryMutation.variables === run.id && saveRunToLibraryMutation.isPending}
                   />
                 ))}
                 {hasProject && runsQuery.data?.length === 0 ? (
@@ -1988,6 +2161,8 @@ function RunDetailModal({
                       input={chatGptRunInput}
                       onOpenDataFolder={onOpenDataFolder}
                     />
+                  ) : run && isHunyuanWorkflowId(run.workflowId) ? (
+                    <HunyuanArtifactResult run={run} artifacts={artifacts} onOpenDataFolder={onOpenDataFolder} />
                   ) : (
                     <div className="grid gap-3 lg:grid-cols-2">
                       {artifacts.map((artifact) => (
@@ -2174,6 +2349,77 @@ function chatGptSequenceSetupPrompt(masterPrompt: string, masterPromptSuffix: st
   const suffix = masterPromptSuffix.trim();
   if (!prompt || !suffix) return prompt;
   return `${prompt}\n\n${suffix}`;
+}
+
+function HunyuanArtifactResult({
+  run,
+  artifacts,
+  onOpenDataFolder
+}: {
+  run: RunRecord;
+  artifacts: ArtifactRecord[];
+  onOpenDataFolder(): void | Promise<unknown>;
+}): JSX.Element {
+  const viewModel = buildHunyuanArtifactViewModel(run.input, run.output, artifacts);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+        <section className="rounded-md border border-border bg-background p-4">
+          <h4 className="text-sm font-semibold">Input images</h4>
+          <div className="mt-3 space-y-3">
+            {viewModel.inputImages.length === 0 ? (
+              <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No Hunyuan input images were recorded.</div>
+            ) : (
+              viewModel.inputImages.map((inputImage) => (
+                <div key={`${inputImage.field}-${inputImage.filePath}`} className="space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground">{inputImage.label}</div>
+                  <InputImagePreview
+                    runId={run.id}
+                    field={inputImage.field}
+                    index={inputImage.index}
+                    filePath={inputImage.filePath}
+                  />
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-md border border-border bg-background p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h4 className="text-sm font-semibold">3D model</h4>
+            <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run.runDir}>
+              <FolderOpen className="h-4 w-4" />
+              Data folder
+            </Button>
+          </div>
+          {viewModel.modelArtifact ? (
+            isHunyuanObjModelArtifact(viewModel.modelArtifact) ? (
+              <ObjModelViewer artifact={viewModel.modelArtifact} />
+            ) : (
+              <ArtifactPreview artifact={viewModel.modelArtifact} />
+            )
+          ) : (
+            <div className="flex min-h-96 items-center justify-center rounded-md border border-dashed p-5 text-sm text-muted-foreground">
+              No extracted model artifact is available for this run.
+            </div>
+          )}
+        </section>
+      </div>
+
+      {viewModel.supportingArtifacts.length > 0 ? (
+        <section className="space-y-3">
+          <h4 className="text-sm font-semibold">Supporting artifacts</h4>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {viewModel.supportingArtifacts.map((artifact) => (
+              <ArtifactPreview key={artifact.id} artifact={artifact} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
 }
 
 function ChatGptArtifactPairs({
@@ -2379,7 +2625,7 @@ function InputImagePreview({
   filePath
 }: {
   runId: string;
-  field: "images" | "referenceImages" | "subjectImages" | "sourceImages";
+  field: "images" | "referenceImages" | "subjectImages" | "sourceImages" | HunyuanViewField;
   index: number;
   filePath: string;
 }): JSX.Element {
@@ -3260,18 +3506,196 @@ function ExtensionTabRoutingPanel({
   );
 }
 
+function WorkflowLibraryPanel({
+  entries,
+  runs,
+  workflows,
+  isLoading,
+  runningEntryId,
+  deletingEntryId,
+  onUse,
+  onRun,
+  onRename,
+  onDelete
+}: {
+  entries: WorkflowLibraryEntry[];
+  runs: RunRecord[];
+  workflows: WorkflowSummary[];
+  isLoading: boolean;
+  runningEntryId: string | null;
+  deletingEntryId: string | null;
+  onUse(entry: WorkflowLibraryEntry): void;
+  onRun(entry: WorkflowLibraryEntry): void;
+  onRename(entryId: string, nextName: string): Promise<void>;
+  onDelete(entryId: string): void;
+}): JSX.Element {
+  const runsById = useMemo(() => new Map(runs.map((run) => [run.id, run])), [runs]);
+
+  return (
+    <section className="shrink-0 space-y-2 rounded-lg border border-border bg-card p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <h3 className="text-sm font-semibold">Library</h3>
+          <Badge className={cn("border", toneClassNames.neutral)}>{entries.length}</Badge>
+        </div>
+        {isLoading ? <span className="text-xs text-muted-foreground">Loading...</span> : null}
+      </div>
+      {entries.length === 0 ? (
+        <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+          Save reusable runs here from the run list.
+        </div>
+      ) : (
+        <div className="grid gap-2 lg:grid-cols-2">
+          {entries.map((entry) => {
+            const sourceRun = entry.sourceRunId ? runsById.get(entry.sourceRunId) : undefined;
+            const availability = resolveRunWorkflowAvailability(libraryEntryToRunRecord(entry), workflows);
+            return (
+              <WorkflowLibraryEntryCard
+                key={entry.id}
+                entry={entry}
+                sourceRun={sourceRun}
+                workflowAvailability={availability}
+                isRunning={runningEntryId === entry.id}
+                isDeleting={deletingEntryId === entry.id}
+                onUse={() => onUse(entry)}
+                onRun={() => onRun(entry)}
+                onRename={(nextName) => onRename(entry.id, nextName)}
+                onDelete={() => onDelete(entry.id)}
+              />
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WorkflowLibraryEntryCard({
+  entry,
+  sourceRun,
+  workflowAvailability,
+  isRunning,
+  isDeleting,
+  onUse,
+  onRun,
+  onRename,
+  onDelete
+}: {
+  entry: WorkflowLibraryEntry;
+  sourceRun?: RunRecord;
+  workflowAvailability: RunWorkflowAvailability;
+  isRunning: boolean;
+  isDeleting: boolean;
+  onUse(): void;
+  onRun(): void;
+  onRename(nextName: string): Promise<void>;
+  onDelete(): void;
+}): JSX.Element {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingName, setEditingName] = useState(entry.name);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const workflowUnavailable = workflowAvailability.status === "missing" || workflowAvailability.status === "version-mismatch";
+  const sourceLabel = sourceRun
+    ? `Source: ${sourceRun.runNumber === null ? "" : `#${sourceRun.runNumber} `}${sourceRun.name}`
+    : entry.sourceRunId
+      ? "Source: run deleted"
+      : "Source: library";
+
+  useEffect(() => {
+    if (!isEditing) {
+      setEditingName(entry.name);
+      setRenameError(null);
+    }
+  }, [entry.name, isEditing]);
+
+  async function submitRename(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    setRenameError(null);
+    setIsRenaming(true);
+    try {
+      await onRename(editingName);
+      setIsEditing(false);
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsRenaming(false);
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-border bg-background p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          {isEditing ? (
+            <form className="flex min-w-0 flex-wrap items-center gap-2" onSubmit={(event) => void submitRename(event)}>
+              <Input
+                value={editingName}
+                onChange={(event) => setEditingName(event.target.value)}
+                className="h-8 min-w-48"
+                autoFocus
+              />
+              <Button type="submit" size="sm" disabled={isRenaming}>
+                Save
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => setIsEditing(false)}>
+                Cancel
+              </Button>
+            </form>
+          ) : (
+            <div className="truncate text-sm font-medium">{entry.name}</div>
+          )}
+          <div className="mt-0.5 truncate text-xs text-muted-foreground">{entry.workflowId}</div>
+          <div className="truncate text-xs text-muted-foreground">{sourceLabel}</div>
+          {workflowUnavailable ? (
+            <div className={cn("mt-1 truncate text-xs", toneTextClassNames.danger)} title={workflowAvailability.message}>
+              {workflowAvailability.message}
+            </div>
+          ) : entry.pluginId ? (
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              {entry.pluginId}@{entry.pluginVersion ?? "unknown"}
+            </div>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+          <Button type="button" variant="outline" size="sm" onClick={onUse} disabled={workflowUnavailable} title={workflowAvailability.message}>
+            <Copy className="h-4 w-4" />
+            Use
+          </Button>
+          <Button type="button" size="sm" onClick={onRun} disabled={workflowUnavailable || isRunning} title={workflowAvailability.message}>
+            <Play className="h-4 w-4" />
+            Run
+          </Button>
+          <Button type="button" variant="outline" size="icon" onClick={() => setIsEditing(true)} title="Rename library entry">
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" size="icon" onClick={onDelete} disabled={isDeleting} title="Delete library entry">
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+      {renameError ? <div className={cn("mt-2 rounded-md border p-2 text-xs", toneClassNames.danger)}>{renameError}</div> : null}
+    </div>
+  );
+}
+
 function RunRow({
   run,
   selected,
   workflowAvailability,
   onSelect,
-  onResubmit
+  onResubmit,
+  onSaveToLibrary,
+  isSavingToLibrary
 }: {
   run: RunRecord;
   selected: boolean;
   workflowAvailability: RunWorkflowAvailability;
   onSelect: () => void;
   onResubmit: () => void;
+  onSaveToLibrary: () => void;
+  isSavingToLibrary: boolean;
 }): JSX.Element {
   const workflowUnavailable = workflowAvailability.status === "missing" || workflowAvailability.status === "version-mismatch";
   const motionActive = isMotionActiveStatus(run.status);
@@ -3306,6 +3730,17 @@ function RunRow({
           {isCliRun(run) ? <Badge className={cn("border", toneClassNames.neutral)}>{runOriginLabel(run)}</Badge> : null}
           <RunStatusBadge status={run.status} />
           {workflowUnavailable ? <Badge className={cn("border", toneClassNames.danger)}>plugin missing</Badge> : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onSaveToLibrary}
+            disabled={isSavingToLibrary}
+            title="Save this run configuration to the library"
+          >
+            <Save className="h-4 w-4" />
+            Save to Library
+          </Button>
           <Button
             type="button"
             variant="outline"

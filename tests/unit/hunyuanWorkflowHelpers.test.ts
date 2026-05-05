@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildHunyuanViewUploadPlan,
@@ -5,6 +8,8 @@ import {
   clickHunyuanGenerateButton,
   clickVisibleHunyuanControl,
   DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG,
+  discoverHunyuanModelAssets,
+  dismissHunyuanQuotaPopup,
   HUNYUAN_GLOBAL_WORKFLOW_ID,
   inferHunyuanArtifactKind,
   mergeHunyuanSelectorConfig,
@@ -57,6 +62,9 @@ describe("Hunyuan workflow helpers", () => {
     expect(selectors.modelTypeGeometryTexturePhased).toContain(".qaUJkqcCF813NIqHGF3U:visible");
     expect(selectors.modelTypeGeometryTexturePhased).not.toContain(">> text=");
     expect(selectors.generateButton).toContain(":not(.t-is-disabled):not([disabled])");
+    expect(selectors.quotaExhaustedPopupText).toContain("已用完");
+    expect(selectors.quotaExhaustedPopupCloseButton).toContain(".invite-tooltip-full");
+    expect(selectors.quotaExhaustedPopupCloseButton).toContain(".t-icon-close");
     expect(selectors.geometryReadySelector).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.retopologyTypeButtons?.quad).toContain(".model-dialog__content__operation__heading");
     expect(selectors.retopologyTypeButtons?.quad).toContain(".topology-panel .qaUJkqcCF813NIqHGF3U");
@@ -69,6 +77,37 @@ describe("Hunyuan workflow helpers", () => {
     expect(selectors.smartRetopologyButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.generateTextureButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.downloadButton).toContain(":not(.t-is-disabled):not([disabled])");
+  });
+
+  it("discovers an extracted OBJ, MTL, and texture asset set", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hunyuan-assets-"));
+    try {
+      fs.writeFileSync(path.join(tempDir, "model.obj"), "mtllib material.mtl\n");
+      fs.writeFileSync(path.join(tempDir, "material.mtl"), "map_Kd texture.png\n");
+      fs.writeFileSync(path.join(tempDir, "texture.png"), "png");
+      fs.writeFileSync(path.join(tempDir, "texture_normal.webp"), "webp");
+
+      expect(discoverHunyuanModelAssets(tempDir)).toMatchObject({
+        assetDir: tempDir,
+        objPath: path.join(tempDir, "model.obj"),
+        objFileName: "model.obj",
+        mtlFileName: "material.mtl",
+        textureFileNames: ["texture.png", "texture_normal.webp"],
+        assetFileNames: ["material.mtl", "model.obj", "texture.png", "texture_normal.webp"]
+      });
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a clear error when extracted Hunyuan assets contain no OBJ", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hunyuan-assets-empty-"));
+    try {
+      fs.writeFileSync(path.join(tempDir, "material.mtl"), "newmtl Material\n");
+      expect(() => discoverHunyuanModelAssets(tempDir)).toThrow("did not contain an OBJ file");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("provides English defaults for the Hunyuan Global source", () => {
@@ -215,6 +254,65 @@ describe("Hunyuan workflow helpers", () => {
     });
   });
 
+  it("reports a profile-safe manual action when Hunyuan Global has tabs but no browser controller", async () => {
+    const sdk = createWorkflowSdk() as any;
+    const manualMessages: string[] = [];
+    const steps: string[] = [];
+    sdk.extension.browser = {
+      ...sdk.extension.browser,
+      status: () => ({
+        compatible: 1,
+        compatibleControllers: 0,
+        connectedClients: [
+          {
+            id: "tab-1",
+            url: "https://chatgpt.com/",
+            title: "Wrong site",
+            compatible: true,
+            controllerHeartbeatOk: false,
+            controllerHeartbeatError: "controller failed"
+          }
+        ],
+        connectedControllers: [],
+        controllerDiagnostics: { compatibleTabsWithController: 0, compatibleTabsWithoutController: 1 }
+      }),
+      ensureRoutedTab: async () => {
+        throw new Error(
+          "No compatible BLINK browser controller with open-window support is connected. Do not open chrome.exe or paste routed workflow URLs into another Chrome profile."
+        );
+      }
+    };
+
+    const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+    if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+    const input = workflow.inputSchema.parse({
+      frontImage: "C:\\tmp\\front.png",
+      backImage: "C:\\tmp\\back.png",
+      selectors: {}
+    });
+
+    await expect(
+      workflow.run(input, {
+        runId: "run-hunyuan",
+        signal: new AbortController().signal,
+        paths: {},
+        artifactDir: "C:\\tmp",
+        step: async (message) => {
+          steps.push(message);
+        },
+        event: async () => undefined,
+        waitForManualAction: async (message) => {
+          manualMessages.push(message);
+        },
+        addArtifact: async () => ({ id: "unused" })
+      })
+    ).rejects.toThrow("still requires manual action");
+
+    expect(steps.some((message) => message.includes("tabs are connected, but the browser controller is not connected"))).toBe(true);
+    expect(manualMessages[0]).toContain("Do not open chrome.exe");
+    expect(manualMessages[0]).toContain("intended Chrome profile");
+  });
+
   it("clicks a visible later candidate when the first matching setting candidate is hidden", async () => {
     const hiddenText = new FakeHunyuanLocatorNode({ visible: false });
     const visibleControl = new FakeHunyuanLocatorNode({ visible: true });
@@ -267,6 +365,19 @@ describe("Hunyuan workflow helpers", () => {
     expect(enabledControl.clicks).toBe(1);
   });
 
+  it("dismisses the Hunyuan quota exhausted invite popup when it is visible", async () => {
+    const closeControl = new FakeHunyuanLocatorNode({ visible: true });
+    const page = new FakeHunyuanPage([closeControl], "生成次数已用完");
+
+    await expect(
+      dismissHunyuanQuotaPopup(page, {
+        quotaExhaustedPopupText: "生成次数已用完",
+        quotaExhaustedPopupCloseButton: ".invite-tooltip-full .t-icon-close"
+      })
+    ).resolves.toBe(true);
+    expect(closeControl.clicks).toBe(1);
+  });
+
   it("preserves calibrated overrides over defaults", () => {
     expect(
       mergeHunyuanSelectorConfig({
@@ -281,6 +392,7 @@ describe("Hunyuan workflow helpers", () => {
 
   it("infers model artifacts from model MIME types", () => {
     expect(inferHunyuanArtifactKind("model.glb", () => "model/gltf-binary")).toBe("model");
+    expect(inferHunyuanArtifactKind("model.obj", () => "model/obj")).toBe("model");
     expect(inferHunyuanArtifactKind("model.zip", () => "application/zip")).toBe("download");
   });
 
@@ -301,13 +413,20 @@ describe("Hunyuan workflow helpers", () => {
 });
 
 class FakeHunyuanPage {
-  constructor(private readonly nodes: FakeHunyuanLocatorNode[]) {}
+  constructor(
+    private readonly nodes: FakeHunyuanLocatorNode[],
+    private readonly visibleText = ""
+  ) {}
 
   locator(): FakeHunyuanLocatorGroup {
     return new FakeHunyuanLocatorGroup(this.nodes);
   }
 
   async waitForTimeout(): Promise<void> {}
+
+  async evaluate(_callback: unknown, argument?: unknown): Promise<boolean> {
+    return typeof argument === "string" ? this.visibleText.includes(argument) && this.nodes.every((node) => node.clicks === 0) : false;
+  }
 }
 
 class FakeHunyuanLocatorGroup {

@@ -29,9 +29,9 @@ When a project folder is known, check connectivity with that project:
 blink --project <project-dir> status
 ```
 
-All output is JSON. Parse stdout as JSON for normal commands and newline-delimited JSON for `blink watch` or `blink run --wait`.
+All output is JSON. Parse stdout as JSON for normal commands and newline-delimited JSON for `blink watch`, `blink run --wait`, or `blink library run --wait`.
 
-Successful command output includes `runtimeSource` and may include `runtimeFile` or `staleRuntimeFile`. If output shows `runtimeSource: "default"` or a `staleRuntimeFile`, treat the target as ambiguous. Mutating or control commands must not rely on the default port fallback; the CLI refuses `run`, `plugin-install`, `pause`, `resume`, `cancel`, and `delete` unless you pass `--project <project-dir>`, pass `--api-url <url>`, or use `BASED_BLINK_API_URL`.
+Successful command output includes `runtimeSource` and may include `runtimeFile` or `staleRuntimeFile`. If output shows `runtimeSource: "default"` or a `staleRuntimeFile`, treat the target as ambiguous. Mutating or control commands must not rely on the default port fallback; the CLI refuses `run`, `library run`, `plugin-install`, `pause`, `resume`, `cancel`, and `delete` unless you pass `--project <project-dir>`, pass `--api-url <url>`, or use `BASED_BLINK_API_URL`.
 
 Exit codes:
 
@@ -48,6 +48,9 @@ Current commands:
 - `blink workflows`
 - `blink workflow <workflowId>`
 - `blink run <workflowId> --input <json-file> [--name <name>] [--agent <name>] [--wait]`
+- `blink library`
+- `blink library get <entryId>`
+- `blink library run <entryId> [--name <name>] [--input-overrides <json-file>] [--agent <name>] [--wait]`
 - `blink runs [--active]`
 - `blink get <runId>`
 - `blink watch <runId>`
@@ -124,6 +127,9 @@ For plugin reloads, try `blink --project <project-dir> plugin-install <plugin-di
 
 - Active runs: `blink --project <project-dir> runs --active`
 - Run details, events, and artifacts: `blink --project <project-dir> get <runId>`
+- Library entries: `blink --project <project-dir> library`
+- Library entry detail: `blink --project <project-dir> library get <entryId>`
+- Run a library entry: `blink --project <project-dir> library run <entryId> --agent codex --wait`
 - Watch an existing run: `blink --project <project-dir> watch <runId>`
 - Pause/resume/cancel/delete: `blink --project <project-dir> pause <runId>`, `blink --project <project-dir> resume <runId>`, `blink --project <project-dir> cancel <runId>`, `blink --project <project-dir> delete <runId>`
 - Installed plugins: `blink --project <project-dir> plugins`

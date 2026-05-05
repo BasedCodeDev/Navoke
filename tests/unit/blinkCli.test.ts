@@ -27,6 +27,32 @@ describe("blink CLI", () => {
     });
   });
 
+  it("parses library run command options", () => {
+    expect(
+      parseBlinkArgs([
+        "--project",
+        "C:\\project",
+        "library",
+        "run",
+        "entry-1",
+        "--name",
+        "Library Run",
+        "--input-overrides",
+        "overrides.json",
+        "--agent=codex",
+        "--wait"
+      ])
+    ).toMatchObject({
+      kind: "library-run",
+      globals: { projectPath: "C:\\project" },
+      entryId: "entry-1",
+      name: "Library Run",
+      inputOverridesFile: "overrides.json",
+      agentName: "codex",
+      wait: true
+    });
+  });
+
   it("prints JSON for workflow listing", async () => {
     const stdout: string[] = [];
     const code = await runCli(["workflows"], {
@@ -43,6 +69,42 @@ describe("blink CLI", () => {
       apiUrl: "http://api",
       workflows: [{ manifest: { id: "test.workflow" } }]
     });
+  });
+
+  it("prints JSON for library listing and entries", async () => {
+    const stdout: string[] = [];
+    const requests: Array<{ method: string; path: string }> = [];
+    const code = await runCli(["library"], {
+      cwd: "C:\\repo",
+      env: {},
+      stdout: (line) => stdout.push(line),
+      discoverRuntime: async () => ({ apiUrl: "http://api", source: "flag" }),
+      request: async <T>(_apiUrl: string, method: string, apiPath: string) => {
+        requests.push({ method, path: apiPath });
+        return [{ id: "entry-1", name: "Reusable" }] as T;
+      }
+    });
+
+    expect(code).toBe(0);
+    expect(requests).toEqual([{ method: "GET", path: "/api/library" }]);
+    expect(JSON.parse(stdout[0])).toMatchObject({ ok: true, entries: [{ id: "entry-1" }] });
+
+    stdout.length = 0;
+    requests.length = 0;
+    const getCode = await runCli(["library", "get", "entry-1"], {
+      cwd: "C:\\repo",
+      env: {},
+      stdout: (line) => stdout.push(line),
+      discoverRuntime: async () => ({ apiUrl: "http://api", source: "flag" }),
+      request: async <T>(_apiUrl: string, method: string, apiPath: string) => {
+        requests.push({ method, path: apiPath });
+        return { id: "entry-1", name: "Reusable" } as T;
+      }
+    });
+
+    expect(getCode).toBe(0);
+    expect(requests).toEqual([{ method: "GET", path: "/api/library/entry-1" }]);
+    expect(JSON.parse(stdout[0])).toMatchObject({ ok: true, entry: { id: "entry-1" } });
   });
 
   it("allows read-only commands to use the default runtime fallback", async () => {
@@ -105,6 +167,43 @@ describe("blink CLI", () => {
     expect(JSON.parse(stdout[0])).toMatchObject({ ok: true, run: { id: "run-1" } });
   });
 
+  it("starts a run from a library entry with overrides and CLI origin metadata", async () => {
+    const stdout: string[] = [];
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const code = await runCli(
+      ["library", "run", "entry-1", "--name", "From Library", "--input-overrides", "overrides.json", "--agent", "codex"],
+      {
+        cwd: "C:\\repo",
+        env: {},
+        pid: 123,
+        stdout: (line) => stdout.push(line),
+        readFile: () => JSON.stringify({ prompt: "Override" }),
+        discoverRuntime: async () => ({ apiUrl: "http://api", source: "flag" }),
+        request: async <T>(_apiUrl: string, _method: string, apiPath: string, body: unknown) => {
+          requests.push({ path: apiPath, body });
+          return { id: "run-1", status: "queued" } as T;
+        }
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(requests[0]).toMatchObject({
+      path: "/api/library/entry-1/runs",
+      body: {
+        name: "From Library",
+        inputOverrides: { prompt: "Override" },
+        origin: {
+          source: "cli",
+          agentName: "codex",
+          cwd: "C:\\repo",
+          pid: 123,
+          cliVersion: "0.1.0"
+        }
+      }
+    });
+    expect(JSON.parse(stdout[0])).toMatchObject({ ok: true, run: { id: "run-1" } });
+  });
+
   it("refuses to start a run through the default runtime fallback", async () => {
     const stderr: string[] = [];
     const requests: unknown[] = [];
@@ -135,6 +234,7 @@ describe("blink CLI", () => {
 
   for (const [command, args] of [
     ["plugin-install", ["plugin-install", "C:\\plugin"]],
+    ["library-run", ["library", "run", "entry-1"]],
     ["pause", ["pause", "run-1"]],
     ["resume", ["resume", "run-1"]],
     ["cancel", ["cancel", "run-1"]],
@@ -223,6 +323,27 @@ describe("blink CLI", () => {
       env: {},
       stdout: (line) => stdout.push(line),
       readFile: () => "{}",
+      discoverRuntime: async () => ({ apiUrl: "http://api", source: "flag" }),
+      request: async <T>() => ({ id: "run-1", status: "running" }) as T,
+      watchRun: async (_apiUrl: string, runId: string, options: WatchRunOptions) => {
+        options.stdout(`${JSON.stringify({ type: "run.finished", run: { id: runId, status: "completed" } })}\n`);
+        return { id: runId, status: "completed" };
+      }
+    });
+
+    expect(code).toBe(0);
+    expect(stdout.map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({ type: "run.created", run: { id: "run-1", status: "running" } }),
+      { type: "run.finished", run: { id: "run-1", status: "completed" } }
+    ]);
+  });
+
+  it("prints newline-delimited JSON when waiting for a library run", async () => {
+    const stdout: string[] = [];
+    const code = await runCli(["library", "run", "entry-1", "--wait"], {
+      cwd: "C:\\repo",
+      env: {},
+      stdout: (line) => stdout.push(line),
       discoverRuntime: async () => ({ apiUrl: "http://api", source: "flag" }),
       request: async <T>() => ({ id: "run-1", status: "running" }) as T,
       watchRun: async (_apiUrl: string, runId: string, options: WatchRunOptions) => {

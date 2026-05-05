@@ -44,6 +44,9 @@ export interface ExtensionClientStatus {
   controllerId?: string;
   tabId?: number;
   windowId?: number;
+  controllerHeartbeatOk?: boolean;
+  controllerHeartbeatAt?: string;
+  controllerHeartbeatError?: string;
   compatible: boolean;
   incompatibilityReason?: string;
   lastSeenAt: string;
@@ -59,6 +62,26 @@ export interface ExtensionControllerStatus {
   incompatibilityReason?: string;
   lastSeenAt: string;
   capabilities: string[];
+}
+
+export interface ExtensionControllerDiagnostics {
+  compatibleTabsWithController: number;
+  compatibleTabsWithoutController: number;
+  latestControllerHeartbeatAt?: string;
+  latestControllerHeartbeatOk?: boolean;
+  latestControllerHeartbeatError?: string;
+  connectedTabDiagnostics: Array<{
+    id: string;
+    url: string;
+    title: string;
+    routingToken?: string;
+    controllerId?: string;
+    tabId?: number;
+    windowId?: number;
+    controllerHeartbeatOk?: boolean;
+    controllerHeartbeatAt?: string;
+    controllerHeartbeatError?: string;
+  }>;
 }
 
 export type ExtensionControllerCommandInput =
@@ -204,6 +227,9 @@ export class ExtensionBridge {
     const controllerId = firstNonEmptyString(record.controllerId) ?? undefined;
     const tabId = optionalNumber(record.tabId);
     const windowId = optionalNumber(record.windowId);
+    const controllerHeartbeatOk = optionalBoolean(record.controllerHeartbeatOk);
+    const controllerHeartbeatAt = firstNonEmptyString(record.controllerHeartbeatAt) ?? undefined;
+    const controllerHeartbeatError = firstNonEmptyString(record.controllerHeartbeatError) ?? undefined;
     const previous = this.clients.get(clientId);
     const routingToken =
       firstNonEmptyString(record.routingToken) ?? routingTokenFromUrl(url) ?? previous?.routingToken ?? undefined;
@@ -220,6 +246,19 @@ export class ExtensionBridge {
       ...(controllerId ? { controllerId } : previous?.controllerId ? { controllerId: previous.controllerId } : {}),
       ...(tabId !== undefined ? { tabId } : previous?.tabId !== undefined ? { tabId: previous.tabId } : {}),
       ...(windowId !== undefined ? { windowId } : previous?.windowId !== undefined ? { windowId: previous.windowId } : {}),
+      ...(controllerHeartbeatOk !== undefined
+        ? { controllerHeartbeatOk }
+        : previous?.controllerHeartbeatOk !== undefined
+          ? { controllerHeartbeatOk: previous.controllerHeartbeatOk }
+          : {}),
+      ...(controllerHeartbeatAt ? { controllerHeartbeatAt } : previous?.controllerHeartbeatAt ? { controllerHeartbeatAt: previous.controllerHeartbeatAt } : {}),
+      ...(controllerHeartbeatError
+        ? { controllerHeartbeatError }
+        : controllerHeartbeatOk === true
+          ? {}
+          : previous?.controllerHeartbeatError
+            ? { controllerHeartbeatError: previous.controllerHeartbeatError }
+            : {}),
       compatible,
       ...(compatible
         ? {}
@@ -282,10 +321,12 @@ export class ExtensionBridge {
     controllers: ExtensionControllerStatus[];
     compatibleControllers: number;
     incompatibleControllers: number;
+    controllerDiagnostics: ExtensionControllerDiagnostics;
   } {
     this.prune();
     const clients = [...this.clients.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
     const controllers = [...this.controllers.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+    const controllerDiagnostics = buildControllerDiagnostics(clients);
     return {
       requiredProtocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       connected: clients.length,
@@ -296,7 +337,8 @@ export class ExtensionBridge {
       connectedControllers: controllers,
       controllers,
       compatibleControllers: controllers.filter((controller) => controller.compatible).length,
-      incompatibleControllers: controllers.filter((controller) => !controller.compatible).length
+      incompatibleControllers: controllers.filter((controller) => !controller.compatible).length,
+      controllerDiagnostics
     };
   }
 
@@ -351,9 +393,7 @@ export class ExtensionBridge {
     const url = safeExtensionTabUrl(input.url);
     const controller = this.findCompatibleController("open-tab", input.controllerId);
     if (!controller) {
-      throw new Error(
-        "No compatible BLINK browser controller with open-tab support is connected. Reload the unpacked extension, open any page in that browser profile, then retry."
-      );
+      throw new Error(this.noCompatibleControllerMessage("open-tab"));
     }
     return this.executeControllerCommand({
       controllerId: controller.id,
@@ -373,9 +413,7 @@ export class ExtensionBridge {
   }): Promise<unknown> {
     const controller = this.findCompatibleController("focus-tab", input.controllerId);
     if (!controller) {
-      throw new Error(
-        "No compatible BLINK browser controller with focus-tab support is connected. Reload the unpacked extension, open any page in that browser profile, then retry."
-      );
+      throw new Error(this.noCompatibleControllerMessage("focus-tab"));
     }
     return this.executeControllerCommand({
       controllerId: controller.id,
@@ -395,9 +433,7 @@ export class ExtensionBridge {
     const url = safeExtensionTabUrl(input.url);
     const controller = this.findCompatibleController("open-window", input.controllerId);
     if (!controller) {
-      throw new Error(
-        "No compatible BLINK browser controller with open-window support is connected. Reload the unpacked extension, open any page in that browser profile, then retry."
-      );
+      throw new Error(this.noCompatibleControllerMessage("open-window"));
     }
     return this.executeControllerCommand({
       controllerId: controller.id,
@@ -450,11 +486,22 @@ export class ExtensionBridge {
     const visibleClients = [...this.clients.values()]
       .filter((client) => client.compatible)
       .slice(0, 5)
-      .map((client) => ({ url: client.url, title: client.title, routingToken: client.routingToken }));
+      .map((client) => ({
+        url: client.url,
+        title: client.title,
+        routingToken: client.routingToken,
+        controllerId: client.controllerId,
+        tabId: client.tabId,
+        windowId: client.windowId,
+        controllerHeartbeatOk: client.controllerHeartbeatOk,
+        controllerHeartbeatError: client.controllerHeartbeatError
+      }));
     throw new Error(
       `Opened a routed BLINK browser window, but no compatible page client connected. openResult=${JSON.stringify(
         openResult
-      )}; knownClients=${JSON.stringify(visibleClients)}. Reload the unpacked extension, confirm site access is enabled for the opened page, and refresh the opened page.`
+      )}; knownClients=${JSON.stringify(
+        visibleClients
+      )}. Do not open chrome.exe or paste this routed URL into another Chrome profile. The routed window must be opened by the BLINK extension controller in the intended browser profile. Reload the unpacked extension, confirm site access is enabled for the opened page, open the BLINK extension popup in that profile, and refresh the opened page.`
     );
   }
 
@@ -864,6 +911,34 @@ export class ExtensionBridge {
   private markCommandHealthy(clientId: string): void {
     this.commandUnhealthySince.delete(clientId);
   }
+
+  private noCompatibleControllerMessage(capability: "open-tab" | "open-window" | "focus-tab"): string {
+    const status = this.status();
+    const connectedTabs = status.connectedClients.map((client) => ({
+      id: client.id,
+      url: client.url,
+      title: client.title,
+      routingToken: client.routingToken,
+      controllerId: client.controllerId,
+      tabId: client.tabId,
+      windowId: client.windowId,
+      controllerHeartbeatOk: client.controllerHeartbeatOk,
+      controllerHeartbeatError: client.controllerHeartbeatError
+    }));
+    const controllers = status.connectedControllers.map((controller) => ({
+      id: controller.id,
+      compatible: controller.compatible,
+      capabilities: controller.capabilities,
+      incompatibilityReason: controller.incompatibilityReason
+    }));
+    return (
+      `No compatible BLINK browser controller with ${capability} support is connected. ` +
+      "Do not open chrome.exe or paste routed workflow URLs into another Chrome profile; that bypasses the BLINK extension controller and can open the wrong profile. " +
+      "Open the BLINK extension popup in the intended Chrome profile, confirm it reports at least 1 browser controller, then resume the run. " +
+      `connectedTabs=${JSON.stringify(connectedTabs)}; connectedControllers=${JSON.stringify(controllers)}; ` +
+      `controllerDiagnostics=${JSON.stringify(status.controllerDiagnostics)}`
+    );
+  }
 }
 
 export const extensionBridge = new ExtensionBridge();
@@ -879,6 +954,39 @@ function firstNonEmptyString(...values: unknown[]): string | undefined {
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function buildControllerDiagnostics(clients: ExtensionClientStatus[]): ExtensionControllerDiagnostics {
+  const compatibleClients = clients.filter((client) => client.compatible);
+  const heartbeatClients = compatibleClients.filter(
+    (client) => client.controllerHeartbeatAt || client.controllerHeartbeatError || client.controllerHeartbeatOk !== undefined
+  );
+  const latestHeartbeat = heartbeatClients.sort((a, b) =>
+    String(b.controllerHeartbeatAt ?? b.lastSeenAt).localeCompare(String(a.controllerHeartbeatAt ?? a.lastSeenAt))
+  )[0];
+  return {
+    compatibleTabsWithController: compatibleClients.filter((client) => Boolean(client.controllerId)).length,
+    compatibleTabsWithoutController: compatibleClients.filter((client) => !client.controllerId).length,
+    ...(latestHeartbeat?.controllerHeartbeatAt ? { latestControllerHeartbeatAt: latestHeartbeat.controllerHeartbeatAt } : {}),
+    ...(latestHeartbeat?.controllerHeartbeatOk !== undefined ? { latestControllerHeartbeatOk: latestHeartbeat.controllerHeartbeatOk } : {}),
+    ...(latestHeartbeat?.controllerHeartbeatError ? { latestControllerHeartbeatError: latestHeartbeat.controllerHeartbeatError } : {}),
+    connectedTabDiagnostics: compatibleClients.map((client) => ({
+      id: client.id,
+      url: client.url,
+      title: client.title,
+      ...(client.routingToken ? { routingToken: client.routingToken } : {}),
+      ...(client.controllerId ? { controllerId: client.controllerId } : {}),
+      ...(client.tabId !== undefined ? { tabId: client.tabId } : {}),
+      ...(client.windowId !== undefined ? { windowId: client.windowId } : {}),
+      ...(client.controllerHeartbeatOk !== undefined ? { controllerHeartbeatOk: client.controllerHeartbeatOk } : {}),
+      ...(client.controllerHeartbeatAt ? { controllerHeartbeatAt: client.controllerHeartbeatAt } : {}),
+      ...(client.controllerHeartbeatError ? { controllerHeartbeatError: client.controllerHeartbeatError } : {})
+    }))
+  };
 }
 
 function routingTokenFromUrl(value: string): string | undefined {

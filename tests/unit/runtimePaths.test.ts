@@ -23,6 +23,7 @@ describe("runtime paths", () => {
     expect(paths.runRootDir).toBe(path.resolve(projectDir));
     expect(paths.internalDir).toBe(path.join(path.resolve(projectDir), ".blink"));
     expect(paths.dbPath).toBe(path.join(path.resolve(projectDir), ".blink", "workflow.sqlite"));
+    expect(paths.libraryDir).toBe(path.join(path.resolve(projectDir), ".blink", "library"));
     expect(paths.browserProfilesDir).toBe(path.join(path.resolve(projectDir), ".blink", "browser-profiles"));
     expect(paths.workflowLabDir).toBe(path.join(path.resolve(projectDir), ".blink", "workflow-lab"));
 

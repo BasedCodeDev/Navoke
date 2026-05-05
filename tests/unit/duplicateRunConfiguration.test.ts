@@ -236,7 +236,7 @@ describe("duplicate run configuration", () => {
     expect(duplicate.masterPromptSuffix).toBe("");
   });
 
-  it("copies Hunyuan view images, prompt, profile, settings, and selectors", () => {
+  it("copies Hunyuan view images, prompt, profile, settings, selectors, and defaults export back to OBJ", () => {
     const duplicate = buildDuplicateRunConfiguration(
       run({
         workflowId: "based-blink.hunyuan.image-to-model",
@@ -271,7 +271,7 @@ describe("duplicate run configuration", () => {
       hunyuanRetopologyType: "triangle",
       hunyuanGenerateTexture: false,
       hunyuanAutoRig: true,
-      hunyuanExportFormat: "glb"
+      hunyuanExportFormat: "obj"
     });
     expect(JSON.parse(duplicate.hunyuanSelectorsJson)).toMatchObject({ generateButton: "button.generate" });
   });

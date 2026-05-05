@@ -96,6 +96,21 @@ export interface RunRecord {
   updatedAt: string;
 }
 
+export interface WorkflowLibraryEntry {
+  id: string;
+  name: string;
+  workflowId: string;
+  workflowVersion?: string | null;
+  pluginId?: string | null;
+  pluginVersion?: string | null;
+  pluginApiVersion?: string | null;
+  pluginSource?: PluginSource | "unknown" | null;
+  sourceRunId: string | null;
+  input: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ArtifactRecord {
   id: string;
   runId: string;
@@ -158,6 +173,9 @@ export interface SystemInfo {
       controllerId?: string;
       tabId?: number;
       windowId?: number;
+      controllerHeartbeatOk?: boolean;
+      controllerHeartbeatAt?: string;
+      controllerHeartbeatError?: string;
       compatible: boolean;
       incompatibilityReason?: string;
       lastSeenAt: string;
@@ -174,6 +192,25 @@ export interface SystemInfo {
     }>;
     compatibleControllers: number;
     incompatibleControllers: number;
+    controllerDiagnostics?: {
+      compatibleTabsWithController: number;
+      compatibleTabsWithoutController: number;
+      latestControllerHeartbeatAt?: string;
+      latestControllerHeartbeatOk?: boolean;
+      latestControllerHeartbeatError?: string;
+      connectedTabDiagnostics: Array<{
+        id: string;
+        url: string;
+        title: string;
+        routingToken?: string;
+        controllerId?: string;
+        tabId?: number;
+        windowId?: number;
+        controllerHeartbeatOk?: boolean;
+        controllerHeartbeatAt?: string;
+        controllerHeartbeatError?: string;
+      }>;
+    };
   };
 }
 
@@ -336,6 +373,42 @@ export async function listRuns(): Promise<RunRecord[]> {
   return apiFetch("/api/runs");
 }
 
+export async function listWorkflowLibraryEntries(): Promise<WorkflowLibraryEntry[]> {
+  return apiFetch("/api/library");
+}
+
+export async function getWorkflowLibraryEntry(id: string): Promise<WorkflowLibraryEntry> {
+  return apiFetch(`/api/library/${encodeURIComponent(id)}`);
+}
+
+export async function saveRunToWorkflowLibrary(input: { runId: string; name?: string }): Promise<WorkflowLibraryEntry> {
+  return apiFetch("/api/library/from-run", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function renameWorkflowLibraryEntry(id: string, name: string): Promise<WorkflowLibraryEntry> {
+  return apiFetch(`/api/library/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ name }) });
+}
+
+export async function deleteWorkflowLibraryEntry(id: string): Promise<{ id: string; deleted: true }> {
+  return apiFetch(`/api/library/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function createRunFromWorkflowLibraryEntry(input: {
+  entryId: string;
+  name?: string;
+  inputOverrides?: unknown;
+  origin?: RunOrigin;
+}): Promise<RunRecord> {
+  return apiFetch(`/api/library/${encodeURIComponent(input.entryId)}/runs`, {
+    method: "POST",
+    body: JSON.stringify({
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.inputOverrides !== undefined ? { inputOverrides: input.inputOverrides } : {}),
+      ...(input.origin ? { origin: input.origin } : {})
+    })
+  });
+}
+
 export async function getRun(id: string): Promise<RunDetail> {
   return apiFetch(`/api/runs/${id}`);
 }
@@ -427,6 +500,16 @@ export async function artifactUrl(id: string): Promise<string> {
 export async function artifactDownloadUrl(id: string): Promise<string> {
   const config = await getConfig();
   return `${config.apiBaseUrl}/api/artifacts/${id}/download`;
+}
+
+export async function artifactAssetUrl(id: string, relativePath: string): Promise<string> {
+  const config = await getConfig();
+  const encodedPath = relativePath
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `${config.apiBaseUrl}/api/artifacts/${id}/assets/${encodedPath}`;
 }
 
 export async function runInputFileUrl(

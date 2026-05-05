@@ -23,7 +23,7 @@ import {
   getRunInputDir,
   getRunOutputArtifactDir
 } from "../runtime/paths";
-import { copyFileToDir, fileSize, inferMimeType, safeBaseName, writeJson } from "../utils/files";
+import { copyFileToDir, extractZip, fileSize, inferMimeType, safeBaseName, writeJson } from "../utils/files";
 import { sleep } from "../utils/sleep";
 
 export type {
@@ -65,6 +65,7 @@ export interface WorkflowSdk {
     copyFileToDir: typeof copyFileToDir;
     writeJson: typeof writeJson;
     inferMimeType: typeof inferMimeType;
+    extractZip: typeof extractZip;
   };
   artifacts: {
     ensureRunDataDirs: typeof ensureRunDataDirs;
@@ -82,6 +83,7 @@ export interface WorkflowSdk {
   extension: {
     browser: {
       protocolVersion: typeof BLINK_EXTENSION_PROTOCOL_VERSION;
+      status?(): ReturnType<typeof extensionBridge.status>;
       findCompatibleClientForTarget(target: ExtensionBrowserTarget): ExtensionClientStatus | undefined;
       ensureRoutedTab(
         target: ExtensionBrowserTarget,
@@ -139,7 +141,8 @@ export function createWorkflowSdk(): WorkflowSdk {
       fileSize,
       copyFileToDir,
       writeJson,
-      inferMimeType
+      inferMimeType,
+      extractZip
     },
     artifacts: {
       ensureRunDataDirs,
@@ -157,6 +160,7 @@ export function createWorkflowSdk(): WorkflowSdk {
     extension: {
       browser: {
         protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+        status: () => extensionBridge.status(),
         findCompatibleClientForTarget: (target) => extensionBridge.findCompatibleClientForTarget(target),
         ensureRoutedTab: (target, options) =>
           extensionBridge.ensureRoutedTab({

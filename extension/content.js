@@ -10,6 +10,11 @@ const CLIENT_ID_STORAGE_KEY = "basedBlinkBrowserClientId";
 const ROUTING_TOKEN_STORAGE_KEY = "basedBlinkBrowserRoutingToken";
 
 const memoryStorage = new Map();
+let lastControllerHeartbeat = {
+  ok: false,
+  checkedAt: "",
+  error: "Controller heartbeat has not run yet."
+};
 
 function safeSessionGet(key) {
   try {
@@ -77,6 +82,7 @@ async function apiFetch(path, options = {}) {
 async function heartbeat() {
   try {
     const tabInfo = await currentTabInfoForHeartbeat();
+    const controllerHeartbeat = await controllerHeartbeatForHeartbeat();
     await apiFetch("/api/extension/heartbeat", {
       method: "POST",
       body: JSON.stringify({
@@ -89,13 +95,37 @@ async function heartbeat() {
         ...(typeof tabInfo.controllerId === "string" ? { controllerId: tabInfo.controllerId } : {}),
         ...(typeof tabInfo.tabId === "number" ? { tabId: tabInfo.tabId } : {}),
         ...(typeof tabInfo.windowId === "number" ? { windowId: tabInfo.windowId } : {}),
+        controllerHeartbeatOk: controllerHeartbeat.ok === true,
+        controllerHeartbeatAt: controllerHeartbeat.checkedAt,
+        ...(controllerHeartbeat.ok === true ? {} : { controllerHeartbeatError: controllerHeartbeat.error || "Unknown controller heartbeat failure" }),
         capabilities: ["inspect", "action", "wait", "extract", "focus"]
       })
     });
-    void chrome.runtime.sendMessage({ type: "controller-heartbeat" }).catch(() => undefined);
   } catch {
     // The Electron app may not be running. Keep polling quietly.
   }
+}
+
+async function controllerHeartbeatForHeartbeat() {
+  const checkedAt = new Date().toISOString();
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "controller-heartbeat" });
+    const ok = result?.ok === true && result?.controllerHeartbeat?.ok !== false;
+    lastControllerHeartbeat = {
+      ok,
+      checkedAt,
+      ...(ok
+        ? { controllerId: result?.controllerHeartbeat?.controllerId || result?.controllerId || "" }
+        : { error: result?.controllerHeartbeat?.error || result?.error || "Controller heartbeat did not report success." })
+    };
+  } catch (error) {
+    lastControllerHeartbeat = {
+      ok: false,
+      checkedAt,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+  return lastControllerHeartbeat;
 }
 
 async function currentTabInfoForHeartbeat() {
@@ -819,6 +849,9 @@ globalThis.__BasedBlinkBrowserControllerTest = {
   extract,
   isVisible,
   isDisabled,
+  heartbeat,
+  controllerHeartbeatForHeartbeat,
+  lastControllerHeartbeat: () => lastControllerHeartbeat,
   routingTokenForHeartbeat
 };
 })();

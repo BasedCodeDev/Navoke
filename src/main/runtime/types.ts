@@ -17,6 +17,7 @@ export interface RuntimePaths {
   runRootDir: string;
   dataDir: string;
   artifactDir: string;
+  libraryDir: string;
   browserProfilesDir: string;
   workflowLabDir: string;
   logsDir: string;
@@ -54,6 +55,21 @@ export interface RunRecord {
   input: unknown;
   output: unknown | null;
   error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowLibraryEntry {
+  id: string;
+  name: string;
+  workflowId: string;
+  workflowVersion?: string | null;
+  pluginId?: string | null;
+  pluginVersion?: string | null;
+  pluginApiVersion?: string | null;
+  pluginSource?: PluginSource | "unknown" | null;
+  sourceRunId: string | null;
+  input: unknown;
   createdAt: string;
   updatedAt: string;
 }

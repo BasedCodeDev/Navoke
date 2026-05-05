@@ -32,6 +32,17 @@ type ParsedCommand =
   | { kind: "workflows"; globals: ParsedGlobals }
   | { kind: "workflow"; globals: ParsedGlobals; workflowId: string }
   | { kind: "run"; globals: ParsedGlobals; workflowId: string; inputFile: string; name?: string; agentName?: string; wait: boolean }
+  | { kind: "library"; globals: ParsedGlobals }
+  | { kind: "library-get"; globals: ParsedGlobals; entryId: string }
+  | {
+      kind: "library-run";
+      globals: ParsedGlobals;
+      entryId: string;
+      name?: string;
+      inputOverridesFile?: string;
+      agentName?: string;
+      wait: boolean;
+    }
   | { kind: "runs"; globals: ParsedGlobals; active: boolean }
   | { kind: "get"; globals: ParsedGlobals; runId: string }
   | { kind: "watch"; globals: ParsedGlobals; runId: string }
@@ -60,7 +71,15 @@ class CliUsageError extends Error {
   exitCode = 2;
 }
 
-const MUTATING_COMMANDS = new Set<ParsedCommand["kind"]>(["run", "plugin-install", "pause", "resume", "cancel", "delete"]);
+const MUTATING_COMMANDS = new Set<ParsedCommand["kind"]>([
+  "run",
+  "library-run",
+  "plugin-install",
+  "pause",
+  "resume",
+  "cancel",
+  "delete"
+]);
 
 export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): Promise<number> {
   const stdout = deps.stdout ?? ((line: string) => process.stdout.write(line));
@@ -107,6 +126,16 @@ export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): 
         const workflow = workflows.find((item) => item.manifest?.id === parsed.workflowId);
         if (!workflow) throw new Error(`Workflow not found: ${parsed.workflowId}`);
         writeJson(stdout, { ok: true, ...context, workflow });
+        return 0;
+      }
+      case "library": {
+        const entries = await request(runtime.apiUrl, "GET", "/api/library");
+        writeJson(stdout, { ok: true, ...context, entries });
+        return 0;
+      }
+      case "library-get": {
+        const entry = await request(runtime.apiUrl, "GET", `/api/library/${encodeURIComponent(parsed.entryId)}`);
+        writeJson(stdout, { ok: true, ...context, entry });
         return 0;
       }
       case "runs": {
@@ -173,6 +202,31 @@ export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): 
         const finalRun = await (deps.watchRun ?? watchRun)(runtime.apiUrl, run.id, { stdout, request });
         return exitCodeForRun(finalRun);
       }
+      case "library-run": {
+        const inputOverrides = parsed.inputOverridesFile
+          ? readJsonInputFile(parsed.inputOverridesFile, cwd, deps.readFile)
+          : undefined;
+        const origin = {
+          source: "cli",
+          ...(parsed.agentName ? { agentName: parsed.agentName } : {}),
+          command: `blink ${argv.join(" ")}`,
+          cwd,
+          pid: deps.pid ?? process.pid,
+          cliVersion: CLI_VERSION
+        };
+        const run = await request<RunRecordLike>(runtime.apiUrl, "POST", `/api/library/${encodeURIComponent(parsed.entryId)}/runs`, {
+          ...(parsed.name ? { name: parsed.name } : {}),
+          ...(inputOverrides !== undefined ? { inputOverrides } : {}),
+          origin
+        });
+        if (!parsed.wait) {
+          writeJson(stdout, { ok: true, ...context, run });
+          return 0;
+        }
+        writeJson(stdout, { type: "run.created", ok: true, ...context, run });
+        const finalRun = await (deps.watchRun ?? watchRun)(runtime.apiUrl, run.id, { stdout, request });
+        return exitCodeForRun(finalRun);
+      }
     }
   } catch (error) {
     const exitCode = error instanceof CliUsageError ? error.exitCode : 1;
@@ -207,6 +261,7 @@ export function parseBlinkArgs(argv: string[]): ParsedCommand {
   if (command === "status") return requireNoArgs({ kind: "status", globals }, rest);
   if (command === "workflows") return requireNoArgs({ kind: "workflows", globals }, rest);
   if (command === "workflow") return { kind: "workflow", globals, workflowId: requiredOnlyPositional(rest, "workflow id") };
+  if (command === "library") return parseLibraryCommand(globals, rest);
   if (command === "runs") return parseRunsCommand(globals, rest);
   if (command === "run") return parseRunCommand(globals, rest);
   if (command === "get") return { kind: "get", globals, runId: requiredOnlyPositional(rest, "run id") };
@@ -339,6 +394,28 @@ function parseRunsCommand(globals: ParsedGlobals, args: string[]): ParsedCommand
   return { kind: "runs", globals, active: options.flags.has("active") };
 }
 
+function parseLibraryCommand(globals: ParsedGlobals, args: string[]): ParsedCommand {
+  const subcommand = args[0];
+  if (!subcommand) return { kind: "library", globals };
+  if (subcommand === "get") {
+    return { kind: "library-get", globals, entryId: requiredOnlyPositional(args.slice(1), "library entry id") };
+  }
+  if (subcommand === "run") {
+    const entryId = requiredPositional(args.slice(1), "library entry id");
+    const options = parseOptions(args.slice(2), new Set(["name", "input-overrides", "agent"]), new Set(["wait"]));
+    return {
+      kind: "library-run",
+      globals,
+      entryId,
+      ...(options.values.name ? { name: options.values.name } : {}),
+      ...(options.values["input-overrides"] ? { inputOverridesFile: options.values["input-overrides"] } : {}),
+      ...(options.values.agent ? { agentName: options.values.agent } : {}),
+      wait: options.flags.has("wait")
+    };
+  }
+  throw new CliUsageError(`Unknown library command: ${subcommand}`);
+}
+
 function parseOptions(
   args: string[],
   valueOptions: Set<string>,
@@ -432,6 +509,9 @@ function commandList(): string[] {
     "blink workflows",
     "blink workflow <workflowId>",
     "blink --project <project-dir> run <workflowId> --input <json-file> [--name <name>] [--agent <name>] [--wait]",
+    "blink library",
+    "blink library get <entryId>",
+    "blink --project <project-dir> library run <entryId> [--name <name>] [--input-overrides <json-file>] [--agent <name>] [--wait]",
     "blink runs [--active]",
     "blink get <runId>",
     "blink watch <runId>",

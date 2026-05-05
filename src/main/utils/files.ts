@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import extractZipPackage from "extract-zip";
 
 export function safeBaseName(filePath: string): string {
   return path.basename(filePath).replace(/[^\w.\- ]+/g, "_");
@@ -25,6 +26,11 @@ export function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+export async function extractZip(zipPath: string, targetDir: string): Promise<void> {
+  fs.mkdirSync(targetDir, { recursive: true });
+  await extractZipPackage(zipPath, { dir: targetDir });
+}
+
 export function inferMimeType(filePath: string): string | null {
   const ext = path.extname(filePath).toLowerCase();
   if ([".png"].includes(ext)) return "image/png";
@@ -33,6 +39,8 @@ export function inferMimeType(filePath: string): string | null {
   if ([".gif"].includes(ext)) return "image/gif";
   if ([".glb"].includes(ext)) return "model/gltf-binary";
   if ([".gltf"].includes(ext)) return "model/gltf+json";
+  if ([".obj"].includes(ext)) return "model/obj";
+  if ([".mtl"].includes(ext)) return "text/plain";
   if ([".json"].includes(ext)) return "application/json";
   if ([".zip"].includes(ext)) return "application/zip";
   return null;

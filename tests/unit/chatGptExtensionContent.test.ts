@@ -47,6 +47,55 @@ describe("generic browser extension content script", () => {
     expect(harness.routingTokenForHeartbeat()).toBe("token");
   });
 
+  it("reports background controller heartbeat diagnostics with tab heartbeats", async () => {
+    const heartbeatBodies: Array<Record<string, unknown>> = [];
+    const harness = loadContentScriptHarness(createFakeElement({ isContentEditable: true }), {
+      runtimeSendMessage: async (message) => {
+        if ((message as { type?: string }).type === "current-tab-info") return { ok: true, controllerId: "controller-1", tabId: 42, windowId: 7 };
+        if ((message as { type?: string }).type === "controller-heartbeat") {
+          return { ok: true, controllerHeartbeat: { ok: true, controllerId: "controller-1" } };
+        }
+        return { ok: true };
+      },
+      fetch: async (_url, options) => {
+        heartbeatBodies.push(JSON.parse(String((options as { body?: string })?.body ?? "{}")));
+        return { status: 204, ok: true, text: async () => "" };
+      }
+    });
+
+    await harness.heartbeat();
+
+    expect(heartbeatBodies[0]).toMatchObject({
+      controllerId: "controller-1",
+      tabId: 42,
+      windowId: 7,
+      controllerHeartbeatOk: true
+    });
+  });
+
+  it("surfaces background controller heartbeat failures with tab heartbeats", async () => {
+    const heartbeatBodies: Array<Record<string, unknown>> = [];
+    const harness = loadContentScriptHarness(createFakeElement({ isContentEditable: true }), {
+      runtimeSendMessage: async (message) => {
+        if ((message as { type?: string }).type === "controller-heartbeat") {
+          return { ok: false, controllerHeartbeat: { ok: false, error: "background controller failed" } };
+        }
+        return { ok: true };
+      },
+      fetch: async (_url, options) => {
+        heartbeatBodies.push(JSON.parse(String((options as { body?: string })?.body ?? "{}")));
+        return { status: 204, ok: true, text: async () => "" };
+      }
+    });
+
+    await harness.heartbeat();
+
+    expect(heartbeatBodies[0]).toMatchObject({
+      controllerHeartbeatOk: false,
+      controllerHeartbeatError: "background controller failed"
+    });
+  });
+
   it("fills contenteditable elements through browser text insertion and dispatches editor events", async () => {
     const insertedText: Array<{ command: string; value: string }> = [];
     const events: string[] = [];
@@ -301,10 +350,15 @@ describe("generic browser extension content script", () => {
 
 function loadContentScriptHarness(
   elementOrElements: unknown | unknown[],
-  options: { execCommand?(command: string, showUi: boolean, value: unknown): boolean } = {}
+  options: {
+    execCommand?(command: string, showUi: boolean, value: unknown): boolean;
+    runtimeSendMessage?(message: unknown): Promise<unknown>;
+    fetch?(url: string, options?: unknown): Promise<{ status: number; ok: boolean; text(): Promise<string> }>;
+  } = {}
 ): {
   performAction(action: unknown): Promise<unknown>;
   extract(query: unknown): Promise<unknown>;
+  heartbeat(): Promise<void>;
   routingTokenForHeartbeat(): string | undefined;
   location: { href: string; search: string; hash: string };
 } {
@@ -315,7 +369,7 @@ function loadContentScriptHarness(
     chrome: {
       runtime: {
         getManifest: () => ({ version: "0.1.0" }),
-        sendMessage: async () => ({ ok: true })
+        sendMessage: options.runtimeSendMessage ?? (async () => ({ ok: true }))
       }
     },
     crypto: {
@@ -360,9 +414,11 @@ function loadContentScriptHarness(
     },
     File: class {},
     FileReader: class {},
-    fetch: async () => {
-      throw new Error("No API server in unit test.");
-    },
+    fetch:
+      options.fetch ??
+      (async () => {
+        throw new Error("No API server in unit test.");
+      }),
     setInterval: () => 0,
     getSelection: () => ({
       removeAllRanges: () => undefined,
@@ -377,6 +433,7 @@ function loadContentScriptHarness(
     __BasedBlinkBrowserControllerTest: {
       performAction(action: unknown): Promise<unknown>;
       extract(query: unknown): Promise<unknown>;
+      heartbeat(): Promise<void>;
       routingTokenForHeartbeat(): string | undefined;
     };
   }).__BasedBlinkBrowserControllerTest;
@@ -386,6 +443,7 @@ function loadContentScriptHarness(
   } as {
     performAction(action: unknown): Promise<unknown>;
     extract(query: unknown): Promise<unknown>;
+    heartbeat(): Promise<void>;
     routingTokenForHeartbeat(): string | undefined;
     location: { href: string; search: string; hash: string };
   };

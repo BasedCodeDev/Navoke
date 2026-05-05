@@ -4,6 +4,13 @@ const API_BASE_URL = "http://127.0.0.1:39201";
 const CONTROLLER_ID_STORAGE_KEY = "basedBlinkBrowserControllerId";
 
 let controllerIdPromise = null;
+let lastControllerHeartbeat = {
+  ok: false,
+  checkedAt: "",
+  error: "Controller heartbeat has not run yet.",
+  capabilities: ["open-tab", "open-window", "focus-tab"]
+};
+let lastControllerCommandError = "";
 
 function apiUrl(path) {
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
@@ -42,15 +49,37 @@ function getControllerId() {
 
 async function controllerHeartbeat() {
   const controllerId = await getControllerId();
-  return apiFetch("/api/extension/controller/heartbeat", {
-    method: "POST",
-    body: JSON.stringify({
+  const checkedAt = new Date().toISOString();
+  const payload = {
+    controllerId,
+    protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+    extensionVersion: EXTENSION_VERSION,
+    capabilities: ["open-tab", "open-window", "focus-tab"]
+  };
+  try {
+    const result = await apiFetch("/api/extension/controller/heartbeat", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    lastControllerHeartbeat = {
+      ok: result?.ok === true,
+      checkedAt,
       controllerId,
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
-      extensionVersion: EXTENSION_VERSION,
-      capabilities: ["open-tab", "open-window", "focus-tab"]
-    })
-  });
+      requiredProtocolVersion: result?.requiredProtocolVersion ?? BLINK_EXTENSION_PROTOCOL_VERSION,
+      compatible: result?.compatible === true,
+      capabilities: payload.capabilities
+    };
+    return { ...result, diagnostics: lastControllerHeartbeat };
+  } catch (error) {
+    lastControllerHeartbeat = {
+      ok: false,
+      checkedAt,
+      controllerId,
+      error: error instanceof Error ? error.message : String(error),
+      capabilities: payload.capabilities
+    };
+    throw error;
+  }
 }
 
 async function pollControllerCommands() {
@@ -173,11 +202,34 @@ if (chrome.tabs?.onUpdated?.addListener) {
 }
 
 async function tickController() {
+  let heartbeatResult = null;
   try {
-    await controllerHeartbeat();
-    await pollControllerCommands();
+    heartbeatResult = await controllerHeartbeat();
   } catch {
-    // The Electron app may not be running or may not have controller work. Keep polling quietly.
+    return {
+      ok: false,
+      controllerHeartbeat: lastControllerHeartbeat,
+      commandError: lastControllerCommandError || ""
+    };
+  }
+
+  try {
+    const commandResult = await pollControllerCommands();
+    lastControllerCommandError = "";
+    return {
+      ok: true,
+      controllerHeartbeat: lastControllerHeartbeat,
+      heartbeatResult,
+      commandResult: commandResult ?? null
+    };
+  } catch (error) {
+    lastControllerCommandError = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      controllerHeartbeat: lastControllerHeartbeat,
+      heartbeatResult,
+      commandError: lastControllerCommandError
+    };
   }
 }
 
@@ -215,7 +267,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "controller-heartbeat") {
     tickController()
-      .then(() => sendResponse({ ok: true }))
+      .then((result) => sendResponse(result))
       .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
     return true;
   }
@@ -232,5 +284,7 @@ setInterval(tickController, 2500);
 globalThis.__BasedBlinkBrowserControllerBackgroundTest = {
   performControllerCommand,
   controllerHeartbeat,
-  pollControllerCommands
+  pollControllerCommands,
+  tickController,
+  lastControllerHeartbeat: () => lastControllerHeartbeat
 };

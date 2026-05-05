@@ -88,7 +88,7 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     base.hunyuanRetopologyType = enumField(input, "retopologyType", ["triangle", "quad"], "quad");
     base.hunyuanGenerateTexture = booleanField(input, "generateTexture", true);
     base.hunyuanAutoRig = booleanField(input, "autoRig", false);
-    base.hunyuanExportFormat = enumField(input, "exportFormat", ["obj", "glb"], "obj");
+    base.hunyuanExportFormat = normalizeHunyuanExportFormatForForm(enumField(input, "exportFormat", ["obj", "glb"], "obj"));
     base.hunyuanSelectorsJson = selectorsJsonField(input, run.workflowId);
     base.extensionTabSelection = resolveDuplicateExtensionTabSelection(input, options);
   } else if (isChatGptWorkflowInput(input, options.workflow)) {
@@ -203,6 +203,10 @@ function booleanField(record: Record<string, unknown>, field: string, fallback: 
 function enumField<T extends string>(record: Record<string, unknown>, field: string, values: T[], fallback: T): T {
   const value = record[field];
   return typeof value === "string" && values.includes(value as T) ? (value as T) : fallback;
+}
+
+function normalizeHunyuanExportFormatForForm(format: HunyuanExportFormat): HunyuanExportFormat {
+  return format === "glb" ? "obj" : format;
 }
 
 function selectorsJsonField(record: Record<string, unknown>, workflowId: string): string {

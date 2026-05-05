@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import type * as zod from "zod";
 import type { ExtensionBrowserTarget, WorkflowDefinition, WorkflowSdk } from "./sdkTypes";
@@ -31,10 +32,14 @@ export interface HunyuanViewSlot {
 }
 
 export interface HunyuanSelectorConfig {
+  loginStartSelector?: string;
+  loginStartText?: string;
   loginReadySelector?: string;
   loginReadyText?: string;
   loginRequiredSelector?: string;
   loginRequiredText?: string;
+  quotaExhaustedPopupText?: string;
+  quotaExhaustedPopupCloseButton?: string;
   imageTo3dTab?: string;
   multipleImagesTab?: string;
   addMultipleViewsButton?: string;
@@ -93,7 +98,7 @@ export interface HunyuanWorkflowInputLike {
 export type HunyuanExtensionTabTarget =
   | { mode: "any" }
   | { mode: "existing"; clientId: string; url?: string; title?: string }
-  | { mode: "new"; routingToken: string; url?: string; title?: string };
+  | { mode: "new"; routingToken: string; url?: string; title?: string; openMode?: "window" | "tab" };
 
 export interface HunyuanViewUpload {
   field: HunyuanViewField;
@@ -117,6 +122,25 @@ export const HUNYUAN_FACE_COUNTS: HunyuanFaceCount[] = ["1.5m", "1m", "500k", "5
 export const HUNYUAN_RETOPOLOGY_TYPES: HunyuanRetopologyType[] = ["triangle", "quad"];
 export const HUNYUAN_EXPORT_FORMATS: HunyuanExportFormat[] = ["obj", "glb"];
 
+export interface HunyuanExportFormatResolution {
+  requested: HunyuanExportFormat;
+  actual: HunyuanExportFormat;
+  availableOptions: string[];
+  fallbackReason?: string;
+}
+
+export interface HunyuanModelAssetDiscovery {
+  assetDir: string;
+  objPath: string;
+  objFileName: string;
+  mtlFileName?: string;
+  textureFileNames: string[];
+  assetFileNames: string[];
+}
+
+const HUNYUAN_MODEL_ASSET_DIR_NAME = "model-assets";
+const HUNYUAN_TEXTURE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+
 const HUNYUAN_TEXT = {
   login: "\u767b\u5f55",
   imageTo3d: "\u56fe\u751f3D",
@@ -135,7 +159,8 @@ const HUNYUAN_TEXT = {
   smartRetopology: "\u667a\u80fd\u62d3\u6251",
   generateTexture: "\u751f\u6210\u7eb9\u7406",
   autoRig: "\u81ea\u52a8\u7ed1\u9aa8",
-  download: "\u4e0b\u8f7d"
+  download: "\u4e0b\u8f7d",
+  quotaExhausted: "\u751f\u6210\u6b21\u6570\u5df2\u7528\u5b8c"
 };
 
 const HUNYUAN_GLOBAL_TEXT = {
@@ -160,6 +185,11 @@ const HUNYUAN_GLOBAL_TEXT = {
   download: "Download"
 };
 
+function hunyuanExportOptionSelector(label: string): string {
+  const escapedLabel = label.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `:is(.download__dropdown, .t-popup, .t-dropdown__menu) :is(li.t-dropdown__item, [role="menuitem"]):has-text("${escapedLabel}"), li.t-dropdown__item:has-text("${escapedLabel}")`;
+}
+
 function hunyuanEnabledButtonSelector(label: string): string {
   return `:is(button, .t-button):not(.t-is-disabled):not([disabled]):has-text("${label}")`;
 }
@@ -167,6 +197,8 @@ function hunyuanEnabledButtonSelector(label: string): string {
 export const DEFAULT_HUNYUAN_SELECTOR_CONFIG: HunyuanSelectorConfig = {
   loginReadySelector: `label.t-radio-button:has-text("${HUNYUAN_TEXT.imageTo3d}")`,
   loginRequiredSelector: `button.login-btn:has-text("${HUNYUAN_TEXT.login}")`,
+  quotaExhaustedPopupText: HUNYUAN_TEXT.quotaExhausted,
+  quotaExhaustedPopupCloseButton: `:is(.invite-tooltip-full, .invite-tooltip-content):has-text("${HUNYUAN_TEXT.quotaExhausted}") .t-icon-close`,
   imageTo3dTab: `label.t-radio-button:has-text("${HUNYUAN_TEXT.imageTo3d}")`,
   multipleImagesTab: `text=${HUNYUAN_TEXT.multipleImages}`,
   addMultipleViewsButton: ".hy-multiple-views-upload-v2",
@@ -208,17 +240,22 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG: HunyuanSelectorConfig = {
   autoRigReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download),
   exportFormatDropdown: "button.download__dropdown__btn",
   exportFormatOptions: {
-    obj: '.download__dropdown li.t-dropdown__item:has-text("OBJ")',
-    glb: '.download__dropdown li.t-dropdown__item:has-text("GLB")'
+    obj: hunyuanExportOptionSelector("OBJ"),
+    glb: hunyuanExportOptionSelector("GLB")
   },
   downloadReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download),
   downloadButton: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download)
 };
 
 export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG: HunyuanSelectorConfig = {
-  loginReadySelector: `label.t-radio-button:has-text("${HUNYUAN_GLOBAL_TEXT.imageTo3d}")`,
-  loginRequiredSelector: `button.login-btn:has-text("${HUNYUAN_GLOBAL_TEXT.login}"), input[placeholder*="email" i]`,
+  loginStartSelector: "button, a, [role='button']",
+  loginStartText: HUNYUAN_GLOBAL_TEXT.login,
+  loginReadySelector: "",
+  loginReadyText: HUNYUAN_GLOBAL_TEXT.imageTo3d,
+  loginRequiredSelector: `input[type="email"], input[placeholder*="email" i]`,
   loginRequiredText: HUNYUAN_GLOBAL_TEXT.emailLogin,
+  quotaExhaustedPopupText: "",
+  quotaExhaustedPopupCloseButton: "",
   imageTo3dTab: `label.t-radio-button:has-text("${HUNYUAN_GLOBAL_TEXT.imageTo3d}")`,
   multipleImagesTab: `text=/${HUNYUAN_GLOBAL_TEXT.multipleImages}/i`,
   addMultipleViewsButton: ".hy-multiple-views-upload-v2",
@@ -260,8 +297,8 @@ export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG: HunyuanSelectorConfig = {
   autoRigReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download),
   exportFormatDropdown: "button.download__dropdown__btn",
   exportFormatOptions: {
-    obj: '.download__dropdown li.t-dropdown__item:has-text("OBJ")',
-    glb: '.download__dropdown li.t-dropdown__item:has-text("GLB")'
+    obj: hunyuanExportOptionSelector("OBJ"),
+    glb: hunyuanExportOptionSelector("GLB")
   },
   downloadReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download),
   downloadButton: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download)
@@ -359,11 +396,75 @@ export function inferHunyuanArtifactKind(filePath: string, inferMimeType: (fileP
   return inferMimeType(filePath)?.startsWith("model/") ? "model" : "download";
 }
 
+export function discoverHunyuanModelAssets(assetDir: string): HunyuanModelAssetDiscovery {
+  const extractedFiles = listFiles(assetDir);
+  const objPaths = extractedFiles.filter((filePath) => path.extname(filePath).toLowerCase() === ".obj");
+  if (objPaths.length === 0) {
+    throw new Error("The Hunyuan archive did not contain an OBJ file.");
+  }
+  if (objPaths.length > 1) {
+    throw new Error(`The Hunyuan archive contained multiple OBJ files: ${objPaths.map((filePath) => path.basename(filePath)).join(", ")}`);
+  }
+
+  const objPath = objPaths[0];
+  const modelAssetDir = path.dirname(objPath);
+  const siblingFiles = fs
+    .readdirSync(modelAssetDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(modelAssetDir, entry.name));
+  const mtlPath = siblingFiles.find((filePath) => path.extname(filePath).toLowerCase() === ".mtl");
+  const textureFileNames = siblingFiles
+    .filter((filePath) => HUNYUAN_TEXTURE_EXTENSIONS.has(path.extname(filePath).toLowerCase()))
+    .map((filePath) => path.basename(filePath))
+    .sort();
+
+  return {
+    assetDir: modelAssetDir,
+    objPath,
+    objFileName: path.basename(objPath),
+    ...(mtlPath ? { mtlFileName: path.basename(mtlPath) } : {}),
+    textureFileNames,
+    assetFileNames: siblingFiles.map((filePath) => path.basename(filePath)).sort()
+  };
+}
+
+function listFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) return listFiles(entryPath);
+    return entry.isFile() ? [entryPath] : [];
+  });
+}
+
+export function resolveHunyuanExportFormat(
+  requested: HunyuanExportFormat,
+  availableOptions: string[]
+): HunyuanExportFormatResolution {
+  const normalizedOptions = new Set(availableOptions.map((option) => option.trim().toUpperCase()).filter(Boolean));
+  const requestedLabel = requested.toUpperCase();
+
+  if (normalizedOptions.size === 0 || normalizedOptions.has(requestedLabel)) {
+    return { requested, actual: requested, availableOptions };
+  }
+
+  if (requested !== "obj" && normalizedOptions.has("OBJ")) {
+    return {
+      requested,
+      actual: "obj",
+      availableOptions,
+      fallbackReason: `Requested ${requestedLabel} export was not visible; using OBJ because Hunyuan offered it.`
+    };
+  }
+
+  return { requested, actual: requested, availableOptions };
+}
+
 export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
   const { z } = sdk.schema;
   const { launchPersistentProfile, saveScreenshot, startTrace, stopTrace, timeoutMinutes } = sdk.browser;
   const { WorkflowConfigurationError } = sdk.errors;
-  const { inferMimeType, writeJson } = sdk.files;
+  const { extractZip, inferMimeType, writeJson } = sdk.files;
   const browserExtension = sdk.extension.browser;
 
   const stringSelectorSchema = z.preprocess(
@@ -406,10 +507,14 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
   const selectorsSchema = z
     .object({
       imageTo3dTab: stringSelectorSchema,
+      loginStartSelector: stringSelectorSchema,
+      loginStartText: stringSelectorSchema,
       loginReadySelector: stringSelectorSchema,
       loginReadyText: stringSelectorSchema,
       loginRequiredSelector: stringSelectorSchema,
       loginRequiredText: stringSelectorSchema,
+      quotaExhaustedPopupText: stringSelectorSchema,
+      quotaExhaustedPopupCloseButton: stringSelectorSchema,
       multipleImagesTab: stringSelectorSchema,
       addMultipleViewsButton: stringSelectorSchema,
       multipleViewsConfirmButton: stringSelectorSchema,
@@ -493,7 +598,8 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       mode: z.literal("new"),
       routingToken: z.string().trim().min(1),
       url: z.string().optional(),
-      title: z.string().optional()
+      title: z.string().optional(),
+      openMode: z.enum(["window", "tab"]).optional().default("window")
     })
   ]);
 
@@ -634,6 +740,13 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
           }
         }
 
+        if (await dismissHunyuanQuotaPopup(page, selectors)) {
+          await ctx.event("hunyuan.quota-popup-dismissed", "Dismissed Hunyuan quota/invite popup after page load.", {
+            phase: "startup",
+            text: selectors.quotaExhaustedPopupText
+          });
+        }
+
         const missingSelectors = missingHunyuanSelectorKeys({ ...input, selectors });
         if (missingSelectors.length > 0) {
           const screenshot = await saveScreenshot(page, ctx.artifactDir, "hunyuan-selector-calibration.png");
@@ -709,8 +822,12 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
 
         await ctx.step("Starting geometry generation", 35);
         try {
-          await clickHunyuanGenerateButton(page, selectors.generateButton!, 120_000);
-          await waitForHunyuanGenerationStarted(page, selectors, 60_000);
+          await startHunyuanGeometryGeneration(page, selectors, async (data) => {
+            await ctx.waitForManualAction(
+              "Hunyuan reports that generation quota is exhausted. Add generation quota, switch account, or resolve the account check in the browser, then resume this run.",
+              data
+            );
+          });
           recordPhase("geometry-started", { url: page.url() });
         } catch (error) {
           const screenshot = await saveScreenshot(page, ctx.artifactDir, "hunyuan-generate-calibration.png");
@@ -802,24 +919,146 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
         if (hasSelector(selectors.downloadReadySelector) || hasSelector(selectors.downloadReadyText)) {
           await waitForHunyuanReady(page, selectors.downloadReadySelector, selectors.downloadReadyText, timeoutMinutes(input.timeoutMinutes));
         }
-        await clickSelector(page, selectors.exportFormatDropdown!);
-        await clickSelector(page, selectors.exportFormatOptions![input.exportFormat]!);
+        let exportSelection: HunyuanExportFormatResolution;
+        try {
+          exportSelection = await selectHunyuanExportFormat(page, selectors, input.exportFormat);
+          if (exportSelection.fallbackReason) {
+            await ctx.event("hunyuan.export-format-fallback", exportSelection.fallbackReason, {
+              requestedExportFormat: exportSelection.requested,
+              actualExportFormat: exportSelection.actual,
+              availableOptions: exportSelection.availableOptions
+            });
+          }
+          recordPhase("export-format-selected", {
+            requestedExportFormat: exportSelection.requested,
+            actualExportFormat: exportSelection.actual,
+            availableOptions: exportSelection.availableOptions,
+            fallbackReason: exportSelection.fallbackReason
+          });
+        } catch (error) {
+          const screenshot = await saveScreenshot(page, ctx.artifactDir, "hunyuan-export-calibration.png");
+          const screenshotArtifact = await ctx.addArtifact({
+            kind: "screenshot",
+            name: path.basename(screenshot),
+            path: screenshot,
+            mimeType: "image/png",
+            metadata: {
+              source: site.source,
+              phase: "export",
+              requestedExportFormat: input.exportFormat
+            }
+          });
+          artifactIds.push(screenshotArtifact.id);
+          throw new WorkflowConfigurationError(
+            `Hunyuan export format selection failed. Saved calibration screenshot artifact ${screenshotArtifact.id}. ${formatErrorMessage(error)}`
+          );
+        }
 
         await ctx.step("Downloading result", 94);
         const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
         await clickHunyuanActionButton(page, selectors.downloadButton!, "downloadButton", 120_000);
         const download = await downloadPromise;
-        const targetPath = path.join(ctx.artifactDir, download.suggestedFilename());
+        const targetPath = path.join(ctx.artifactDir, path.basename(download.suggestedFilename()));
         await download.saveAs(targetPath);
-        const modelArtifact = await ctx.addArtifact({
-          kind: inferHunyuanArtifactKind(targetPath, inferMimeType),
-          name: path.basename(targetPath),
+        const downloadedModel = {
           path: targetPath,
+          filename: path.basename(targetPath),
           mimeType: inferMimeType(targetPath),
-          metadata: { source: site.source, pageUrl: page.url(), exportFormat: input.exportFormat, phases: phaseEvents }
-        });
+          exportFormat: exportSelection.actual,
+          requestedExportFormat: exportSelection.requested
+        };
+        recordPhase("downloaded", downloadedModel);
+
+        let modelManifest: Record<string, unknown>;
+        let modelArtifact: { id: string };
+        try {
+          if (exportSelection.actual === "obj" && path.extname(targetPath).toLowerCase() === ".zip") {
+            await ctx.step("Unpacking model archive", 96, { filename: downloadedModel.filename });
+            const extractDir = path.join(ctx.artifactDir, HUNYUAN_MODEL_ASSET_DIR_NAME);
+            fs.rmSync(extractDir, { recursive: true, force: true });
+            await extractZip(targetPath, extractDir);
+            const modelAssets = discoverHunyuanModelAssets(extractDir);
+            recordPhase("archive-unpacked", {
+              assetDir: modelAssets.assetDir,
+              objFileName: modelAssets.objFileName,
+              mtlFileName: modelAssets.mtlFileName,
+              textureFileNames: modelAssets.textureFileNames
+            });
+            fs.unlinkSync(targetPath);
+            modelManifest = {
+              format: "obj",
+              artifactPath: modelAssets.objPath,
+              assetDir: modelAssets.assetDir,
+              objFileName: modelAssets.objFileName,
+              mtlFileName: modelAssets.mtlFileName,
+              textureFileNames: modelAssets.textureFileNames,
+              assetFileNames: modelAssets.assetFileNames,
+              originalArchive: { ...downloadedModel, deleted: true }
+            };
+            modelArtifact = await ctx.addArtifact({
+              kind: "model",
+              name: modelAssets.objFileName,
+              path: modelAssets.objPath,
+              mimeType: inferMimeType(modelAssets.objPath),
+              metadata: {
+                source: site.source,
+                pageUrl: page.url(),
+                modelFormat: "obj",
+                objFileName: modelAssets.objFileName,
+                mtlFileName: modelAssets.mtlFileName,
+                textureFileNames: modelAssets.textureFileNames,
+                assetFileNames: modelAssets.assetFileNames,
+                originalArchive: { ...downloadedModel, deleted: true },
+                requestedExportFormat: exportSelection.requested,
+                exportFormat: exportSelection.actual,
+                phases: phaseEvents
+              }
+            });
+          } else {
+            modelManifest = {
+              format: exportSelection.actual,
+              artifactPath: targetPath,
+              filename: path.basename(targetPath),
+              mimeType: inferMimeType(targetPath),
+              originalDownload: downloadedModel
+            };
+            modelArtifact = await ctx.addArtifact({
+              kind: inferHunyuanArtifactKind(targetPath, inferMimeType),
+              name: path.basename(targetPath),
+              path: targetPath,
+              mimeType: inferMimeType(targetPath),
+              metadata: {
+                source: site.source,
+                pageUrl: page.url(),
+                modelFormat: exportSelection.actual,
+                requestedExportFormat: exportSelection.requested,
+                exportFormat: exportSelection.actual,
+                phases: phaseEvents
+              }
+            });
+          }
+        } catch (error) {
+          const downloadArtifact = await ctx.addArtifact({
+            kind: "download",
+            name: path.basename(targetPath),
+            path: targetPath,
+            mimeType: inferMimeType(targetPath),
+            metadata: {
+              source: site.source,
+              pageUrl: page.url(),
+              requestedExportFormat: exportSelection.requested,
+              exportFormat: exportSelection.actual,
+              extractionError: formatErrorMessage(error),
+              phases: phaseEvents
+            }
+          });
+          artifactIds.push(downloadArtifact.id);
+          throw new WorkflowConfigurationError(
+            `Hunyuan model archive extraction failed. Kept downloaded artifact ${downloadArtifact.id}. ${formatErrorMessage(error)}`
+          );
+        }
         artifactIds.push(modelArtifact.id);
-        recordPhase("downloaded", { targetPath, artifactId: modelArtifact.id });
+        recordPhase("model-artifact-registered", { artifactId: modelArtifact.id });
 
         const manifestPath = path.join(ctx.artifactDir, "hunyuan-image-to-model-manifest.json");
         writeJson(manifestPath, {
@@ -833,15 +1072,15 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
             retopologyType: input.retopologyType,
             generateTexture: input.generateTexture,
             autoRig: input.autoRig,
-            exportFormat: input.exportFormat
+            exportFormat: exportSelection.actual,
+            requestedExportFormat: exportSelection.requested
           },
           phases: phaseEvents,
-          download: {
+          model: {
             artifactId: modelArtifact.id,
-            path: targetPath,
-            filename: path.basename(targetPath),
-            mimeType: inferMimeType(targetPath)
-          }
+            ...modelManifest
+          },
+          download: downloadedModel
         });
         const manifestArtifact = await ctx.addArtifact({
           kind: "json",
@@ -938,7 +1177,8 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       async run(input, ctx) {
         const selectors = mergeHunyuanSelectorConfig(input.selectors, DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG);
         const loginSelectors = {
-          startUsingButton: selectors.loginRequiredSelector,
+          startUsingSelector: selectors.loginStartSelector,
+          startUsingText: selectors.loginStartText,
           loginReadySelector: selectors.loginReadySelector,
           loginReadyText: selectors.loginReadyText,
           imageTo3dTab: selectors.imageTo3dTab,
@@ -951,6 +1191,19 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
             target: redactHunyuanTarget(input.extensionTab),
             attempt
           });
+
+          const extensionStatus = typeof browserExtension.status === "function" ? normalizeRecord(browserExtension.status()) : {};
+          if (Number(extensionStatus.compatible ?? 0) > 0 && Number(extensionStatus.compatibleControllers ?? 0) === 0) {
+            await ctx.step(
+              "BLINK extension tabs are connected, but the browser controller is not connected. Open the BLINK extension popup in the intended Chrome profile until it reports at least 1 browser controller. Do not open chrome.exe or paste the routed URL into another profile.",
+              8,
+              {
+                phase: "extension-controller",
+                extensionStatus,
+                target: redactHunyuanTarget(input.extensionTab)
+              }
+            );
+          }
 
           try {
             await browserExtension.ensureRoutedTab(input.extensionTab, { signal: ctx.signal, timeoutMs: 45_000 });
@@ -1025,9 +1278,28 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
         };
       }
 
-      if (!startUsingClicked && selectors.startUsingButton && (await extensionSelectorVisible(target, selectors.startUsingButton, signal))) {
-        await browserExtension.action(target, { kind: "click", selector: selectors.startUsingButton }, { signal, timeoutMs: 30_000 });
-        startUsingClicked = true;
+      if (
+        !startUsingClicked &&
+        selectors.startUsingSelector &&
+        selectors.startUsingText &&
+        (await extensionTextPresent(target, selectors.startUsingText, signal))
+      ) {
+        try {
+          await browserExtension.action(
+            target,
+            {
+              kind: "click",
+              selector: selectors.startUsingSelector,
+              text: selectors.startUsingText,
+              textMatch: "contains",
+              caseSensitive: false
+            },
+            { signal, timeoutMs: 30_000 }
+          );
+          startUsingClicked = true;
+        } catch {
+          // The landing page can re-render while the button is appearing. Keep polling until the login checkpoint is visible.
+        }
       }
 
       await new Promise<void>((resolve, reject) => {
@@ -1113,6 +1385,184 @@ function mergeSelectorRecord<T extends string>(
 
 async function clickSelector(page: any, selector: string): Promise<void> {
   await page.locator(selector).first().click();
+}
+
+async function startHunyuanGeometryGeneration(
+  page: any,
+  selectors: HunyuanSelectorConfig,
+  waitForQuotaResolution: (data: Record<string, unknown>) => Promise<void>
+): Promise<void> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await dismissHunyuanQuotaPopup(page, selectors);
+
+    try {
+      await clickHunyuanGenerateButton(page, selectors.generateButton!, 120_000);
+      await waitForHunyuanGenerationStarted(page, selectors, 60_000);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!(await isHunyuanQuotaPopupVisible(page, selectors))) throw error;
+
+      await waitForQuotaResolution({
+        phase: "generation-quota",
+        url: page.url(),
+        attempt,
+        quotaExhaustedPopupText: selectors.quotaExhaustedPopupText,
+        reason: "Hunyuan showed the generation quota exhausted popup."
+      });
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(formatErrorMessage(lastError));
+}
+
+export async function dismissHunyuanQuotaPopup(page: any, selectors: HunyuanSelectorConfig): Promise<boolean> {
+  if (!(await isHunyuanQuotaPopupVisible(page, selectors))) return false;
+
+  if (hasSelector(selectors.quotaExhaustedPopupCloseButton)) {
+    try {
+      await clickVisibleHunyuanControl(page, selectors.quotaExhaustedPopupCloseButton, "quotaExhaustedPopupCloseButton");
+      await waitForHunyuanQuotaPopupHidden(page, selectors, 2_000);
+      return true;
+    } catch {
+      // Fall through to DOM dispatch fallback; some Hunyuan close icons are SVG-only controls.
+    }
+  }
+
+  const text = selectors.quotaExhaustedPopupText;
+  if (!hasSelector(text)) return false;
+
+  const clicked = await page.evaluate((needle: string) => {
+    const isVisible = (element: Element): boolean => {
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+    };
+    const roots = Array.from(document.querySelectorAll(".invite-tooltip-full, .invite-tooltip-content, .t-popup, [class*='tooltip']"));
+    const root = roots.find((candidate) => isVisible(candidate) && (candidate.textContent ?? "").includes(needle));
+    const closeControl = root?.querySelector<HTMLElement | SVGElement>(".t-icon-close, [class*='close']");
+    if (!closeControl) return false;
+    closeControl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    return true;
+  }, text);
+
+  if (clicked) {
+    await waitForHunyuanQuotaPopupHidden(page, selectors, 2_000);
+    return true;
+  }
+
+  return false;
+}
+
+async function isHunyuanQuotaPopupVisible(page: any, selectors: HunyuanSelectorConfig): Promise<boolean> {
+  if (hasSelector(selectors.quotaExhaustedPopupText) && (await hasVisibleText(page, selectors.quotaExhaustedPopupText))) {
+    return true;
+  }
+  if (hasSelector(selectors.quotaExhaustedPopupCloseButton)) {
+    const closeLocator = page.locator(selectors.quotaExhaustedPopupCloseButton);
+    const count = await safeLocatorCount(closeLocator);
+    for (let index = 0; index < count; index += 1) {
+      if (await safeIsVisible(closeLocator.nth(index))) return true;
+    }
+  }
+  return false;
+}
+
+async function waitForHunyuanQuotaPopupHidden(page: any, selectors: HunyuanSelectorConfig, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await isHunyuanQuotaPopupVisible(page, selectors))) return;
+    await safeWaitForTimeout(page, 100);
+  }
+}
+
+async function selectHunyuanExportFormat(
+  page: any,
+  selectors: HunyuanSelectorConfig,
+  requested: HunyuanExportFormat
+): Promise<HunyuanExportFormatResolution> {
+  if (!hasSelector(selectors.exportFormatDropdown)) {
+    throw new Error("Hunyuan export format dropdown selector is not configured.");
+  }
+
+  await clickVisibleHunyuanControl(page, selectors.exportFormatDropdown, "exportFormatDropdown");
+  const availableOptions = await collectVisibleHunyuanExportOptions(page);
+  const resolution = resolveHunyuanExportFormat(requested, availableOptions);
+  const selected = await tryClickHunyuanExportOption(page, selectors, resolution.actual);
+  if (selected) return resolution;
+
+  if (requested !== "obj" && resolution.actual !== "obj") {
+    const fallbackSelected = await tryClickHunyuanExportOption(page, selectors, "obj");
+    if (fallbackSelected) {
+      return {
+        requested,
+        actual: "obj",
+        availableOptions,
+        fallbackReason: `Requested ${requested.toUpperCase()} export could not be clicked; using OBJ fallback.`
+      };
+    }
+  }
+
+  throw new Error(
+    `Hunyuan export format ${requested.toUpperCase()} could not be selected. ` +
+      `actualAttempt=${resolution.actual.toUpperCase()}; availableOptions=${formatHunyuanExportOptions(availableOptions)}; ` +
+      `requestedSelector=${selectors.exportFormatOptions?.[requested] ?? ""}; objSelector=${selectors.exportFormatOptions?.obj ?? ""}`
+  );
+}
+
+async function tryClickHunyuanExportOption(
+  page: any,
+  selectors: HunyuanSelectorConfig,
+  format: HunyuanExportFormat
+): Promise<boolean> {
+  const optionSelector = selectors.exportFormatOptions?.[format] ?? hunyuanExportOptionSelector(format.toUpperCase());
+  if (!hasSelector(optionSelector)) return false;
+
+  try {
+    await clickVisibleHunyuanControl(page, optionSelector, `exportFormatOptions.${format}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function collectVisibleHunyuanExportOptions(page: any): Promise<string[]> {
+  try {
+    return await page.evaluate(() => {
+      const selectors = [
+        ".download__dropdown li.t-dropdown__item",
+        ".t-popup li.t-dropdown__item",
+        ".t-dropdown__menu li.t-dropdown__item",
+        "li.t-dropdown__item",
+        "[role='menuitem']"
+      ];
+      const elements: Element[] = [];
+      for (const selector of selectors) {
+        for (const element of Array.from(document.querySelectorAll(selector))) {
+          if (!elements.includes(element)) elements.push(element);
+        }
+      }
+
+      const isVisible = (element: Element): boolean => {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+      };
+
+      return elements
+        .filter(isVisible)
+        .map((element) => (element.textContent ?? "").trim())
+        .filter((text, index, all) => text.length > 0 && all.indexOf(text) === index);
+    });
+  } catch {
+    return [];
+  }
+}
+
+function formatHunyuanExportOptions(options: string[]): string {
+  return options.length > 0 ? options.join(", ") : "(none detected)";
 }
 
 const HUNYUAN_GENERATE_BUTTON_READY_SELECTOR = `.sideBarLeft-generateBtn:not(.t-is-disabled):not([disabled]):has-text("${HUNYUAN_TEXT.generate}")`;
@@ -1495,23 +1945,23 @@ function formatErrorMessage(error: unknown): string {
 function hunyuanControllerManualMessage(error: unknown): string {
   const message = formatErrorMessage(error);
   if (/controller/i.test(message)) {
-    return "Reload or install the Based BLINK browser extension in the intended browser profile, open any page or the extension popup so the controller connects, then resume this run.";
+    return `The BLINK browser controller for the intended Chrome profile is not connected. Do not open chrome.exe or paste the routed Hunyuan Global URL into another Chrome profile; that bypasses the BLINK extension controller and can open the wrong profile. Open the BLINK extension popup in the Chrome profile that has the unpacked BLINK extension, wait until it reports at least 1 browser controller, then resume this run. ${message}`;
   }
-  return "The Based BLINK browser controller could not open or connect to the routed Hunyuan Global tab. Reload the extension in the intended browser profile, then resume this run.";
+  return `The Based BLINK browser controller opened Hunyuan Global but could not connect to the routed page. Do not open chrome.exe or paste the routed URL into another Chrome profile. Confirm the extension has site access for 3d.hunyuanglobal.com in the controller-owned window, open the BLINK extension popup in that profile, refresh the opened Hunyuan page, then resume this run. ${message}`;
 }
 
 function createDefaultHunyuanGlobalTab(): HunyuanExtensionTabTarget {
   const routingToken = randomUUID();
   const url = new URL(HUNYUAN_GLOBAL_TARGET_URL);
   url.hash = `${ROUTING_TOKEN_PARAM}=${encodeURIComponent(routingToken)}`;
-  return { mode: "new", routingToken, url: url.toString() };
+  return { mode: "new", routingToken, url: url.toString(), openMode: "window" };
 }
 
 function redactHunyuanTarget(target: HunyuanExtensionTabTarget): Record<string, unknown> {
   return {
     mode: target.mode,
     ...(target.mode === "existing" ? { clientId: target.clientId, url: target.url, title: target.title } : {}),
-    ...(target.mode === "new" ? { routingToken: target.routingToken, url: target.url, title: target.title } : {})
+    ...(target.mode === "new" ? { routingToken: target.routingToken, url: target.url, title: target.title, openMode: target.openMode } : {})
   };
 }
 

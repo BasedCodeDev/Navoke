@@ -48,6 +48,18 @@ export interface WorkflowSdk {
   schema: { z: typeof zod.z };
   extension: {
     browser: {
+      status?(): {
+        compatible: number;
+        compatibleControllers: number;
+        connectedClients?: ExtensionClientStatus[];
+        connectedControllers?: Array<{
+          id: string;
+          compatible: boolean;
+          capabilities?: string[];
+          incompatibilityReason?: string;
+        }>;
+        controllerDiagnostics?: Record<string, unknown>;
+      };
       findCompatibleClientForTarget(target: ExtensionBrowserTarget): ExtensionClientStatus | undefined;
       ensureRoutedTab(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ExtensionClientStatus>;
       openTab(url: string, options?: { active?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
@@ -66,10 +78,10 @@ export interface WorkflowSdk {
       profileName: string;
       headless?: boolean;
     }): Promise<any>;
-    saveScreenshot(page: any, artifactDir: string, name: string): Promise<string>;
-    startTrace(context: any, artifactDir: string): Promise<string>;
-    stopTrace(context: any, tracePath: string): Promise<void>;
-    timeoutMinutes(minutes: number): number;
+      saveScreenshot(page: any, artifactDir: string, name: string): Promise<string>;
+      startTrace(context: any, artifactDir: string): Promise<string>;
+      stopTrace(context: any, tracePath: string): Promise<void>;
+      timeoutMinutes(minutes: number): number;
   };
   errors: {
     WorkflowConfigurationError: typeof Error;
@@ -77,13 +89,14 @@ export interface WorkflowSdk {
   files: {
     inferMimeType(filePath: string): string | null;
     writeJson(filePath: string, value: unknown): void;
+    extractZip(zipPath: string, targetDir: string): Promise<void>;
   };
 }
 
 export type ExtensionBrowserTarget =
-  | { mode: "any" }
-  | { mode: "existing"; clientId: string; url?: string; title?: string }
-  | { mode: "new"; routingToken: string; url?: string; title?: string };
+    | { mode: "any" }
+    | { mode: "existing"; clientId: string; url?: string; title?: string }
+    | { mode: "new"; routingToken: string; url?: string; title?: string; openMode?: "window" | "tab" };
 
 export interface ExtensionClientStatus {
   id: string;
@@ -93,6 +106,12 @@ export interface ExtensionClientStatus {
   protocolVersion: number | null;
   extensionVersion: string;
   routingToken?: string;
+  controllerId?: string;
+  tabId?: number;
+  windowId?: number;
+  controllerHeartbeatOk?: boolean;
+  controllerHeartbeatAt?: string;
+  controllerHeartbeatError?: string;
   compatible: boolean;
   incompatibilityReason?: string;
   lastSeenAt: string;

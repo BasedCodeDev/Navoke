@@ -11,7 +11,12 @@ describe("ExtensionBridge", () => {
       protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       url: "https://example.test/#based-blink-tab=route-1",
-      title: "Example"
+      title: "Example",
+      controllerId: "controller-1",
+      tabId: 42,
+      windowId: 7,
+      controllerHeartbeatOk: true,
+      controllerHeartbeatAt: "2026-05-05T00:00:00.000Z"
     });
     bridge.heartbeat({
       clientId: "stale-tab",
@@ -25,9 +30,14 @@ describe("ExtensionBridge", () => {
       connected: 2,
       compatible: 1,
       incompatible: 1,
+      controllerDiagnostics: expect.objectContaining({
+        compatibleTabsWithController: 1,
+        compatibleTabsWithoutController: 0,
+        latestControllerHeartbeatOk: true
+      }),
       clients: expect.arrayContaining([
         expect.objectContaining({ compatible: false, incompatibilityReason: expect.stringContaining("protocol 4") }),
-        expect.objectContaining({ compatible: true })
+        expect.objectContaining({ compatible: true, controllerId: "controller-1", tabId: 42, windowId: 7 })
       ])
     });
     expect(bridge.findCompatibleClientForTarget({ mode: "new", routingToken: "route-1" })).toMatchObject({
@@ -231,12 +241,20 @@ describe("ExtensionBridge", () => {
 
   it("fails routed tab opening when no compatible browser controller is connected", async () => {
     const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      clientId: "tab-1",
+      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/",
+      controllerHeartbeatOk: false,
+      controllerHeartbeatError: "background controller failed"
+    });
     await expect(
       bridge.ensureRoutedTab({
         target: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" },
         timeoutMs: 1_000
       })
-    ).rejects.toThrow(/No compatible BLINK browser controller/);
+    ).rejects.toThrow(/Do not open chrome\.exe/);
   });
 
   it("keeps a routed tab matched after the page removes the routing token from its URL", () => {

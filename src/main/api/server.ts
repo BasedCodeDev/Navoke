@@ -1,6 +1,7 @@
 import http, { type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import fs from "node:fs";
+import path from "node:path";
 import cors from "cors";
 import express from "express";
 import type { ExtensionBridge } from "../extension/extensionBridge";
@@ -8,9 +9,15 @@ import type { SqliteStore } from "../db/sqliteStore";
 import type { PluginManager } from "../plugins/pluginManager";
 import type { LocalWorkflowRunner } from "../runtime/localWorkflowRunner";
 import type { RuntimeEventBus } from "../runtime/eventBus";
-import type { PublicWorkflow, RuntimePaths, WorkflowRegistration, WorkflowRegistry } from "../runtime/types";
+import type { PublicWorkflow, RuntimePaths, WorkflowLibraryEntry, WorkflowRegistration, WorkflowRegistry } from "../runtime/types";
 import type { WorkflowLab, WorkflowLabAction } from "../lab/workflowLab";
 import type { LabWaitCondition } from "../lab/waitConditions";
+import { inferMimeType } from "../utils/files";
+import {
+  createWorkflowLibraryEntryFromRun,
+  deleteWorkflowLibraryEntry,
+  mergeLibraryInput
+} from "../runtime/workflowLibrary";
 
 interface ApiServerOptions {
   store: SqliteStore;
@@ -143,6 +150,74 @@ export class ApiServer {
       res.json({ files: paths.map(validateLocalFilePath) });
     });
 
+    app.get("/api/library", (_req, res) => {
+      res.json(this.options.store.listWorkflowLibraryEntries());
+    });
+
+    app.get("/api/library/:id", (req, res) => {
+      const entry = this.options.store.getWorkflowLibraryEntry(req.params.id);
+      if (!entry) {
+        res.status(404).json({ error: "Workflow library entry not found" });
+        return;
+      }
+      res.json(entry);
+    });
+
+    app.post("/api/library/from-run", (req, res, next) => {
+      try {
+        const entry = createWorkflowLibraryEntryFromRun({
+          store: this.options.store,
+          paths: this.options.paths,
+          workflows: this.options.workflows,
+          runId: String(req.body?.runId ?? ""),
+          name: typeof req.body?.name === "string" ? req.body.name : undefined
+        });
+        res.status(201).json(entry);
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.patch("/api/library/:id", (req, res, next) => {
+      try {
+        const name = String(req.body?.name ?? "").trim();
+        if (!name) throw new Error("Library entry name is required.");
+        res.json(this.options.store.updateWorkflowLibraryEntry(req.params.id, { name }));
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.delete("/api/library/:id", (req, res, next) => {
+      try {
+        deleteWorkflowLibraryEntry({ store: this.options.store, paths: this.options.paths, entryId: req.params.id });
+        res.json({ id: req.params.id, deleted: true });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post("/api/library/:id/runs", (req, res, next) => {
+      try {
+        const entry = this.options.store.getWorkflowLibraryEntry(req.params.id);
+        if (!entry) {
+          res.status(404).json({ error: "Workflow library entry not found" });
+          return;
+        }
+        assertWorkflowLibraryEntryIsRunnable(entry, this.options.workflows);
+        const workflowInput = mergeLibraryInput(entry.input, req.body?.inputOverrides);
+        const run = this.options.runner.enqueue({
+          workflowId: entry.workflowId,
+          name: typeof req.body?.name === "string" ? req.body.name : entry.name,
+          workflowInput,
+          origin: req.body?.origin
+        });
+        res.status(201).json(run);
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.get("/api/runs", (_req, res) => {
       res.json(this.options.store.listRuns());
     });
@@ -252,6 +327,26 @@ export class ApiServer {
         return;
       }
       res.download(artifact.path, artifact.name);
+    });
+
+    app.get("/api/artifacts/:id/assets/*", (req, res, next) => {
+      try {
+        const artifact = this.options.store.getArtifact(req.params.id);
+        if (!artifact || !fs.existsSync(artifact.path)) {
+          res.status(404).json({ error: "Artifact not found" });
+          return;
+        }
+        const requestedAssetPath = (req.params as Record<string, string | undefined>)[0] ?? "";
+        const assetPath = resolveArtifactAssetPath(artifact.path, requestedAssetPath);
+        if (!fs.existsSync(assetPath) || !fs.statSync(assetPath).isFile()) {
+          res.status(404).json({ error: "Artifact asset not found" });
+          return;
+        }
+        res.type(inferMimeType(assetPath) ?? "application/octet-stream");
+        res.sendFile(assetPath);
+      } catch (error) {
+        next(error);
+      }
     });
 
     app.get("/api/events", (req, res) => {
@@ -534,6 +629,29 @@ function getRunInputFilePath(input: unknown, field: string, index: number): stri
   return typeof filePath === "string" ? filePath : undefined;
 }
 
+export function resolveArtifactAssetPath(artifactPath: string, requestedRelativePath: string): string {
+  if (!requestedRelativePath || requestedRelativePath.includes("\0")) {
+    throw new Error("Artifact asset path is required.");
+  }
+  const assetRoot = path.dirname(path.resolve(artifactPath));
+  const candidate = path.resolve(assetRoot, requestedRelativePath.replace(/\\/g, "/"));
+  if (!isSameOrChildPath(assetRoot, candidate)) {
+    throw new Error("Artifact asset path is outside the artifact directory.");
+  }
+  return candidate;
+}
+
+function isSameOrChildPath(parent: string, candidate: string): boolean {
+  const parentKey = pathComparisonKey(parent);
+  const candidateKey = pathComparisonKey(candidate);
+  return candidateKey === parentKey || candidateKey.startsWith(`${parentKey}${path.sep}`);
+}
+
+function pathComparisonKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 function validateLocalFilePath(filePath: string): {
   path: string;
   exists: boolean;
@@ -573,4 +691,19 @@ function publicWorkflow(registration: WorkflowRegistration): PublicWorkflow {
     plugin: registration.plugin,
     availability: { status: "available" }
   };
+}
+
+function assertWorkflowLibraryEntryIsRunnable(entry: WorkflowLibraryEntry, workflows: WorkflowRegistry): void {
+  const registration = workflows.get(entry.workflowId);
+  if (!registration) throw new Error(`The workflow plugin for this library entry is not installed: ${entry.workflowId}.`);
+  if (!entry.pluginId || !entry.pluginVersion) return;
+
+  const plugin = registration.plugin;
+  if (plugin.id === entry.pluginId && plugin.version === entry.pluginVersion && plugin.apiVersion === (entry.pluginApiVersion ?? plugin.apiVersion)) {
+    return;
+  }
+
+  throw new Error(
+    `This library entry needs ${entry.pluginId}@${entry.pluginVersion}, but ${plugin.id}@${plugin.version} is installed.`
+  );
 }

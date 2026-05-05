@@ -124,6 +124,50 @@ describe("generic browser extension background controller", () => {
       harness.sendRuntimeMessage({ type: "current-tab-info" }, { tab: { id: 42, windowId: 7 } })
     ).resolves.toMatchObject({ ok: true, controllerId: "controller-id", tabId: 42, windowId: 7 });
   });
+
+  it("surfaces controller heartbeat success through runtime messages", async () => {
+    const harness = loadBackgroundHarness({
+      tabsCreate: async () => ({ id: 1 }),
+      fetch: async (url) =>
+        url.includes("/commands/next")
+          ? { status: 204, ok: true, text: async () => "" }
+          : {
+              status: 200,
+              ok: true,
+              text: async () => JSON.stringify({ ok: true, compatible: true, controllerId: "controller-id", requiredProtocolVersion: 4 })
+            }
+    });
+
+    await expect(harness.sendRuntimeMessage({ type: "controller-heartbeat" })).resolves.toMatchObject({
+      ok: true,
+      controllerHeartbeat: {
+        ok: true,
+        controllerId: "controller-id",
+        compatible: true,
+        capabilities: ["open-tab", "open-window", "focus-tab"]
+      }
+    });
+  });
+
+  it("surfaces controller heartbeat failures through runtime messages", async () => {
+    const harness = loadBackgroundHarness({
+      tabsCreate: async () => ({ id: 1 }),
+      fetch: async () => ({
+        status: 500,
+        ok: false,
+        text: async () => JSON.stringify({ error: "BLINK app is down" })
+      })
+    });
+
+    await expect(harness.sendRuntimeMessage({ type: "controller-heartbeat" })).resolves.toMatchObject({
+      ok: false,
+      controllerHeartbeat: {
+        ok: false,
+        error: "BLINK app is down",
+        capabilities: ["open-tab", "open-window", "focus-tab"]
+      }
+    });
+  });
 });
 
 function loadBackgroundHarness(options: {
@@ -133,8 +177,10 @@ function loadBackgroundHarness(options: {
   windowsCreate?: (input: unknown) => Promise<unknown>;
   windowsUpdate?: (windowId: number, input: unknown) => Promise<unknown>;
   scriptingExecuteScript?: (input: unknown) => Promise<unknown>;
+  fetch?: (url: string, options?: unknown) => Promise<{ status: number; ok: boolean; text(): Promise<string> }>;
 }): {
   performControllerCommand(payload: unknown): Promise<unknown>;
+  tickController(): Promise<unknown>;
   sendRuntimeMessage(message: unknown, sender?: unknown): Promise<unknown>;
   sendTabUpdated(tabId: number, changeInfo: unknown, tab: unknown): Promise<void>;
 } {
@@ -144,7 +190,7 @@ function loadBackgroundHarness(options: {
   const context = vm.createContext({
     console,
     crypto: { randomUUID: () => "controller-id" },
-    fetch: vi.fn(async () => ({ status: 204, ok: true, text: async () => "" })),
+    fetch: vi.fn(options.fetch ?? (async () => ({ status: 204, ok: true, text: async () => "" }))),
     setInterval: vi.fn(),
     setTimeout,
     chrome: {
@@ -182,6 +228,7 @@ function loadBackgroundHarness(options: {
   vm.runInContext(background, context);
   const api = context.__BasedBlinkBrowserControllerBackgroundTest as {
     performControllerCommand(payload: unknown): Promise<unknown>;
+    tickController(): Promise<unknown>;
   };
   return {
     ...api,

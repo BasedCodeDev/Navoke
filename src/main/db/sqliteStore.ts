@@ -3,7 +3,15 @@ import path from "node:path";
 import initSqlJs, { type Database as SqlJsDatabase } from "sql.js";
 import { fileSize } from "../utils/files";
 import { normalizeRunOrigin } from "../runtime/runOrigin";
-import type { ArtifactRecord, ArtifactKind, RunOrigin, RunRecord, RunStatus, RuntimeEvent } from "../runtime/types";
+import type {
+  ArtifactRecord,
+  ArtifactKind,
+  RunOrigin,
+  RunRecord,
+  RunStatus,
+  RuntimeEvent,
+  WorkflowLibraryEntry
+} from "../runtime/types";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -62,6 +70,23 @@ function rowToArtifact(row: Record<string, unknown>): ArtifactRecord {
     size: Number(row.size ?? 0),
     metadata: parseJson(row.metadata_json),
     createdAt: String(row.created_at)
+  };
+}
+
+function rowToWorkflowLibraryEntry(row: Record<string, unknown>): WorkflowLibraryEntry {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    workflowId: String(row.workflow_id),
+    workflowVersion: row.workflow_version ? String(row.workflow_version) : null,
+    pluginId: row.plugin_id ? String(row.plugin_id) : null,
+    pluginVersion: row.plugin_version ? String(row.plugin_version) : null,
+    pluginApiVersion: row.plugin_api_version ? String(row.plugin_api_version) : null,
+    pluginSource: row.plugin_source ? (String(row.plugin_source) as WorkflowLibraryEntry["pluginSource"]) : null,
+    sourceRunId: row.source_run_id ? String(row.source_run_id) : null,
+    input: parseJson(row.input_json),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
   };
 }
 
@@ -156,6 +181,84 @@ export class SqliteStore {
     this.db.run("delete from artifacts where run_id = ?", [id]);
     this.db.run("delete from events where run_id = ?", [id]);
     this.db.run("delete from runs where id = ?", [id]);
+    this.persist();
+  }
+
+  createWorkflowLibraryEntry(input: {
+    id: string;
+    name: string;
+    workflowId: string;
+    workflowVersion?: string | null;
+    pluginId?: string | null;
+    pluginVersion?: string | null;
+    pluginApiVersion?: string | null;
+    pluginSource?: WorkflowLibraryEntry["pluginSource"];
+    sourceRunId?: string | null;
+    input: unknown;
+  }): WorkflowLibraryEntry {
+    const createdAt = nowIso();
+    this.db.run(
+      `insert into workflow_library_entries (
+        id, name, workflow_id, workflow_version, plugin_id, plugin_version, plugin_api_version, plugin_source,
+        source_run_id, input_json, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        input.id,
+        input.name,
+        input.workflowId,
+        input.workflowVersion ?? null,
+        input.pluginId ?? null,
+        input.pluginVersion ?? null,
+        input.pluginApiVersion ?? null,
+        input.pluginSource ?? null,
+        input.sourceRunId ?? null,
+        JSON.stringify(input.input),
+        createdAt,
+        createdAt
+      ]
+    );
+    this.persist();
+    const entry = this.getWorkflowLibraryEntry(input.id);
+    if (!entry) throw new Error("Failed to create workflow library entry");
+    return entry;
+  }
+
+  listWorkflowLibraryEntries(): WorkflowLibraryEntry[] {
+    return this.all<Record<string, unknown>>("select * from workflow_library_entries order by updated_at desc, created_at desc").map(
+      rowToWorkflowLibraryEntry
+    );
+  }
+
+  getWorkflowLibraryEntry(id: string): WorkflowLibraryEntry | null {
+    const row = this.get<Record<string, unknown>>("select * from workflow_library_entries where id = ?", [id]);
+    return row ? rowToWorkflowLibraryEntry(row) : null;
+  }
+
+  updateWorkflowLibraryEntry(
+    id: string,
+    patch: Partial<Pick<WorkflowLibraryEntry, "name" | "input">>
+  ): WorkflowLibraryEntry {
+    const sets: string[] = ["updated_at = ?"];
+    const params: unknown[] = [nowIso()];
+    if (patch.name !== undefined) {
+      sets.push("name = ?");
+      params.push(patch.name);
+    }
+    if (patch.input !== undefined) {
+      sets.push("input_json = ?");
+      params.push(JSON.stringify(patch.input));
+    }
+    params.push(id);
+    this.db.run(`update workflow_library_entries set ${sets.join(", ")} where id = ?`, params as any);
+    this.persist();
+    const entry = this.getWorkflowLibraryEntry(id);
+    if (!entry) throw new Error(`Workflow library entry not found after update: ${id}`);
+    return entry;
+  }
+
+  deleteWorkflowLibraryEntry(id: string): void {
+    if (!this.getWorkflowLibraryEntry(id)) throw new Error(`Workflow library entry not found: ${id}`);
+    this.db.run("delete from workflow_library_entries where id = ?", [id]);
     this.persist();
   }
 
@@ -348,6 +451,21 @@ export class SqliteStore {
         foreign key (run_id) references runs(id)
       );
 
+      create table if not exists workflow_library_entries (
+        id text primary key,
+        name text not null,
+        workflow_id text not null,
+        workflow_version text,
+        plugin_id text,
+        plugin_version text,
+        plugin_api_version text,
+        plugin_source text,
+        source_run_id text,
+        input_json text not null,
+        created_at text not null,
+        updated_at text not null
+      );
+
       create table if not exists metadata (
         key text primary key,
         value text not null
@@ -356,6 +474,8 @@ export class SqliteStore {
       create index if not exists idx_runs_status on runs(status);
       create index if not exists idx_events_run_id on events(run_id);
       create index if not exists idx_artifacts_run_id on artifacts(run_id);
+      create index if not exists idx_workflow_library_workflow_id on workflow_library_entries(workflow_id);
+      create index if not exists idx_workflow_library_source_run_id on workflow_library_entries(source_run_id);
     `);
     this.addColumnIfMissing("runs", "run_dir text");
     this.addColumnIfMissing("runs", "workflow_version text");

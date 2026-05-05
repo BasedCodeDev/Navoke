@@ -14,12 +14,13 @@ export function createRuntimePaths(projectDir: string): RuntimePaths {
   const dataDir = internalDir;
   const runRootDir = resolvedProjectDir;
   const artifactDir = path.join(internalDir, "artifacts");
+  const libraryDir = path.join(internalDir, "library");
   const browserProfilesDir = path.join(internalDir, "browser-profiles");
   const workflowLabDir = path.join(internalDir, "workflow-lab");
   const logsDir = path.join(internalDir, "logs");
   const dbPath = path.join(internalDir, "workflow.sqlite");
 
-  for (const dir of [resolvedProjectDir, dataDir, artifactDir, browserProfilesDir, workflowLabDir, logsDir]) {
+  for (const dir of [resolvedProjectDir, dataDir, artifactDir, libraryDir, browserProfilesDir, workflowLabDir, logsDir]) {
     ensureDir(dir);
   }
 
@@ -29,6 +30,7 @@ export function createRuntimePaths(projectDir: string): RuntimePaths {
     runRootDir,
     dataDir,
     artifactDir,
+    libraryDir,
     browserProfilesDir,
     workflowLabDir,
     logsDir,
@@ -40,6 +42,14 @@ export function getRunArtifactDir(paths: RuntimePaths, runId: string): string {
   const dir = path.join(paths.artifactDir, runId);
   ensureDir(dir);
   return dir;
+}
+
+export function getLibraryEntryDir(paths: RuntimePaths, entryId: string): string {
+  return path.join(paths.libraryDir, entryId);
+}
+
+export function getLibraryEntryInputDir(paths: RuntimePaths, entryId: string): string {
+  return path.join(getLibraryEntryDir(paths, entryId), "inputs");
 }
 
 export function safeRunFolderName(name: string): string {
