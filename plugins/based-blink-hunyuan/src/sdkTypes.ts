@@ -57,13 +57,36 @@ export interface WorkflowSdk {
           compatible: boolean;
           capabilities?: string[];
           incompatibilityReason?: string;
+          diagnostics?: Record<string, unknown>;
         }>;
         controllerDiagnostics?: Record<string, unknown>;
+        controllerCommandDiagnostics?: Record<string, unknown>;
       };
       findCompatibleClientForTarget(target: ExtensionBrowserTarget): ExtensionClientStatus | undefined;
       ensureRoutedTab(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ExtensionClientStatus>;
       openTab(url: string, options?: { active?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      closeTab(tabId: number, options?: { controllerId?: string; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
       stageFiles(filePaths: string[]): Array<{ id: string; name: string; mimeType: string; url: string }>;
+      startDownloadWatch(): { id: string; startedAt: string };
+      waitForDownload(
+        watchId: string,
+        options?: { signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<{
+        watchId: string;
+        downloadId?: number;
+        url?: string;
+        finalUrl?: string;
+        filename: string;
+        mime?: string;
+        state: "complete";
+        danger?: string;
+        totalBytes?: number | null;
+        fileSize?: number | null;
+        exists?: boolean | null;
+        startTime?: string;
+        endTime?: string;
+        completedAt: string;
+      }>;
       executeCommand(target: ExtensionBrowserTarget, command: unknown, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
       inspect(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
       action(target: ExtensionBrowserTarget, action: unknown, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
@@ -95,8 +118,18 @@ export interface WorkflowSdk {
 
 export type ExtensionBrowserTarget =
     | { mode: "any" }
-    | { mode: "existing"; clientId: string; url?: string; title?: string }
-    | { mode: "new"; routingToken: string; url?: string; title?: string; openMode?: "window" | "tab" };
+    | { mode: "existing"; clientId: string; url?: string; title?: string; tabId?: number; windowId?: number; controllerId?: string }
+    | {
+        mode: "new";
+        routingToken: string;
+        url?: string;
+        title?: string;
+        openMode?: "window" | "tab";
+        clientId?: string;
+        tabId?: number;
+        windowId?: number;
+        controllerId?: string;
+      };
 
 export interface ExtensionClientStatus {
   id: string;
@@ -115,4 +148,9 @@ export interface ExtensionClientStatus {
   compatible: boolean;
   incompatibilityReason?: string;
   lastSeenAt: string;
+  openedByController?: boolean;
+  openedAction?: "open-tab" | "open-window";
+  openedTabId?: number;
+  openedWindowId?: number;
+  openedControllerId?: string;
 }

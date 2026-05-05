@@ -3,14 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { inferMimeType } from "../utils/files";
 
-export const BLINK_EXTENSION_PROTOCOL_VERSION = 4;
+export const BLINK_EXTENSION_PROTOCOL_VERSION = 6;
 export const BLINK_ROUTING_TOKEN_PARAM = "based-blink-tab";
 
 const CLIENT_TTL_MS = 30_000;
 const CONTROLLER_TTL_MS = 30_000;
 const COMMAND_LEASE_MS = 60_000;
 const FOCUS_COMMAND_LEASE_MS = 15_000;
-const CONTROLLER_COMMAND_LEASE_MS = 15_000;
+const CONTROLLER_COMMAND_LEASE_MS = 90_000;
 const COMMAND_CLIENT_COOLDOWN_MS = 120_000;
 const ROUTED_TAB_CONNECT_TIMEOUT_MS = 45_000;
 
@@ -51,6 +51,11 @@ export interface ExtensionClientStatus {
   incompatibilityReason?: string;
   lastSeenAt: string;
   capabilities: string[];
+  openedByController?: boolean;
+  openedAction?: "open-tab" | "open-window";
+  openedTabId?: number;
+  openedWindowId?: number;
+  openedControllerId?: string;
 }
 
 export interface ExtensionControllerStatus {
@@ -62,6 +67,7 @@ export interface ExtensionControllerStatus {
   incompatibilityReason?: string;
   lastSeenAt: string;
   capabilities: string[];
+  diagnostics?: Record<string, unknown>;
 }
 
 export interface ExtensionControllerDiagnostics {
@@ -84,10 +90,59 @@ export interface ExtensionControllerDiagnostics {
   }>;
 }
 
+export interface ExtensionControllerCommandDiagnostics {
+  pendingCount: number;
+  runningCount: number;
+  lastPollAt?: string;
+  lastPollControllerId?: string;
+  lastPollResult?: "leased" | "none" | "error";
+  lastPollCommandId?: string;
+  lastPollError?: string;
+  lastCompletionAt?: string;
+  lastCompletionCommandId?: string;
+  lastCompletionStatus?: "completed" | "failed";
+  lastCompletionError?: string;
+  recentCommands: Array<{
+    id: string;
+    controllerId: string;
+    commandKind: ExtensionControllerCommandInput["kind"];
+    status: ExtensionCommandStatus;
+    createdAt: string;
+    updatedAt: string;
+    ageMs: number;
+    url?: string;
+    tabId?: number;
+    error?: string;
+  }>;
+}
+
+export interface ExtensionDownloadWatchHandle {
+  id: string;
+  startedAt: string;
+}
+
+export interface ExtensionDownloadResult {
+  watchId: string;
+  downloadId?: number;
+  url?: string;
+  finalUrl?: string;
+  filename: string;
+  mime?: string;
+  state: "complete";
+  danger?: string;
+  totalBytes?: number | null;
+  fileSize?: number | null;
+  exists?: boolean | null;
+  startTime?: string;
+  endTime?: string;
+  completedAt: string;
+}
+
 export type ExtensionControllerCommandInput =
   | { kind: "open-tab"; url: string; active?: boolean }
   | { kind: "open-window"; url: string; focused?: boolean }
-  | { kind: "focus-tab"; tabId: number; windowId?: number; focused?: boolean };
+  | { kind: "focus-tab"; tabId: number; windowId?: number; focused?: boolean }
+  | { kind: "close-tab"; tabId: number };
 
 export interface ExtensionControllerCommandPayload {
   id: string;
@@ -186,6 +241,15 @@ interface ExtensionControllerCommand {
   updatedAt: string;
 }
 
+interface ExtensionDownloadWatch {
+  id: string;
+  status: "pending" | "completed" | "failed";
+  createdAt: string;
+  updatedAt: string;
+  result?: ExtensionDownloadResult;
+  error?: string;
+}
+
 interface CommandWaiter {
   resolve(result: unknown): void;
   reject(error: Error): void;
@@ -201,6 +265,14 @@ interface StagedExtensionFile {
   createdAt: number;
 }
 
+interface ExtensionOpenedSurface {
+  openedByController: true;
+  openedAction: "open-tab" | "open-window";
+  openedTabId: number;
+  openedWindowId?: number;
+  openedControllerId?: string;
+}
+
 export class ExtensionBridge {
   private readonly commands = new Map<string, ExtensionCommand>();
   private readonly commandWaiters = new Map<string, CommandWaiter>();
@@ -208,10 +280,29 @@ export class ExtensionBridge {
   private readonly focusWaiters = new Map<string, CommandWaiter>();
   private readonly controllerCommands = new Map<string, ExtensionControllerCommand>();
   private readonly controllerWaiters = new Map<string, CommandWaiter>();
+  private readonly downloadWatches = new Map<string, ExtensionDownloadWatch>();
+  private readonly downloadWaiters = new Map<string, CommandWaiter>();
   private readonly clients = new Map<string, ExtensionClientStatus>();
   private readonly controllers = new Map<string, ExtensionControllerStatus>();
   private readonly stagedFiles = new Map<string, StagedExtensionFile>();
   private readonly commandUnhealthySince = new Map<string, number>();
+  private lastControllerCommandPoll:
+    | {
+        at: string;
+        controllerId: string;
+        result: "leased" | "none" | "error";
+        commandId?: string;
+        error?: string;
+      }
+    | undefined;
+  private lastControllerCommandCompletion:
+    | {
+        at: string;
+        commandId: string;
+        status: "completed" | "failed";
+        error?: string;
+      }
+    | undefined;
 
   heartbeat(payload: unknown): { ok: true; requiredProtocolVersion: number; compatible: boolean; clientId: string } {
     if (!payload || typeof payload !== "object") throw new Error("Extension heartbeat payload is required.");
@@ -287,10 +378,18 @@ export class ExtensionBridge {
     const capabilities = Array.isArray(record.capabilities)
       ? record.capabilities.filter((capability): capability is string => typeof capability === "string")
       : [];
+    const diagnostics =
+      record.diagnostics && typeof record.diagnostics === "object" && !Array.isArray(record.diagnostics)
+        ? (record.diagnostics as Record<string, unknown>)
+        : record.backgroundDiagnostics && typeof record.backgroundDiagnostics === "object" && !Array.isArray(record.backgroundDiagnostics)
+          ? (record.backgroundDiagnostics as Record<string, unknown>)
+          : undefined;
     const compatible =
       protocolVersion === BLINK_EXTENSION_PROTOCOL_VERSION &&
+      capabilities.includes("open-tab") &&
       capabilities.includes("open-window") &&
-      capabilities.includes("focus-tab");
+      capabilities.includes("focus-tab") &&
+      capabilities.includes("close-tab");
     const status: ExtensionControllerStatus = {
       id: controllerId,
       status: compatible ? "connected" : "incompatible",
@@ -300,10 +399,11 @@ export class ExtensionBridge {
       ...(compatible
         ? {}
         : {
-            incompatibilityReason: `Reload the unpacked BLINK browser extension. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION} with open-window and focus-tab support.`
+            incompatibilityReason: `Reload the unpacked BLINK browser extension. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION} with open-tab, open-window, focus-tab, and close-tab support.`
           }),
       lastSeenAt: new Date().toISOString(),
-      capabilities
+      capabilities,
+      ...(diagnostics ? { diagnostics } : {})
     };
     this.controllers.set(controllerId, status);
     this.prune();
@@ -322,6 +422,7 @@ export class ExtensionBridge {
     compatibleControllers: number;
     incompatibleControllers: number;
     controllerDiagnostics: ExtensionControllerDiagnostics;
+    controllerCommandDiagnostics: ExtensionControllerCommandDiagnostics;
   } {
     this.prune();
     const clients = [...this.clients.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
@@ -338,7 +439,8 @@ export class ExtensionBridge {
       controllers,
       compatibleControllers: controllers.filter((controller) => controller.compatible).length,
       incompatibleControllers: controllers.filter((controller) => !controller.compatible).length,
-      controllerDiagnostics
+      controllerDiagnostics,
+      controllerCommandDiagnostics: this.buildControllerCommandDiagnostics()
     };
   }
 
@@ -369,7 +471,7 @@ export class ExtensionBridge {
   }
 
   findCompatibleController(
-    capability?: "open-tab" | "open-window" | "focus-tab",
+    capability?: "open-tab" | "open-window" | "focus-tab" | "close-tab",
     preferredControllerId?: string
   ): ExtensionControllerStatus | undefined {
     this.prune();
@@ -381,6 +483,16 @@ export class ExtensionBridge {
       if (preferred) return preferred;
     }
     return candidates.sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))[0];
+  }
+
+  private findExactCompatibleController(
+    capability: "open-tab" | "open-window" | "focus-tab" | "close-tab",
+    controllerId: string
+  ): ExtensionControllerStatus | undefined {
+    this.prune();
+    const controller = this.controllers.get(controllerId);
+    if (!controller?.compatible || !controller.capabilities.includes(capability)) return undefined;
+    return controller;
   }
 
   async openTabWithController(input: {
@@ -395,12 +507,13 @@ export class ExtensionBridge {
     if (!controller) {
       throw new Error(this.noCompatibleControllerMessage("open-tab"));
     }
-    return this.executeControllerCommand({
+    const result = await this.executeControllerCommand({
       controllerId: controller.id,
       command: { kind: "open-tab", url, active: input.active ?? true },
       timeoutMs: input.timeoutMs,
       signal: input.signal
     });
+    return annotateControllerResult(result, controller.id);
   }
 
   async focusBrowserSurfaceWithController(input: {
@@ -435,12 +548,34 @@ export class ExtensionBridge {
     if (!controller) {
       throw new Error(this.noCompatibleControllerMessage("open-window"));
     }
-    return this.executeControllerCommand({
+    const result = await this.executeControllerCommand({
       controllerId: controller.id,
       command: { kind: "open-window", url, focused: input.focused ?? true },
       timeoutMs: input.timeoutMs,
       signal: input.signal
     });
+    return annotateControllerResult(result, controller.id);
+  }
+
+  async closeTabWithController(input: {
+    tabId: number;
+    controllerId?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<unknown> {
+    const controller = input.controllerId
+      ? this.findExactCompatibleController("close-tab", input.controllerId)
+      : this.findCompatibleController("close-tab");
+    if (!controller) {
+      throw new Error(this.noCompatibleControllerMessage("close-tab"));
+    }
+    const result = await this.executeControllerCommand({
+      controllerId: controller.id,
+      command: { kind: "close-tab", tabId: input.tabId },
+      timeoutMs: input.timeoutMs,
+      signal: input.signal
+    });
+    return annotateControllerResult(result, controller.id);
   }
 
   async ensureRoutedTab(input: {
@@ -457,29 +592,40 @@ export class ExtensionBridge {
     }
 
     let openResult: unknown = null;
+    let openedSurface: ExtensionOpenedSurface | undefined;
     if (input.target.mode === "new" && input.target.openMode !== "tab") {
-      openResult = await this.openWindowWithController({
-        url,
-        focused: true,
-        controllerId: input.target.controllerId,
-        timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
-        signal: input.signal
-      });
+      try {
+        openResult = await this.openWindowWithController({
+          url,
+          focused: true,
+          controllerId: input.target.controllerId,
+          timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
+          signal: input.signal
+        });
+        openedSurface = openedSurfaceFromControllerResult(openResult);
+      } catch (error) {
+        throw new Error(this.controllerCommandFailureMessage(error));
+      }
     } else {
-      openResult = await this.openTabWithController({
-        url,
-        active: true,
-        controllerId: input.target.mode === "any" ? undefined : input.target.controllerId,
-        timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
-        signal: input.signal
-      });
+      try {
+        openResult = await this.openTabWithController({
+          url,
+          active: true,
+          controllerId: input.target.mode === "any" ? undefined : input.target.controllerId,
+          timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
+          signal: input.signal
+        });
+        openedSurface = openedSurfaceFromControllerResult(openResult);
+      } catch (error) {
+        throw new Error(this.controllerCommandFailureMessage(error));
+      }
     }
 
     const timeoutMs = input.timeoutMs ?? ROUTED_TAB_CONNECT_TIMEOUT_MS;
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
       const client = this.findCompatibleClientForTarget(input.target);
-      if (client) return client;
+      if (client) return withOpenedSurface(client, openedSurface);
       await wait(750, input.signal);
     }
 
@@ -496,13 +642,17 @@ export class ExtensionBridge {
         controllerHeartbeatOk: client.controllerHeartbeatOk,
         controllerHeartbeatError: client.controllerHeartbeatError
       }));
-    throw new Error(
+    const error = new Error(
       `Opened a routed BLINK browser window, but no compatible page client connected. openResult=${JSON.stringify(
         openResult
       )}; knownClients=${JSON.stringify(
         visibleClients
+      )}; controllerCommandDiagnostics=${JSON.stringify(
+        this.buildControllerCommandDiagnostics()
       )}. Do not open chrome.exe or paste this routed URL into another Chrome profile. The routed window must be opened by the BLINK extension controller in the intended browser profile. Reload the unpacked extension, confirm site access is enabled for the opened page, open the BLINK extension popup in that profile, and refresh the opened page.`
     );
+    if (openedSurface) Object.assign(error, { openedSurface });
+    throw error;
   }
 
   stageFiles(filePaths: string[]): ExtensionCommandFilePayload[] {
@@ -530,6 +680,94 @@ export class ExtensionBridge {
     const staged = this.stagedFiles.get(fileId);
     if (!staged) throw new Error(`Extension staged file not found: ${fileId}`);
     return staged.filePath;
+  }
+
+  startDownloadWatch(): ExtensionDownloadWatchHandle {
+    const now = new Date().toISOString();
+    const watch: ExtensionDownloadWatch = {
+      id: randomUUID(),
+      status: "pending",
+      createdAt: now,
+      updatedAt: now
+    };
+    this.downloadWatches.set(watch.id, watch);
+    return { id: watch.id, startedAt: watch.createdAt };
+  }
+
+  waitForDownload(input: { watchId: string; timeoutMs?: number; signal?: AbortSignal }): Promise<ExtensionDownloadResult> {
+    const watch = this.downloadWatches.get(input.watchId);
+    if (!watch) throw new Error(`Extension download watch not found: ${input.watchId}`);
+    if (watch.status === "completed" && watch.result) return Promise.resolve(watch.result);
+    if (watch.status === "failed") return Promise.reject(new Error(watch.error ?? "Extension download failed."));
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.downloadWaiters.delete(input.watchId);
+        watch.status = "failed";
+        watch.updatedAt = new Date().toISOString();
+        watch.error = `Timed out waiting for extension download ${input.watchId}.`;
+        reject(new Error(watch.error));
+      }, input.timeoutMs ?? 120_000);
+      const abort = () => {
+        clearTimeout(timer);
+        this.downloadWaiters.delete(input.watchId);
+        reject(new Error("Operation cancelled"));
+      };
+      input.signal?.addEventListener("abort", abort, { once: true });
+      this.downloadWaiters.set(input.watchId, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          input.signal?.removeEventListener("abort", abort);
+          resolve(result as ExtensionDownloadResult);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          input.signal?.removeEventListener("abort", abort);
+          reject(error);
+        },
+        timer,
+        abort
+      });
+    });
+  }
+
+  recordDownloadEvent(payload: unknown): { ok: true; matchedWatchId?: string } {
+    const event = normalizeDownloadEvent(payload);
+    if (!event) return { ok: true };
+    const watch = [...this.downloadWatches.values()].find((candidate) => candidate.status === "pending");
+    if (!watch) return { ok: true };
+
+    if (event.state === "interrupted") {
+      this.failDownloadWatch(watch, event.error || "Chrome download was interrupted.");
+      return { ok: true, matchedWatchId: watch.id };
+    }
+
+    if (event.state !== "complete") return { ok: true, matchedWatchId: watch.id };
+    const result: ExtensionDownloadResult = {
+      watchId: watch.id,
+      ...(event.downloadId !== undefined ? { downloadId: event.downloadId } : {}),
+      ...(event.url ? { url: event.url } : {}),
+      ...(event.finalUrl ? { finalUrl: event.finalUrl } : {}),
+      filename: event.filename,
+      ...(event.mime ? { mime: event.mime } : {}),
+      state: "complete",
+      ...(event.danger ? { danger: event.danger } : {}),
+      totalBytes: event.totalBytes,
+      fileSize: event.fileSize,
+      exists: event.exists,
+      ...(event.startTime ? { startTime: event.startTime } : {}),
+      ...(event.endTime ? { endTime: event.endTime } : {}),
+      completedAt: event.receivedAt
+    };
+    watch.status = "completed";
+    watch.updatedAt = new Date().toISOString();
+    watch.result = result;
+    const waiter = this.downloadWaiters.get(watch.id);
+    if (waiter) {
+      this.downloadWaiters.delete(watch.id);
+      waiter.resolve(result);
+    }
+    return { ok: true, matchedWatchId: watch.id };
   }
 
   async executeCommandForTarget(input: {
@@ -621,20 +859,44 @@ export class ExtensionBridge {
       this.controllerWaiters,
       command.id,
       input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS,
-      input.signal
+      input.signal,
+      () => this.controllerCommandTimeoutMessage(command.id)
     );
   }
 
   nextControllerCommand(controllerId: string): ExtensionControllerCommandPayload | null {
     const normalizedControllerId = controllerId.trim();
-    this.requireCompatibleController(normalizedControllerId);
-    this.expireCommands(this.controllerCommands, this.controllerWaiters, CONTROLLER_COMMAND_LEASE_MS);
+    try {
+      this.requireCompatibleController(normalizedControllerId);
+      this.expireCommands(this.controllerCommands, this.controllerWaiters, CONTROLLER_COMMAND_LEASE_MS);
+    } catch (error) {
+      this.lastControllerCommandPoll = {
+        at: new Date().toISOString(),
+        controllerId: normalizedControllerId,
+        result: "error",
+        error: formatErrorMessage(error)
+      };
+      throw error;
+    }
     const command = [...this.controllerCommands.values()].find(
       (candidate) => candidate.controllerId === normalizedControllerId && candidate.status === "pending"
     );
-    if (!command) return null;
+    if (!command) {
+      this.lastControllerCommandPoll = {
+        at: new Date().toISOString(),
+        controllerId: normalizedControllerId,
+        result: "none"
+      };
+      return null;
+    }
     command.status = "running";
     command.updatedAt = new Date().toISOString();
+    this.lastControllerCommandPoll = {
+      at: command.updatedAt,
+      controllerId: normalizedControllerId,
+      result: "leased",
+      commandId: command.id
+    };
     return {
       id: command.id,
       kind: "controller-command",
@@ -646,10 +908,21 @@ export class ExtensionBridge {
 
   completeControllerCommand(commandId: string, result: unknown): void {
     this.resolveCommand(this.controllerCommands, this.controllerWaiters, commandId, "completed", result);
+    this.lastControllerCommandCompletion = {
+      at: new Date().toISOString(),
+      commandId,
+      status: "completed"
+    };
   }
 
   failControllerCommand(commandId: string, message: string): void {
     this.rejectCommand(this.controllerCommands, this.controllerWaiters, commandId, message);
+    this.lastControllerCommandCompletion = {
+      at: new Date().toISOString(),
+      commandId,
+      status: "failed",
+      error: message
+    };
   }
 
   executeLabCommand(input: { clientId: string; command: ExtensionCommandInput; timeoutMs?: number }): Promise<unknown> {
@@ -745,7 +1018,8 @@ export class ExtensionBridge {
     waiters: Map<string, CommandWaiter>,
     commandId: string,
     timeoutMs: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    timeoutMessage?: (command: T | undefined) => string
   ): Promise<unknown> {
     const existing = commands.get(commandId);
     if (!existing) throw new Error(`Extension command not found: ${commandId}`);
@@ -761,12 +1035,13 @@ export class ExtensionBridge {
       };
       const timer = setTimeout(() => {
         const command = commands.get(commandId);
+        const message = timeoutMessage?.(command) ?? `Timed out waiting for browser extension command ${commandId}.`;
         if (command && command.status !== "completed" && command.status !== "failed") {
           command.status = "failed";
-          command.error = `Timed out waiting for browser extension command ${commandId}.`;
+          command.error = message;
           if (command.clientId) this.markCommandUnhealthy(command.clientId);
         }
-        finish(() => reject(new Error(`Timed out waiting for browser extension command ${commandId}.`)));
+        finish(() => reject(new Error(message)));
       }, timeoutMs);
       const abort = signal
         ? () => {
@@ -912,7 +1187,18 @@ export class ExtensionBridge {
     this.commandUnhealthySince.delete(clientId);
   }
 
-  private noCompatibleControllerMessage(capability: "open-tab" | "open-window" | "focus-tab"): string {
+  private failDownloadWatch(watch: ExtensionDownloadWatch, message: string): void {
+    watch.status = "failed";
+    watch.updatedAt = new Date().toISOString();
+    watch.error = message;
+    const waiter = this.downloadWaiters.get(watch.id);
+    if (waiter) {
+      this.downloadWaiters.delete(watch.id);
+      waiter.reject(new Error(message));
+    }
+  }
+
+  private noCompatibleControllerMessage(capability: "open-tab" | "open-window" | "focus-tab" | "close-tab"): string {
     const status = this.status();
     const connectedTabs = status.connectedClients.map((client) => ({
       id: client.id,
@@ -936,8 +1222,71 @@ export class ExtensionBridge {
       "Do not open chrome.exe or paste routed workflow URLs into another Chrome profile; that bypasses the BLINK extension controller and can open the wrong profile. " +
       "Open the BLINK extension popup in the intended Chrome profile, confirm it reports at least 1 browser controller, then resume the run. " +
       `connectedTabs=${JSON.stringify(connectedTabs)}; connectedControllers=${JSON.stringify(controllers)}; ` +
-      `controllerDiagnostics=${JSON.stringify(status.controllerDiagnostics)}`
+      `controllerDiagnostics=${JSON.stringify(status.controllerDiagnostics)}; ` +
+      `controllerCommandDiagnostics=${JSON.stringify(status.controllerCommandDiagnostics)}`
     );
+  }
+
+  private controllerCommandFailureMessage(error: unknown): string {
+    return (
+      `The BLINK browser controller command was not completed. ${formatErrorMessage(error)} ` +
+      `controllerCommandDiagnostics=${JSON.stringify(this.buildControllerCommandDiagnostics())}`
+    );
+  }
+
+  private controllerCommandTimeoutMessage(commandId: string): string {
+    const command = this.controllerCommands.get(commandId);
+    const status = command?.status ?? "missing";
+    const expectedState = status === "running" ? "complete" : "be picked up";
+    return (
+      `Timed out waiting for BLINK browser controller command ${commandId} to ${expectedState}. ` +
+      `status=${status}; controllerId=${command?.controllerId ?? "unknown"}; commandKind=${command?.command.kind ?? "unknown"}; ` +
+      `createdAt=${command?.createdAt ?? ""}; updatedAt=${command?.updatedAt ?? ""}; ` +
+      `controllerCommandDiagnostics=${JSON.stringify(this.buildControllerCommandDiagnostics())}`
+    );
+  }
+
+  private buildControllerCommandDiagnostics(): ExtensionControllerCommandDiagnostics {
+    const allCommands = [...this.controllerCommands.values()];
+    const now = Date.now();
+    const recentCommands = allCommands
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 8)
+      .map((command) => ({
+        id: command.id,
+        controllerId: command.controllerId,
+        commandKind: command.command.kind,
+        status: command.status,
+        createdAt: command.createdAt,
+        updatedAt: command.updatedAt,
+        ageMs: Math.max(0, now - Date.parse(command.createdAt)),
+        ...(command.command.kind === "open-tab" || command.command.kind === "open-window" ? { url: command.command.url } : {}),
+        ...(command.command.kind === "close-tab" ? { tabId: command.command.tabId } : {}),
+        ...(command.error ? { error: command.error } : {})
+      }));
+
+    return {
+      pendingCount: allCommands.filter((command) => command.status === "pending").length,
+      runningCount: allCommands.filter((command) => command.status === "running").length,
+      ...(this.lastControllerCommandPoll
+        ? {
+            lastPollAt: this.lastControllerCommandPoll.at,
+            lastPollControllerId: this.lastControllerCommandPoll.controllerId,
+            lastPollResult: this.lastControllerCommandPoll.result,
+            ...(this.lastControllerCommandPoll.commandId ? { lastPollCommandId: this.lastControllerCommandPoll.commandId } : {}),
+            ...(this.lastControllerCommandPoll.error ? { lastPollError: this.lastControllerCommandPoll.error } : {})
+          }
+        : {}),
+      ...(this.lastControllerCommandCompletion
+        ? {
+            lastCompletionAt: this.lastControllerCommandCompletion.at,
+            lastCompletionCommandId: this.lastControllerCommandCompletion.commandId,
+            lastCompletionStatus: this.lastControllerCommandCompletion.status,
+            ...(this.lastControllerCommandCompletion.error ? { lastCompletionError: this.lastControllerCommandCompletion.error } : {})
+          }
+        : {}),
+      recentCommands
+    };
   }
 }
 
@@ -956,8 +1305,87 @@ function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function annotateControllerResult(result: unknown, controllerId: string): unknown {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+  return { ...(result as Record<string, unknown>), controllerId };
+}
+
+function openedSurfaceFromControllerResult(result: unknown): ExtensionOpenedSurface | undefined {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
+  const record = result as Record<string, unknown>;
+  const action = record.action === "open-tab" || record.action === "open-window" ? record.action : undefined;
+  const tabId = optionalNumber(record.tabId);
+  if (!action || tabId === undefined) return undefined;
+  const windowId = optionalNumber(record.windowId);
+  const controllerId = firstNonEmptyString(record.controllerId);
+  return {
+    openedByController: true,
+    openedAction: action,
+    openedTabId: tabId,
+    ...(windowId !== undefined ? { openedWindowId: windowId } : {}),
+    ...(controllerId ? { openedControllerId: controllerId } : {})
+  };
+}
+
+function withOpenedSurface(client: ExtensionClientStatus, openedSurface: ExtensionOpenedSurface | undefined): ExtensionClientStatus {
+  if (!openedSurface) return client;
+  return {
+    ...client,
+    openedByController: true,
+    openedAction: openedSurface.openedAction,
+    openedTabId: openedSurface.openedTabId,
+    ...(openedSurface.openedWindowId !== undefined ? { openedWindowId: openedSurface.openedWindowId } : {}),
+    ...(openedSurface.openedControllerId ? { openedControllerId: openedSurface.openedControllerId } : {})
+  };
+}
+
 function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function optionalNullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeDownloadEvent(value: unknown):
+  | {
+      downloadId?: number;
+      url?: string;
+      finalUrl?: string;
+      filename: string;
+      mime?: string;
+      state: "complete" | "interrupted" | string;
+      danger?: string;
+      error?: string;
+      totalBytes: number | null;
+      fileSize: number | null;
+      exists: boolean | null;
+      startTime?: string;
+      endTime?: string;
+      receivedAt: string;
+    }
+  | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const state = firstNonEmptyString(record.state, record.type) ?? "";
+  const filename = firstNonEmptyString(record.filename) ?? "";
+  if (state === "complete" && !filename) return null;
+  return {
+    ...(optionalNumber(record.downloadId) !== undefined ? { downloadId: optionalNumber(record.downloadId) } : {}),
+    ...(firstNonEmptyString(record.url) ? { url: firstNonEmptyString(record.url) } : {}),
+    ...(firstNonEmptyString(record.finalUrl) ? { finalUrl: firstNonEmptyString(record.finalUrl) } : {}),
+    filename,
+    ...(firstNonEmptyString(record.mime) ? { mime: firstNonEmptyString(record.mime) } : {}),
+    state,
+    ...(firstNonEmptyString(record.danger) ? { danger: firstNonEmptyString(record.danger) } : {}),
+    ...(firstNonEmptyString(record.error) ? { error: firstNonEmptyString(record.error) } : {}),
+    totalBytes: optionalNullableNumber(record.totalBytes),
+    fileSize: optionalNullableNumber(record.fileSize),
+    exists: optionalBoolean(record.exists) ?? null,
+    ...(firstNonEmptyString(record.startTime) ? { startTime: firstNonEmptyString(record.startTime) } : {}),
+    ...(firstNonEmptyString(record.endTime) ? { endTime: firstNonEmptyString(record.endTime) } : {}),
+    receivedAt: firstNonEmptyString(record.receivedAt) ?? new Date().toISOString()
+  };
 }
 
 function buildControllerDiagnostics(clients: ExtensionClientStatus[]): ExtensionControllerDiagnostics {
@@ -1036,6 +1464,10 @@ function wait(ms: number, signal?: AbortSignal): Promise<void> {
     };
     signal?.addEventListener("abort", abort, { once: true });
   });
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizeComparableUrl(value: string | undefined): string | undefined {

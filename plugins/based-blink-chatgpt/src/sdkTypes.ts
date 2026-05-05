@@ -109,6 +109,7 @@ export interface WorkflowSdk {
       ensureRoutedTab(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ExtensionClientStatus>;
       openTab(url: string, options?: { active?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
       openWindow(url: string, options?: { focused?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
+      closeTab(tabId: number, options?: { controllerId?: string; signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
       focusTarget(target: ExtensionBrowserTarget, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;
       stageFiles(filePaths: string[]): Array<{ id: string; name: string; mimeType: string; url: string }>;
       executeCommand(target: ExtensionBrowserTarget, command: unknown, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown>;

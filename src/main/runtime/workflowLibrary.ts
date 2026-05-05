@@ -30,6 +30,10 @@ export function createWorkflowLibraryEntryFromRun(input: {
 }): WorkflowLibraryEntry {
   const run = input.store.getRun(input.runId);
   if (!run) throw new Error(`Run not found: ${input.runId}`);
+  const existingEntry = input.store.getWorkflowLibraryEntryBySourceRunId(run.id);
+  if (existingEntry) {
+    throw new Error(`Run is already saved to the library as "${existingEntry.name}".`);
+  }
 
   const id = randomUUID();
   const entryDir = getLibraryEntryDir(input.paths, id);

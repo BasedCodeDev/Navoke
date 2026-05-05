@@ -42,7 +42,7 @@ describe("workflow plugin packages", () => {
       targetUrl: "https://3d.hunyuanglobal.com/",
       title: "Hunyuan Global Image to 3D Model",
       requiresBrowser: false,
-      outputKinds: ["json"],
+      outputKinds: ["model", "download", "json"],
       uiCapabilities: ["extension.tabRouting"]
     });
     expect(manager.listPlugins()[0].capabilities).toContain("extension.browser");

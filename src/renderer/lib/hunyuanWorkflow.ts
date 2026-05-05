@@ -102,6 +102,7 @@ const HUNYUAN_TEXT = {
   imageTo3d: "\u56fe\u751f3D",
   multipleImages: "\u591a\u5f20\u56fe\u7247",
   addMultipleViews: "\u6dfb\u52a0\u591a\u89c6\u56fe",
+  detectionFailed: "\u68c0\u6d4b\u5931\u8d25",
   modelFaceCount: "\u6a21\u578b\u9762\u6570",
   modelType: "\u6a21\u578b\u7c7b\u578b",
   geometryTexturePhased: "\u51e0\u4f55\u3001\u7eb9\u7406\u5206\u9636\u6bb5",
@@ -122,6 +123,7 @@ const HUNYUAN_GLOBAL_TEXT = {
   emailLogin: "Start Using HY 3D",
   imageTo3d: "Image to 3D",
   multipleImages: "Multiple Images",
+  detectionFailed: "Detection failed",
   modelType: "Model Type",
   geometryTexturePhased: "Texture",
   generate: "Generate",
@@ -144,6 +146,17 @@ function hunyuanExportOptionSelector(label: string): string {
   return `:is(.download__dropdown, .t-popup, .t-dropdown__menu) :is(li.t-dropdown__item, [role="menuitem"]):has-text("${escapedLabel}"), li.t-dropdown__item:has-text("${escapedLabel}")`;
 }
 
+const HUNYUAN_VIEW_SLOT_CONTAINER_SELECTORS = {
+  front: ".hy-upload-card--front",
+  back: ".hy-upload-card--back",
+  left: ".hy-upload-card--left",
+  right: ".hy-upload-card--right",
+  top: ".hy-upload-card--top",
+  bottom: ".hy-upload-card--bottom",
+  left45: ".hy-upload-card--left-front",
+  right45: ".hy-upload-card--right-front"
+};
+
 export const DEFAULT_HUNYUAN_SELECTOR_CONFIG = {
   loginReadySelector: `label.t-radio-button:has-text("${HUNYUAN_TEXT.imageTo3d}")`,
   loginReadyText: "",
@@ -165,6 +178,14 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG = {
     left45: '.hy-upload-card--left-front input[type="file"]',
     right45: '.hy-upload-card--right-front input[type="file"]'
   },
+  viewSlotContainers: HUNYUAN_VIEW_SLOT_CONTAINER_SELECTORS,
+  slotDetectionFailedText: HUNYUAN_TEXT.detectionFailed,
+  slotDetectionRunningSelector:
+    '.t-loading, .t-loading__spinner, [class*="loading" i], [class*="spinner" i], [class*="progress" i]',
+  slotAcceptedThumbnailSelector: 'img, canvas, .t-image, [class*="preview" i], [class*="thumbnail" i]',
+  slotRemoveButtonSelector:
+    'button[aria-label*="remove" i], button[aria-label*="delete" i], [role="button"][aria-label*="remove" i], [role="button"][aria-label*="delete" i], .hy-upload-card__delete, .hy-upload-card__remove, .t-icon-delete, .t-icon-close',
+  slotEmptySelector: "",
   modelDropdown: ".model-version-select:visible",
   modelOptionV31: `li.t-select-option:has-text("${HUNYUAN_TEXT.v31}")`,
   faceCountButtons: {
@@ -234,6 +255,14 @@ export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG = {
     left45: '.hy-upload-card--left-front input[type="file"]',
     right45: '.hy-upload-card--right-front input[type="file"]'
   },
+  viewSlotContainers: HUNYUAN_VIEW_SLOT_CONTAINER_SELECTORS,
+  slotDetectionFailedText: HUNYUAN_GLOBAL_TEXT.detectionFailed,
+  slotDetectionRunningSelector:
+    '.t-loading, .t-loading__spinner, [class*="loading" i], [class*="spinner" i], [class*="progress" i]',
+  slotAcceptedThumbnailSelector: 'img, canvas, .t-image, [class*="preview" i], [class*="thumbnail" i]',
+  slotRemoveButtonSelector:
+    'button[aria-label*="remove" i], button[aria-label*="delete" i], [role="button"][aria-label*="remove" i], [role="button"][aria-label*="delete" i], .hy-upload-card__delete, .hy-upload-card__remove, .t-icon-delete, .t-icon-close',
+  slotEmptySelector: "",
   modelDropdown: ".model-version-select:visible",
   modelOptionV31: `li.t-select-option:has-text("${HUNYUAN_GLOBAL_TEXT.v31}")`,
   faceCountButtons: {
@@ -306,6 +335,16 @@ export const HUNYUAN_SELECTOR_ASSIGNMENTS: HunyuanSelectorAssignment[] = [
     label: `${field.label} upload input`,
     path: ["viewUploadInputs", field.selectorKey]
   })),
+  ...HUNYUAN_VIEW_FIELDS.map((field) => ({
+    key: `viewSlotContainers.${field.selectorKey}`,
+    label: `${field.label} slot container`,
+    path: ["viewSlotContainers", field.selectorKey]
+  })),
+  { key: "slotDetectionFailedText", label: "Slot detection failed text", path: ["slotDetectionFailedText"] },
+  { key: "slotDetectionRunningSelector", label: "Slot detection running selector", path: ["slotDetectionRunningSelector"] },
+  { key: "slotAcceptedThumbnailSelector", label: "Slot accepted thumbnail", path: ["slotAcceptedThumbnailSelector"] },
+  { key: "slotRemoveButtonSelector", label: "Slot remove button", path: ["slotRemoveButtonSelector"] },
+  { key: "slotEmptySelector", label: "Slot empty selector", path: ["slotEmptySelector"] },
   { key: "modelDropdown", label: "Model dropdown", path: ["modelDropdown"] },
   { key: "modelOptionV31", label: "3D generate V3.1 option", path: ["modelOptionV31"] },
   ...HUNYUAN_FACE_COUNTS.map((count) => ({

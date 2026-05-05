@@ -73,6 +73,33 @@ describe("generic browser extension content script", () => {
     });
   });
 
+  it("relays local BLINK API calls through the background service worker when available", async () => {
+    const heartbeatBodies: Array<Record<string, unknown>> = [];
+    const harness = loadContentScriptHarness(createFakeElement({ isContentEditable: true }), {
+      runtimeSendMessage: async (message) => {
+        const typed = message as { type?: string; options?: { body?: string } };
+        if (typed.type === "current-tab-info") return { ok: true, controllerId: "controller-1", tabId: 42, windowId: 7 };
+        if (typed.type === "controller-heartbeat") return { ok: true, controllerHeartbeat: { ok: true, controllerId: "controller-1" } };
+        if (typed.type === "api-fetch") {
+          heartbeatBodies.push(JSON.parse(String(typed.options?.body ?? "{}")));
+          return { type: "api-fetch-result", status: 204, ok: true, body: null };
+        }
+        return { ok: true };
+      },
+      fetch: async () => {
+        throw new Error("Direct content-script fetch should not be used when background relay is available.");
+      }
+    });
+
+    await harness.heartbeat();
+
+    expect(heartbeatBodies[0]).toMatchObject({
+      clientId: "client-test",
+      controllerId: "controller-1",
+      controllerHeartbeatOk: true
+    });
+  });
+
   it("surfaces background controller heartbeat failures with tab heartbeats", async () => {
     const heartbeatBodies: Array<Record<string, unknown>> = [];
     const harness = loadContentScriptHarness(createFakeElement({ isContentEditable: true }), {
@@ -266,6 +293,23 @@ describe("generic browser extension content script", () => {
     expect(clicked).toEqual(["visible"]);
   });
 
+  it("dispatches a click event when the selected element has no native click function", async () => {
+    const events: string[] = [];
+    const svgLike = createFakeElement({
+      isContentEditable: false,
+      visible: true,
+      id: "svg-close",
+      dispatchEvent: (event) => events.push(event.type)
+    }) as any;
+    delete svgLike.click;
+    const harness = loadContentScriptHarness(svgLike);
+
+    const result = await harness.performAction({ kind: "click", selector: ".hy-multi-view-grid__header-close" });
+
+    expect(result).toMatchObject({ ok: true, action: "click", selector: ".hy-multi-view-grid__header-close" });
+    expect(events).toEqual(["click"]);
+  });
+
   it("clicks the first visible enabled selector match with matching text", async () => {
     const clicked: string[] = [];
     const earlier = createFakeElement({ isContentEditable: false, visible: true, id: "earlier-button", textContent: "Learn More", onClick: () => clicked.push("earlier") });
@@ -284,6 +328,39 @@ describe("generic browser extension content script", () => {
       textMatchCount: 1
     });
     expect(clicked).toEqual(["start"]);
+  });
+
+  it("normalizes Playwright-style visible and has-text selectors for generic extension clicks", async () => {
+    const clicked: string[] = [];
+    const selectors: string[] = [];
+    const option = createFakeElement({ isContentEditable: false, visible: true, id: "obj-option", textContent: "OBJ", onClick: () => clicked.push("obj") });
+    const harness = loadContentScriptHarness(option, {
+      querySelectorAll: (selector) => {
+        selectors.push(selector);
+        if (selector.includes(":has-text") || selector.includes(":visible")) {
+          throw new Error(`Selector was not normalized: ${selector}`);
+        }
+        return [option];
+      }
+    });
+
+    const result = await harness.performAction({ kind: "click", selector: ':is(button, .t-button):visible:has-text("OBJ")' });
+
+    expect(result).toMatchObject({ ok: true, action: "click", candidateCount: 1 });
+    expect(selectors[0]).toBe(":is(button, .t-button)");
+    expect(clicked).toEqual(["obj"]);
+  });
+
+  it("supports text= regex selectors by choosing the deepest matching element", async () => {
+    const clicked: string[] = [];
+    const child = createFakeElement({ isContentEditable: false, visible: true, id: "multiple-images", textContent: "Multiple Images", onClick: () => clicked.push("child") });
+    const parent = createFakeElement({ isContentEditable: false, visible: true, id: "panel", textContent: "Single Image Multiple Images", onClick: () => clicked.push("parent") });
+    (parent as any).children = [child];
+    const harness = loadContentScriptHarness([parent, child]);
+
+    await harness.performAction({ kind: "click", selector: "text=/Multiple Images/i" });
+
+    expect(clicked).toEqual(["child"]);
   });
 
   it("ignores hidden or disabled text matches when clicking by text", async () => {
@@ -354,6 +431,7 @@ function loadContentScriptHarness(
     execCommand?(command: string, showUi: boolean, value: unknown): boolean;
     runtimeSendMessage?(message: unknown): Promise<unknown>;
     fetch?(url: string, options?: unknown): Promise<{ status: number; ok: boolean; text(): Promise<string> }>;
+    querySelectorAll?(selector: string): unknown[];
   } = {}
 ): {
   performAction(action: unknown): Promise<unknown>;
@@ -390,7 +468,7 @@ function loadContentScriptHarness(
       title: "Test page",
       body: { innerText: "", textContent: "" },
       querySelector: () => elements[0] ?? null,
-      querySelectorAll: () => elements,
+      querySelectorAll: options.querySelectorAll ?? (() => elements),
       createRange: () => ({
         selectNodeContents: (element: { textContent?: string }) => {
           element.textContent = "";
@@ -401,6 +479,12 @@ function loadContentScriptHarness(
     getComputedStyle: () => ({ display: "block", visibility: "visible" }),
     HTMLImageElement: Object,
     InputEvent: class {
+      type: string;
+      constructor(type: string) {
+        this.type = type;
+      }
+    },
+    MouseEvent: class {
       type: string;
       constructor(type: string) {
         this.type = type;

@@ -469,6 +469,14 @@ export class ApiServer {
       }
     });
 
+    app.post("/api/extension/downloads/event", (req, res, next) => {
+      try {
+        res.json(this.options.extensionBridge.recordDownloadEvent(req.body ?? {}));
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.get("/api/extension/files/:fileId", (req, res, next) => {
       try {
         const filePath = this.options.extensionBridge.getStagedFilePath(req.params.fileId);

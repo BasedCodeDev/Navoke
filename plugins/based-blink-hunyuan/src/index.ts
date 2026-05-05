@@ -2,7 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import type * as zod from "zod";
-import type { ExtensionBrowserTarget, WorkflowDefinition, WorkflowSdk } from "./sdkTypes";
+import type { ExtensionBrowserTarget, ExtensionClientStatus, WorkflowContext, WorkflowDefinition, WorkflowSdk } from "./sdkTypes";
 
 export type HunyuanViewField =
   | "frontImage"
@@ -23,6 +23,10 @@ export const HUNYUAN_TENCENT_WORKFLOW_ID = "based-blink.hunyuan.image-to-model";
 export const HUNYUAN_GLOBAL_WORKFLOW_ID = "based-blink.hunyuan.global.image-to-model";
 export const HUNYUAN_GLOBAL_TARGET_URL = "https://3d.hunyuanglobal.com/";
 const ROUTING_TOKEN_PARAM = "based-blink-tab";
+const HUNYUAN_MULTIVIEW_UPLOAD_SETTLE_DELAY_MS = 1500;
+const HUNYUAN_SLOT_DETECTION_MAX_ATTEMPTS = 5;
+const HUNYUAN_SLOT_DETECTION_STATE_TIMEOUT_MS = 120_000;
+const HUNYUAN_GLOBAL_TEXTURE_PACKAGE_DOWNLOAD_TIMEOUT_MS = 300_000;
 
 export interface HunyuanViewSlot {
   field: HunyuanViewField;
@@ -45,6 +49,12 @@ export interface HunyuanSelectorConfig {
   addMultipleViewsButton?: string;
   multipleViewsConfirmButton?: string;
   viewUploadInputs?: Partial<Record<HunyuanViewSelectorKey, string>>;
+  viewSlotContainers?: Partial<Record<HunyuanViewSelectorKey, string>>;
+  slotDetectionFailedText?: string;
+  slotDetectionRunningSelector?: string;
+  slotAcceptedThumbnailSelector?: string;
+  slotRemoveButtonSelector?: string;
+  slotEmptySelector?: string;
   modelDropdown?: string;
   modelOptionV31?: string;
   faceCountButtons?: Partial<Record<HunyuanFaceCount, string>>;
@@ -97,14 +107,32 @@ export interface HunyuanWorkflowInputLike {
 
 export type HunyuanExtensionTabTarget =
   | { mode: "any" }
-  | { mode: "existing"; clientId: string; url?: string; title?: string }
-  | { mode: "new"; routingToken: string; url?: string; title?: string; openMode?: "window" | "tab" };
+  | { mode: "existing"; clientId: string; url?: string; title?: string; tabId?: number; windowId?: number; controllerId?: string }
+  | {
+      mode: "new";
+      routingToken: string;
+      url?: string;
+      title?: string;
+      openMode?: "window" | "tab";
+      clientId?: string;
+      tabId?: number;
+      windowId?: number;
+      controllerId?: string;
+    };
 
 export interface HunyuanViewUpload {
   field: HunyuanViewField;
   selectorKey: HunyuanViewSelectorKey;
   label: string;
   imagePath: string;
+}
+
+interface HunyuanOwnedBrowserSurface {
+  tabId: number;
+  windowId?: number;
+  controllerId?: string;
+  routingToken?: string;
+  source: "routed-client" | "routed-open-error";
 }
 
 export const HUNYUAN_VIEW_SLOTS: HunyuanViewSlot[] = [
@@ -117,6 +145,17 @@ export const HUNYUAN_VIEW_SLOTS: HunyuanViewSlot[] = [
   { field: "left45Image", selectorKey: "left45", label: "Left 45" },
   { field: "right45Image", selectorKey: "right45", label: "Right 45" }
 ];
+
+const HUNYUAN_VIEW_SLOT_CONTAINER_SELECTORS: Record<HunyuanViewSelectorKey, string> = {
+  front: ".hy-upload-card--front",
+  back: ".hy-upload-card--back",
+  left: ".hy-upload-card--left",
+  right: ".hy-upload-card--right",
+  top: ".hy-upload-card--top",
+  bottom: ".hy-upload-card--bottom",
+  left45: ".hy-upload-card--left-front",
+  right45: ".hy-upload-card--right-front"
+};
 
 export const HUNYUAN_FACE_COUNTS: HunyuanFaceCount[] = ["1.5m", "1m", "500k", "50k"];
 export const HUNYUAN_RETOPOLOGY_TYPES: HunyuanRetopologyType[] = ["triangle", "quad"];
@@ -147,6 +186,7 @@ const HUNYUAN_TEXT = {
   multipleImages: "\u591a\u5f20\u56fe\u7247",
   addMultipleViews: "\u6dfb\u52a0\u591a\u89c6\u56fe",
   uploading: "\u4e0a\u4f20\u4e2d",
+  detectionFailed: "\u68c0\u6d4b\u5931\u8d25",
   modelFaceCount: "\u6a21\u578b\u9762\u6570",
   modelType: "\u6a21\u578b\u7c7b\u578b",
   geometryTexturePhased: "\u51e0\u4f55\u3001\u7eb9\u7406\u5206\u9636\u6bb5",
@@ -166,21 +206,23 @@ const HUNYUAN_TEXT = {
 const HUNYUAN_GLOBAL_TEXT = {
   login: "Start Using",
   emailLogin: "Start Using HY 3D",
-  imageTo3d: "Image to 3D",
+  imageTo3d: "Image-to-3D",
   multipleImages: "Multiple Images",
   addMultipleViews: "Add Multi-view",
   uploading: "Uploading",
+  detectionFailed: "Detection failed",
   modelFaceCount: "Model",
-  modelType: "Model Type",
-  geometryTexturePhased: "Texture",
+  modelType: "Generation type",
+  geometryTexturePhased: "Staged Generation",
   generate: "Generate",
   generating: "Generating",
   estimatedRemaining: "Estimated",
+  textureEstimatedTime: "Estimated time",
   v31: "V3.1",
   triangle: "Triangle",
-  quad: "Quad",
-  smartRetopology: "Smart Retopology",
-  generateTexture: "Generate Texture",
+  quad: "Quadrilaterals",
+  smartRetopology: "Smart Topology",
+  generateTexture: "Generate texture",
   autoRig: "Auto Rig",
   download: "Download"
 };
@@ -213,6 +255,14 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG: HunyuanSelectorConfig = {
     left45: '.hy-upload-card--left-front input[type="file"]',
     right45: '.hy-upload-card--right-front input[type="file"]'
   },
+  viewSlotContainers: HUNYUAN_VIEW_SLOT_CONTAINER_SELECTORS,
+  slotDetectionFailedText: HUNYUAN_TEXT.detectionFailed,
+  slotDetectionRunningSelector:
+    '.t-loading, .t-loading__spinner, [class*="loading" i], [class*="spinner" i], [class*="progress" i]',
+  slotAcceptedThumbnailSelector: 'img, canvas, .t-image, [class*="preview" i], [class*="thumbnail" i]',
+  slotRemoveButtonSelector:
+    'button[aria-label*="remove" i], button[aria-label*="delete" i], [role="button"][aria-label*="remove" i], [role="button"][aria-label*="delete" i], .hy-upload-card__delete, .hy-upload-card__remove, .t-icon-delete, .t-icon-close',
+  slotEmptySelector: "",
   modelDropdown: ".model-version-select:visible",
   modelOptionV31: `li.t-select-option:has-text("${HUNYUAN_TEXT.v31}")`,
   faceCountButtons: {
@@ -259,7 +309,8 @@ export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG: HunyuanSelectorConfig = {
   imageTo3dTab: `label.t-radio-button:has-text("${HUNYUAN_GLOBAL_TEXT.imageTo3d}")`,
   multipleImagesTab: `text=/${HUNYUAN_GLOBAL_TEXT.multipleImages}/i`,
   addMultipleViewsButton: ".hy-multiple-views-upload-v2",
-  multipleViewsConfirmButton: ".hy-multi-view-grid__header-close",
+  multipleViewsConfirmButton:
+    'button:has(.hy-multi-view-grid__header-close), [role="button"]:has(.hy-multi-view-grid__header-close), .t-dialog__close, .hy-multi-view-grid__header-close',
   viewUploadInputs: {
     front: '.hy-upload-card--front input[type="file"]',
     back: '.hy-upload-card--back input[type="file"]',
@@ -270,6 +321,14 @@ export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG: HunyuanSelectorConfig = {
     left45: '.hy-upload-card--left-front input[type="file"]',
     right45: '.hy-upload-card--right-front input[type="file"]'
   },
+  viewSlotContainers: HUNYUAN_VIEW_SLOT_CONTAINER_SELECTORS,
+  slotDetectionFailedText: HUNYUAN_GLOBAL_TEXT.detectionFailed,
+  slotDetectionRunningSelector:
+    '.t-loading, .t-loading__spinner, [class*="loading" i], [class*="spinner" i], [class*="progress" i]',
+  slotAcceptedThumbnailSelector: 'img, canvas, .t-image, [class*="preview" i], [class*="thumbnail" i]',
+  slotRemoveButtonSelector:
+    'button[aria-label*="remove" i], button[aria-label*="delete" i], [role="button"][aria-label*="remove" i], [role="button"][aria-label*="delete" i], .hy-upload-card__delete, .hy-upload-card__remove, .t-icon-delete, .t-icon-close',
+  slotEmptySelector: "",
   modelDropdown: ".model-version-select:visible",
   modelOptionV31: `li.t-select-option:has-text("${HUNYUAN_GLOBAL_TEXT.v31}")`,
   faceCountButtons: {
@@ -279,7 +338,7 @@ export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG: HunyuanSelectorConfig = {
     "50k": `div.generation-type-select:visible .qaUJkqcCF813NIqHGF3U:visible:has-text("50k")`
   },
   modelTypeGeometryTexturePhased: `div.generation-type-select:visible:has(.generation-type-select-title:has-text("${HUNYUAN_GLOBAL_TEXT.modelType}")) .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_GLOBAL_TEXT.geometryTexturePhased}")`,
-  generateButton: `.sideBarLeft-generateBtn:not(.t-is-disabled):not([disabled]):has-text("${HUNYUAN_GLOBAL_TEXT.generate}")`,
+  generateButton: `:is(button, .t-button, [role="button"], .sideBarLeft-generateBtn):not(.t-is-disabled):not([disabled]):has-text("${HUNYUAN_GLOBAL_TEXT.generate}")`,
   geometryRunningText: HUNYUAN_GLOBAL_TEXT.generating,
   geometryReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.smartRetopology),
   retopologyTypeButtons: {
@@ -290,7 +349,7 @@ export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG: HunyuanSelectorConfig = {
   retopologyRunningText: HUNYUAN_GLOBAL_TEXT.generating,
   retopologyReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.generateTexture),
   generateTextureButton: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.generateTexture),
-  textureRunningText: HUNYUAN_GLOBAL_TEXT.generating,
+  textureRunningText: HUNYUAN_GLOBAL_TEXT.textureEstimatedTime,
   textureReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download),
   autoRigButton: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.autoRig),
   autoRigRunningText: HUNYUAN_GLOBAL_TEXT.generating,
@@ -344,6 +403,7 @@ export function mergeHunyuanSelectorConfig(
     ...defaults,
     ...compactSelectorObject(selectors),
     viewUploadInputs: mergeSelectorRecord(defaults.viewUploadInputs, selectors?.viewUploadInputs),
+    viewSlotContainers: mergeSelectorRecord(defaults.viewSlotContainers, selectors?.viewSlotContainers),
     faceCountButtons: mergeSelectorRecord(defaults.faceCountButtons, selectors?.faceCountButtons),
     retopologyTypeButtons: mergeSelectorRecord(defaults.retopologyTypeButtons, selectors?.retopologyTypeButtons),
     exportFormatOptions: mergeSelectorRecord(defaults.exportFormatOptions, selectors?.exportFormatOptions)
@@ -460,6 +520,253 @@ export function resolveHunyuanExportFormat(
   return { requested, actual: requested, availableOptions };
 }
 
+type HunyuanSlotDetectionStateName = "accepted" | "failed" | "processing" | "empty";
+
+interface HunyuanSlotDetectionSnapshot {
+  slot: HunyuanViewSelectorKey;
+  label: string;
+  state: HunyuanSlotDetectionStateName;
+  containerSelector: string;
+  text: string;
+  failureText?: string;
+  thumbnailVisible: boolean;
+  runningVisible: boolean;
+  emptyVisible: boolean;
+}
+
+interface HunyuanSlotAcceptanceResult {
+  slot: HunyuanViewSelectorKey;
+  label: string;
+  attempts: number;
+  fileName: string;
+}
+
+class HunyuanSlotDetectionRetryExhaustedError extends Error {
+  readonly upload: HunyuanViewUpload;
+  readonly attempts: number;
+  readonly lastSnapshot: HunyuanSlotDetectionSnapshot;
+
+  constructor(upload: HunyuanViewUpload, attempts: number, lastSnapshot: HunyuanSlotDetectionSnapshot) {
+    super(`Hunyuan detection failed repeatedly for ${upload.label} (${upload.selectorKey}) after ${attempts} attempts.`);
+    this.name = "HunyuanSlotDetectionRetryExhaustedError";
+    this.upload = upload;
+    this.attempts = attempts;
+    this.lastSnapshot = lastSnapshot;
+  }
+}
+
+async function ensurePlaywrightHunyuanSlotAccepted(
+  page: any,
+  upload: HunyuanViewUpload,
+  selectors: HunyuanSelectorConfig,
+  uploadingText: string,
+  timeoutMs: number,
+  signal: AbortSignal,
+  recordPhase: (phase: string, data?: unknown) => void
+): Promise<HunyuanSlotAcceptanceResult> {
+  let lastSnapshot: HunyuanSlotDetectionSnapshot | undefined;
+  const fileName = path.basename(upload.imagePath);
+
+  for (let attempt = 1; attempt <= HUNYUAN_SLOT_DETECTION_MAX_ATTEMPTS; attempt += 1) {
+    await page.locator(selectors.viewUploadInputs![upload.selectorKey]!).first().setInputFiles(upload.imagePath);
+    recordPhase(`uploaded-${upload.selectorKey}`, { imagePath: upload.imagePath, fileName, attempt });
+
+    await waitForHunyuanUploadProcessingComplete(page, timeoutMs, uploadingText);
+    const snapshot = await waitForPlaywrightHunyuanSlotDetectionState(
+      page,
+      upload,
+      selectors,
+      uploadingText,
+      Math.min(timeoutMs, HUNYUAN_SLOT_DETECTION_STATE_TIMEOUT_MS),
+      signal
+    );
+    lastSnapshot = snapshot;
+    recordPhase(`slot-detection-${upload.selectorKey}`, { ...snapshot, attempt, fileName });
+
+    if (snapshot.state === "accepted") {
+      return { slot: upload.selectorKey, label: upload.label, attempts: attempt, fileName };
+    }
+
+    if (attempt < HUNYUAN_SLOT_DETECTION_MAX_ATTEMPTS) {
+      recordPhase(`slot-detection-retry-${upload.selectorKey}`, { ...snapshot, attempt, fileName });
+      await clearPlaywrightHunyuanSlotUpload(page, upload, selectors, signal);
+      continue;
+    }
+  }
+
+  throw new HunyuanSlotDetectionRetryExhaustedError(upload, HUNYUAN_SLOT_DETECTION_MAX_ATTEMPTS, lastSnapshot!);
+}
+
+async function waitForPlaywrightHunyuanSlotDetectionState(
+  page: any,
+  upload: HunyuanViewUpload,
+  selectors: HunyuanSelectorConfig,
+  uploadingText: string,
+  timeoutMs: number,
+  signal: AbortSignal
+): Promise<HunyuanSlotDetectionSnapshot> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSnapshot: HunyuanSlotDetectionSnapshot | undefined;
+
+  while (Date.now() < deadline) {
+    const snapshot = await readPlaywrightHunyuanSlotDetectionSnapshot(page, upload, selectors, uploadingText);
+    lastSnapshot = snapshot;
+    if (snapshot.state === "accepted" || snapshot.state === "failed") return snapshot;
+    await sleepWithSignal(500, signal);
+  }
+
+  throw new Error(
+    `Timed out waiting for Hunyuan slot detection state. slot=${upload.selectorKey}; ` +
+      `lastState=${lastSnapshot?.state ?? "unknown"}; text=${lastSnapshot?.text ?? ""}`
+  );
+}
+
+async function readPlaywrightHunyuanSlotDetectionSnapshot(
+  page: any,
+  upload: HunyuanViewUpload,
+  selectors: HunyuanSelectorConfig,
+  uploadingText: string
+): Promise<HunyuanSlotDetectionSnapshot> {
+  const containerSelector = hunyuanSlotContainerSelector(selectors, upload.selectorKey);
+  const text = await readPlaywrightText(page, containerSelector);
+  const failureText = selectors.slotDetectionFailedText;
+  const runningSelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotDetectionRunningSelector);
+  const acceptedSelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotAcceptedThumbnailSelector);
+  const emptySelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotEmptySelector);
+  const failed = textIncludes(text, failureText);
+  const runningVisible = await isSelectorVisible(page, runningSelector, 250);
+  const thumbnailVisible = await isSelectorVisible(page, acceptedSelector, 250);
+  const emptyVisible = await isSelectorVisible(page, emptySelector, 250);
+  const processing = runningVisible || textIncludes(text, uploadingText);
+  const state: HunyuanSlotDetectionStateName = failed
+    ? "failed"
+    : processing
+      ? "processing"
+      : thumbnailVisible
+        ? "accepted"
+        : emptyVisible
+          ? "empty"
+          : "processing";
+
+  return {
+    slot: upload.selectorKey,
+    label: upload.label,
+    state,
+    containerSelector,
+    text,
+    ...(failed && failureText ? { failureText } : {}),
+    thumbnailVisible,
+    runningVisible,
+    emptyVisible
+  };
+}
+
+async function clearPlaywrightHunyuanSlotUpload(
+  page: any,
+  upload: HunyuanViewUpload,
+  selectors: HunyuanSelectorConfig,
+  signal: AbortSignal
+): Promise<void> {
+  const containerSelector = hunyuanSlotContainerSelector(selectors, upload.selectorKey);
+  const thumbnailSelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotAcceptedThumbnailSelector);
+  const removeSelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotRemoveButtonSelector);
+  if (!hasSelector(removeSelector)) {
+    await clickPlaywrightOptional(page, thumbnailSelector);
+    await clickPlaywrightOptional(page, containerSelector);
+    await sleepWithSignal(250, signal);
+    return;
+  }
+  for (let round = 0; round < 2; round += 1) {
+    if (round > 0) {
+      await clickPlaywrightOptional(page, thumbnailSelector);
+      await clickPlaywrightOptional(page, containerSelector);
+      await sleepWithSignal(250, signal);
+    }
+
+    try {
+      await page.locator(removeSelector).first().click({ timeout: 2_000 });
+      await sleepWithSignal(500, signal);
+      return;
+    } catch {
+    }
+  }
+
+  await sleepWithSignal(250, signal);
+}
+
+async function clickPlaywrightOptional(page: any, selector: string | undefined): Promise<void> {
+  if (!hasSelector(selector)) return;
+  await page.locator(selector).first().click({ timeout: 1_000 }).catch(() => undefined);
+}
+
+async function readPlaywrightText(page: any, selector: string): Promise<string> {
+  try {
+    const text = await page.locator(selector).first().textContent({ timeout: 1_000 });
+    return typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function hunyuanSlotContainerSelector(selectors: HunyuanSelectorConfig, slot: HunyuanViewSelectorKey): string {
+  return selectors.viewSlotContainers?.[slot] ?? HUNYUAN_VIEW_SLOT_CONTAINER_SELECTORS[slot];
+}
+
+function scopeHunyuanSlotSelector(containerSelector: string, selector: string | undefined): string | undefined {
+  if (!hasSelector(selector)) return undefined;
+  if (selector.trim().startsWith("text=")) return selector;
+  return splitSelectorList(selector)
+    .map((part) => {
+      if (part.startsWith(":scope")) return `${containerSelector}${part.slice(":scope".length)}`;
+      if (part.startsWith(containerSelector)) return part;
+      return `${containerSelector} ${part}`;
+    })
+    .join(", ");
+}
+
+function splitSelectorList(selector: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  let depth = 0;
+
+  for (const char of selector) {
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === "(" || char === "[") {
+      depth += 1;
+      current += char;
+      continue;
+    }
+    if (char === ")" || char === "]") {
+      depth = Math.max(0, depth - 1);
+      current += char;
+      continue;
+    }
+    if (char === "," && depth === 0) {
+      if (current.trim()) parts.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function textIncludes(text: string, needle: string | undefined): boolean {
+  return hasSelector(needle) && text.toLowerCase().includes(needle.toLowerCase());
+}
+
 export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
   const { z } = sdk.schema;
   const { launchPersistentProfile, saveScreenshot, startTrace, stopTrace, timeoutMinutes } = sdk.browser;
@@ -483,6 +790,7 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       right45: stringSelectorSchema
     })
     .default({});
+  const viewSlotContainerSelectorsSchema = viewUploadSelectorsSchema;
   const faceCountSelectorsSchema = z
     .object({
       "1.5m": stringSelectorSchema,
@@ -519,6 +827,12 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       addMultipleViewsButton: stringSelectorSchema,
       multipleViewsConfirmButton: stringSelectorSchema,
       viewUploadInputs: viewUploadSelectorsSchema,
+      viewSlotContainers: viewSlotContainerSelectorsSchema,
+      slotDetectionFailedText: stringSelectorSchema,
+      slotDetectionRunningSelector: stringSelectorSchema,
+      slotAcceptedThumbnailSelector: stringSelectorSchema,
+      slotRemoveButtonSelector: stringSelectorSchema,
+      slotEmptySelector: stringSelectorSchema,
       modelDropdown: stringSelectorSchema,
       modelOptionV31: stringSelectorSchema,
       faceCountButtons: faceCountSelectorsSchema,
@@ -592,14 +906,21 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       mode: z.literal("existing"),
       clientId: z.string().trim().min(1),
       url: z.string().optional(),
-      title: z.string().optional()
+      title: z.string().optional(),
+      tabId: z.number().optional(),
+      windowId: z.number().optional(),
+      controllerId: z.string().optional()
     }),
     z.object({
       mode: z.literal("new"),
       routingToken: z.string().trim().min(1),
       url: z.string().optional(),
       title: z.string().optional(),
-      openMode: z.enum(["window", "tab"]).optional().default("window")
+      openMode: z.enum(["window", "tab"]).optional().default("window"),
+      clientId: z.string().optional(),
+      tabId: z.number().optional(),
+      windowId: z.number().optional(),
+      controllerId: z.string().optional()
     })
   ]);
 
@@ -767,14 +1088,74 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
         await clickSelector(page, selectors.multipleImagesTab!);
         await clickSelector(page, selectors.addMultipleViewsButton!);
 
-        await ctx.step("Uploading multiview images", 15, { views: uploadPlan.map((upload) => upload.selectorKey) });
-        for (const upload of uploadPlan) {
-          await page.locator(selectors.viewUploadInputs![upload.selectorKey]!).first().setInputFiles(upload.imagePath);
-          recordPhase(`uploaded-${upload.selectorKey}`, { imagePath: upload.imagePath });
+        await ctx.step("Uploading and validating multiview images", 15, { views: uploadPlan.map((upload) => upload.selectorKey) });
+        const acceptedSlots: HunyuanSlotAcceptanceResult[] = [];
+        for (let index = 0; index < uploadPlan.length; index += 1) {
+          const upload = uploadPlan[index]!;
+          try {
+            acceptedSlots.push(
+              await ensurePlaywrightHunyuanSlotAccepted(
+                page,
+                upload,
+                selectors,
+                site.uploadingText,
+                timeoutMinutes(input.timeoutMinutes),
+                ctx.signal,
+                recordPhase
+              )
+            );
+          } catch (error) {
+            if (!(error instanceof HunyuanSlotDetectionRetryExhaustedError)) throw error;
+            const screenshot = await saveScreenshot(page, ctx.artifactDir, `hunyuan-detection-failed-${upload.selectorKey}.png`);
+            const screenshotArtifact = await ctx.addArtifact({
+              kind: "screenshot",
+              name: path.basename(screenshot),
+              path: screenshot,
+              mimeType: "image/png",
+              metadata: {
+                source: site.source,
+                phase: "slot-detection",
+                slot: upload.selectorKey,
+                label: upload.label,
+                attempts: error.attempts,
+                lastSnapshot: error.lastSnapshot
+              }
+            });
+            artifactIds.push(screenshotArtifact.id);
+            await ctx.waitForManualAction(
+              `Hunyuan repeatedly rejected the ${upload.label} view. Clear that slot, re-upload the same image, wait until it is accepted, then resume this run.`,
+              {
+                source: site.source,
+                slot: upload.selectorKey,
+                label: upload.label,
+                imagePath: upload.imagePath,
+                attempts: error.attempts,
+                screenshotArtifactId: screenshotArtifact.id,
+                lastSnapshot: error.lastSnapshot
+              }
+            );
+            const manualSnapshot = await waitForPlaywrightHunyuanSlotDetectionState(
+              page,
+              upload,
+              selectors,
+              site.uploadingText,
+              Math.min(timeoutMinutes(input.timeoutMinutes), HUNYUAN_SLOT_DETECTION_STATE_TIMEOUT_MS),
+              ctx.signal
+            );
+            if (manualSnapshot.state !== "accepted") throw error;
+            acceptedSlots.push({
+              slot: upload.selectorKey,
+              label: upload.label,
+              attempts: error.attempts,
+              fileName: path.basename(upload.imagePath)
+            });
+          }
+          if (index < uploadPlan.length - 1) {
+            await sleepWithSignal(HUNYUAN_MULTIVIEW_UPLOAD_SETTLE_DELAY_MS, ctx.signal);
+          }
         }
 
-        await ctx.step("Waiting for Hunyuan uploads", 20, { views: uploadPlan.map((upload) => upload.selectorKey) });
-        await waitForHunyuanUploadProcessingComplete(page, timeoutMinutes(input.timeoutMinutes), site.uploadingText);
+        await ctx.step("Hunyuan multiview images accepted", 20, { slots: acceptedSlots });
         await closeHunyuanMultipleViewsModal(page, selectors, site.addMultipleViewsText);
 
         await ctx.step("Applying Hunyuan settings", 25, {
@@ -1117,13 +1498,13 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       manifest: {
         id: HUNYUAN_GLOBAL_WORKFLOW_ID,
         title: "Hunyuan Global Image to 3D Model",
-        description: "Opens Hunyuan Global in your normal browser and pauses at the email login checkpoint.",
+        description: "Generates one textured, retopologized OBJ model from multiple Hunyuan Global reference views.",
         category: "hunyuan",
         version: "0.1.0",
         concurrency: 1,
         requiresBrowser: false,
         targetUrl: HUNYUAN_GLOBAL_TARGET_URL,
-        outputKinds: ["json"],
+        outputKinds: ["model", "download", "json"],
         uiCapabilities: ["extension.tabRouting"],
         inputFields: [
           { name: "frontImage", label: "Front image", type: "fileList", required: true },
@@ -1185,62 +1566,469 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
           multipleImagesTab: selectors.multipleImagesTab
         };
         let lastMetadata: Record<string, unknown> = {};
+        let ownedSurface: HunyuanOwnedBrowserSurface | undefined;
 
-        for (let attempt = 1; attempt <= 4; attempt += 1) {
-          await ctx.step(attempt === 1 ? "Opening Hunyuan Global login" : "Checking Hunyuan Global login", 8, {
-            target: redactHunyuanTarget(input.extensionTab),
-            attempt
-          });
+        try {
+          for (let attempt = 1; attempt <= 4; attempt += 1) {
+            await ctx.step(attempt === 1 ? "Opening Hunyuan Global login" : "Checking Hunyuan Global login", 8, {
+              target: redactHunyuanTarget(input.extensionTab),
+              attempt
+            });
 
-          const extensionStatus = typeof browserExtension.status === "function" ? normalizeRecord(browserExtension.status()) : {};
-          if (Number(extensionStatus.compatible ?? 0) > 0 && Number(extensionStatus.compatibleControllers ?? 0) === 0) {
-            await ctx.step(
-              "BLINK extension tabs are connected, but the browser controller is not connected. Open the BLINK extension popup in the intended Chrome profile until it reports at least 1 browser controller. Do not open chrome.exe or paste the routed URL into another profile.",
-              8,
-              {
-                phase: "extension-controller",
-                extensionStatus,
+            const extensionStatus = typeof browserExtension.status === "function" ? normalizeRecord(browserExtension.status()) : {};
+            if (Number(extensionStatus.compatible ?? 0) > 0 && Number(extensionStatus.compatibleControllers ?? 0) === 0) {
+              await ctx.step(
+                "BLINK extension tabs are connected, but the browser controller is not connected. Open the BLINK extension popup in the intended Chrome profile until it reports at least 1 browser controller. Do not open chrome.exe or paste the routed URL into another profile.",
+                8,
+                {
+                  phase: "extension-controller",
+                  extensionStatus,
+                  target: redactHunyuanTarget(input.extensionTab)
+                }
+              );
+            }
+
+            try {
+              const routedClient = await browserExtension.ensureRoutedTab(input.extensionTab, { signal: ctx.signal, timeoutMs: 120_000 });
+              ownedSurface ??= hunyuanOwnedSurfaceFromRoutedClient(input.extensionTab, routedClient);
+            } catch (error) {
+              ownedSurface ??= hunyuanOwnedSurfaceFromError(input.extensionTab, error);
+              await ctx.waitForManualAction(hunyuanControllerManualMessage(error), {
+                phase: "extension-tab",
                 target: redactHunyuanTarget(input.extensionTab)
-              }
-            );
-          }
+              });
+              continue;
+            }
 
-          try {
-            await browserExtension.ensureRoutedTab(input.extensionTab, { signal: ctx.signal, timeoutMs: 45_000 });
-          } catch (error) {
-            await ctx.waitForManualAction(hunyuanControllerManualMessage(error), {
-              phase: "extension-tab",
+            lastMetadata = await checkHunyuanGlobalLoginState(input.extensionTab, loginSelectors, Math.min(timeoutMinutes(input.timeoutMinutes), 120_000), ctx.signal);
+            const manualAction = normalizeRecord(lastMetadata.manualActionRequired);
+            if (manualAction.required === true) {
+              await ctx.waitForManualAction("Complete Hunyuan Global login in the browser, then resume this run.", {
+                ...manualAction,
+                target: redactHunyuanTarget(input.extensionTab)
+              });
+              continue;
+            }
+
+            if (lastMetadata.authenticated !== true) {
+              throw new Error("Hunyuan Global login check completed without authenticated or manual-action metadata.");
+            }
+
+            await ctx.step("Hunyuan Global authenticated", 12, {
+              url: stringValue(lastMetadata.url),
               target: redactHunyuanTarget(input.extensionTab)
             });
-            continue;
+            return await runHunyuanGlobalExtensionGeneration(input, ctx, selectors, stringValue(lastMetadata.url));
           }
 
-          lastMetadata = await checkHunyuanGlobalLoginState(input.extensionTab, loginSelectors, Math.min(timeoutMinutes(input.timeoutMinutes), 120_000), ctx.signal);
-          const manualAction = normalizeRecord(lastMetadata.manualActionRequired);
-          if (manualAction.required === true) {
-            await ctx.waitForManualAction("Complete Hunyuan Global login in the browser, then resume this run.", {
-              ...manualAction,
-              target: redactHunyuanTarget(input.extensionTab)
-            });
-            continue;
-          }
-
-          if (lastMetadata.authenticated !== true) {
-            throw new Error("Hunyuan Global login check completed without authenticated or manual-action metadata.");
-          }
-
-          await ctx.step("Hunyuan Global authenticated", 100, {
-            url: stringValue(lastMetadata.url),
-            target: redactHunyuanTarget(input.extensionTab)
-          });
-          return {
-            artifactIds: [],
-            summary: "Hunyuan Global authenticated. Model generation was not started in this login slice."
-          };
+          throw new Error("Hunyuan Global still requires manual action after multiple resume attempts.");
+        } finally {
+          await cleanupHunyuanOwnedBrowserSurface(ownedSurface, ctx);
         }
-
-        throw new Error("Hunyuan Global still requires manual action after multiple resume attempts.");
       }
+    };
+  }
+
+  async function runHunyuanGlobalExtensionGeneration(
+    input: zod.infer<typeof globalInputSchema>,
+    ctx: WorkflowContext,
+    selectors: HunyuanSelectorConfig,
+    authenticatedUrl: string
+  ): Promise<zod.infer<typeof outputSchema>> {
+    const artifactIds: string[] = [];
+    const phaseEvents: Array<{ phase: string; completedAt: string; data?: unknown }> = [];
+    const uploadPlan = buildHunyuanViewUploadPlan(input);
+    const target = input.extensionTab;
+
+    function recordPhase(phase: string, data?: unknown): void {
+      phaseEvents.push({ phase, completedAt: new Date().toISOString(), ...(data === undefined ? {} : { data }) });
+    }
+
+    const missingSelectors = missingHunyuanSelectorKeys({ ...input, selectors });
+    if (missingSelectors.length > 0) {
+      const calibrationPath = path.join(ctx.artifactDir, "hunyuan-global-selector-calibration.json");
+      const inspection = await browserExtension.inspect(target, { signal: ctx.signal, timeoutMs: 30_000 }).catch((error) => ({
+        inspectionError: formatErrorMessage(error)
+      }));
+      writeJson(calibrationPath, {
+        source: "hunyuan-global",
+        phase: "selector-check",
+        missingSelectors,
+        inspection
+      });
+      const calibrationArtifact = await ctx.addArtifact({
+        kind: "json",
+        name: path.basename(calibrationPath),
+        path: calibrationPath,
+        mimeType: "application/json",
+        metadata: { source: "hunyuan-global", missingSelectors }
+      });
+      artifactIds.push(calibrationArtifact.id);
+      throw new WorkflowConfigurationError(
+        `Hunyuan Global selectors are not configured. Missing selector keys: ${missingSelectors.join(
+          ", "
+        )}. Saved calibration artifact ${calibrationArtifact.id}. Use Workflow Lab to inspect the page controls and calibrate selector support.`
+      );
+    }
+
+    await ctx.step("Selecting Hunyuan Global multiview mode", 15, { url: authenticatedUrl });
+    await extensionClickHunyuanControl(target, selectors.imageTo3dTab!, "imageTo3dTab", ctx.signal);
+    await extensionClickHunyuanControl(target, selectors.multipleImagesTab!, "multipleImagesTab", ctx.signal);
+    await extensionClickHunyuanControl(target, selectors.addMultipleViewsButton!, "addMultipleViewsButton", ctx.signal);
+    recordPhase("multiview-opened");
+
+    await ctx.step("Uploading and validating Hunyuan Global multiview images", 22, { views: uploadPlan.map((upload) => upload.selectorKey) });
+    const acceptedSlots: HunyuanSlotAcceptanceResult[] = [];
+    for (let index = 0; index < uploadPlan.length; index += 1) {
+      const upload = uploadPlan[index]!;
+      try {
+        acceptedSlots.push(
+          await ensureExtensionHunyuanSlotAccepted(
+            target,
+            upload,
+            selectors,
+            HUNYUAN_GLOBAL_TEXT.uploading,
+            timeoutMinutes(input.timeoutMinutes),
+            ctx.signal,
+            recordPhase
+          )
+        );
+      } catch (error) {
+        if (!(error instanceof HunyuanSlotDetectionRetryExhaustedError)) throw error;
+        const calibrationPath = path.join(ctx.artifactDir, `hunyuan-global-detection-failed-${upload.selectorKey}.json`);
+        const inspection = await browserExtension.inspect(target, { signal: ctx.signal, timeoutMs: 30_000 }).catch((inspectError) => ({
+          inspectionError: formatErrorMessage(inspectError)
+        }));
+        writeJson(calibrationPath, {
+          source: "hunyuan-global",
+          phase: "slot-detection",
+          slot: upload.selectorKey,
+          label: upload.label,
+          imagePath: upload.imagePath,
+          attempts: error.attempts,
+          lastSnapshot: error.lastSnapshot,
+          inspection
+        });
+        const calibrationArtifact = await ctx.addArtifact({
+          kind: "json",
+          name: path.basename(calibrationPath),
+          path: calibrationPath,
+          mimeType: "application/json",
+          metadata: {
+            source: "hunyuan-global",
+            phase: "slot-detection",
+            slot: upload.selectorKey,
+            attempts: error.attempts
+          }
+        });
+        artifactIds.push(calibrationArtifact.id);
+        await ctx.waitForManualAction(
+          `Hunyuan Global repeatedly rejected the ${upload.label} view. Clear that slot, re-upload the same image, wait until it is accepted, then resume this run.`,
+          {
+            source: "hunyuan-global",
+            slot: upload.selectorKey,
+            label: upload.label,
+            imagePath: upload.imagePath,
+            attempts: error.attempts,
+            calibrationArtifactId: calibrationArtifact.id,
+            lastSnapshot: error.lastSnapshot
+          }
+        );
+        const manualSnapshot = await waitForExtensionHunyuanSlotDetectionState(
+          target,
+          upload,
+          selectors,
+          HUNYUAN_GLOBAL_TEXT.uploading,
+          Math.min(timeoutMinutes(input.timeoutMinutes), HUNYUAN_SLOT_DETECTION_STATE_TIMEOUT_MS),
+          ctx.signal
+        );
+        if (manualSnapshot.state !== "accepted") throw error;
+        acceptedSlots.push({
+          slot: upload.selectorKey,
+          label: upload.label,
+          attempts: error.attempts,
+          fileName: path.basename(upload.imagePath)
+        });
+      }
+      if (index < uploadPlan.length - 1) {
+        await sleepWithSignal(HUNYUAN_MULTIVIEW_UPLOAD_SETTLE_DELAY_MS, ctx.signal);
+      }
+    }
+
+    await ctx.step("Hunyuan Global multiview images accepted", 28, { slots: acceptedSlots });
+    await closeExtensionHunyuanMultipleViewsModal(target, selectors, ctx.signal);
+
+    await ctx.step("Applying Hunyuan Global settings", 35, {
+      modelFaceCount: input.modelFaceCount,
+      retopologyType: input.retopologyType,
+      generateTexture: input.generateTexture,
+      autoRig: input.autoRig,
+      exportFormat: input.exportFormat
+    });
+    await extensionClickHunyuanControl(target, selectors.modelDropdown!, "modelDropdown", ctx.signal);
+    try {
+      await extensionClickHunyuanControl(target, selectors.modelOptionV31!, "modelOptionV31", ctx.signal);
+    } catch (error) {
+      recordPhase("model-option-skipped", { selectorKey: "modelOptionV31", reason: formatErrorMessage(error) });
+    }
+    await extensionClickHunyuanControl(target, selectors.faceCountButtons![input.modelFaceCount]!, `faceCountButtons.${input.modelFaceCount}`, ctx.signal);
+    await extensionClickHunyuanControl(target, selectors.modelTypeGeometryTexturePhased!, "modelTypeGeometryTexturePhased", ctx.signal);
+    if (input.prompt.trim() && hasSelector(selectors.promptTextbox)) {
+      await browserExtension.action(target, { kind: "fill", selector: selectors.promptTextbox!, value: input.prompt.trim() }, { signal: ctx.signal, timeoutMs: 30_000 });
+    }
+    recordPhase("settings-applied", {
+      modelFaceCount: input.modelFaceCount,
+      retopologyType: input.retopologyType,
+      generateTexture: input.generateTexture,
+      autoRig: input.autoRig,
+      exportFormat: input.exportFormat
+    });
+
+    await ctx.step("Starting Hunyuan Global geometry generation", 42);
+    await extensionClickAndVerifyActionStarted(
+      target,
+      {
+        selector: selectors.generateButton!,
+        selectorKey: "generateButton",
+        runningSelector: selectors.geometryRunningSelector,
+        runningText: selectors.geometryRunningText,
+        readySelector: selectors.geometryReadySelector,
+        readyText: selectors.geometryReadyText
+      },
+      ctx.signal
+    );
+    recordPhase("geometry-started");
+    await extensionWaitForHunyuanReady(target, selectors.geometryReadySelector, selectors.geometryReadyText, timeoutMinutes(input.timeoutMinutes), ctx.signal);
+    recordPhase("geometry-ready");
+
+    await ctx.step("Running Hunyuan Global smart retopology", 60, { retopologyType: input.retopologyType });
+    await extensionClickHunyuanControl(
+      target,
+      selectors.retopologyTypeButtons![input.retopologyType]!,
+      `retopologyTypeButtons.${input.retopologyType}`,
+      ctx.signal
+    );
+    await extensionClickHunyuanControl(target, selectors.smartRetopologyButton!, "smartRetopologyButton", ctx.signal);
+    await waitWithSignal(3_000, ctx.signal);
+    await extensionWaitForHunyuanReady(
+      target,
+      selectors.retopologyReadySelector,
+      selectors.retopologyReadyText,
+      Math.min(timeoutMinutes(input.timeoutMinutes), 30_000),
+      ctx.signal
+    );
+    recordPhase("retopology-ready", { retopologyType: input.retopologyType });
+
+    if (input.generateTexture) {
+      await ctx.step("Generating Hunyuan Global texture", 76);
+      const textureStartState = await extensionClickAndVerifyActionStarted(
+        target,
+        {
+          selector: selectors.generateTextureButton!,
+          selectorKey: "generateTextureButton",
+          runningSelector: selectors.textureRunningSelector,
+          runningText: selectors.textureRunningText,
+          readySelector: selectors.textureReadySelector,
+          readyText: selectors.textureReadyText,
+          requireRunningBeforeReady: true
+        },
+        ctx.signal
+      );
+      await extensionWaitForHunyuanReadyAfterRunning(
+        target,
+        textureStartState,
+        selectors.textureRunningSelector,
+        selectors.textureRunningText,
+        selectors.textureReadySelector,
+        selectors.textureReadyText,
+        timeoutMinutes(input.timeoutMinutes),
+        ctx.signal
+      );
+      recordPhase("texture-ready");
+    }
+
+    if (input.autoRig) {
+      await ctx.step("Running Hunyuan Global auto-rig", 84);
+      const autoRigStartState = await extensionClickAndVerifyActionStarted(
+        target,
+        {
+          selector: selectors.autoRigButton!,
+          selectorKey: "autoRigButton",
+          runningSelector: selectors.autoRigRunningSelector,
+          runningText: selectors.autoRigRunningText,
+          readySelector: selectors.autoRigReadySelector,
+          readyText: selectors.autoRigReadyText
+        },
+        ctx.signal
+      );
+      await extensionWaitForHunyuanReadyAfterRunning(
+        target,
+        autoRigStartState,
+        selectors.autoRigRunningSelector,
+        selectors.autoRigRunningText,
+        selectors.autoRigReadySelector,
+        selectors.autoRigReadyText,
+        timeoutMinutes(input.timeoutMinutes),
+        ctx.signal
+      );
+      recordPhase("auto-rig-ready");
+    }
+
+    await ctx.step("Preparing Hunyuan Global OBJ download", 90, { exportFormat: input.exportFormat });
+    if (hasSelector(selectors.downloadReadySelector) || hasSelector(selectors.downloadReadyText)) {
+      await extensionWaitForHunyuanReady(target, selectors.downloadReadySelector, selectors.downloadReadyText, timeoutMinutes(input.timeoutMinutes), ctx.signal);
+    }
+    const exportSelection = await selectExtensionHunyuanExportFormat(target, selectors, input.exportFormat, ctx.signal);
+    recordPhase("export-format-selected", exportSelection);
+
+    await ctx.step("Downloading Hunyuan Global result", 94);
+    const downloadWatch = browserExtension.startDownloadWatch();
+    await extensionClickHunyuanControl(target, selectors.downloadButton!, "downloadButton", ctx.signal);
+    const initialDownload = await browserExtension.waitForDownload(downloadWatch.id, { signal: ctx.signal, timeoutMs: 180_000 });
+    const downloadSelection = await selectHunyuanGlobalDownloadPackage(initialDownload, {
+      exportFormat: exportSelection.actual,
+      generateTexture: input.generateTexture,
+      signal: ctx.signal,
+      step: ctx.step,
+      recordPhase,
+      browserExtension
+    });
+    const download = downloadSelection.download;
+    const downloadedModel = await copyExtensionDownloadToArtifactDir(download, ctx.artifactDir, inferMimeType);
+    if (downloadSelection.relatedDownloads.length > 0 || downloadSelection.packageWaitError) {
+      downloadedModel.relatedDownloads = downloadSelection.relatedDownloads;
+      if (downloadSelection.packageWaitError) downloadedModel.packageWaitError = downloadSelection.packageWaitError;
+    }
+    recordPhase("downloaded", downloadedModel);
+
+    let modelManifest: Record<string, unknown>;
+    let modelArtifact: { id: string };
+    try {
+      if (exportSelection.actual === "obj" && path.extname(downloadedModel.path).toLowerCase() === ".zip") {
+        await ctx.step("Unpacking Hunyuan Global model archive", 97, { filename: downloadedModel.filename });
+        const extractDir = path.join(ctx.artifactDir, HUNYUAN_MODEL_ASSET_DIR_NAME);
+        fs.rmSync(extractDir, { recursive: true, force: true });
+        await extractZip(downloadedModel.path, extractDir);
+        const modelAssets = discoverHunyuanModelAssets(extractDir);
+        fs.unlinkSync(downloadedModel.path);
+        recordPhase("archive-unpacked", {
+          assetDir: modelAssets.assetDir,
+          objFileName: modelAssets.objFileName,
+          mtlFileName: modelAssets.mtlFileName,
+          textureFileNames: modelAssets.textureFileNames
+        });
+        modelManifest = {
+          format: "obj",
+          artifactPath: modelAssets.objPath,
+          assetDir: modelAssets.assetDir,
+          objFileName: modelAssets.objFileName,
+          mtlFileName: modelAssets.mtlFileName,
+          textureFileNames: modelAssets.textureFileNames,
+          assetFileNames: modelAssets.assetFileNames,
+          originalArchive: { ...downloadedModel, deleted: true }
+        };
+        modelArtifact = await ctx.addArtifact({
+          kind: "model",
+          name: modelAssets.objFileName,
+          path: modelAssets.objPath,
+          mimeType: inferMimeType(modelAssets.objPath),
+          metadata: {
+            source: "hunyuan-global",
+            pageUrl: authenticatedUrl,
+            modelFormat: "obj",
+            objFileName: modelAssets.objFileName,
+            mtlFileName: modelAssets.mtlFileName,
+            textureFileNames: modelAssets.textureFileNames,
+            assetFileNames: modelAssets.assetFileNames,
+            originalArchive: { ...downloadedModel, deleted: true },
+            requestedExportFormat: exportSelection.requested,
+            exportFormat: exportSelection.actual,
+            phases: phaseEvents
+          }
+        });
+      } else {
+        modelManifest = {
+          format: exportSelection.actual,
+          artifactPath: downloadedModel.path,
+          filename: downloadedModel.filename,
+          mimeType: downloadedModel.mimeType,
+          originalDownload: downloadedModel
+        };
+        modelArtifact = await ctx.addArtifact({
+          kind: inferHunyuanArtifactKind(downloadedModel.path, inferMimeType),
+          name: downloadedModel.filename,
+          path: downloadedModel.path,
+          mimeType: downloadedModel.mimeType,
+          metadata: {
+            source: "hunyuan-global",
+            pageUrl: authenticatedUrl,
+            modelFormat: exportSelection.actual,
+            requestedExportFormat: exportSelection.requested,
+            exportFormat: exportSelection.actual,
+            phases: phaseEvents
+          }
+        });
+      }
+    } catch (error) {
+      const downloadArtifact = await ctx.addArtifact({
+        kind: "download",
+        name: downloadedModel.filename,
+        path: downloadedModel.path,
+        mimeType: downloadedModel.mimeType,
+        metadata: {
+          source: "hunyuan-global",
+          pageUrl: authenticatedUrl,
+          requestedExportFormat: exportSelection.requested,
+          exportFormat: exportSelection.actual,
+          extractionError: formatErrorMessage(error),
+          phases: phaseEvents
+        }
+      });
+      artifactIds.push(downloadArtifact.id);
+      throw new WorkflowConfigurationError(
+        `Hunyuan Global model archive extraction failed. Kept downloaded artifact ${downloadArtifact.id}. ${formatErrorMessage(error)}`
+      );
+    }
+    artifactIds.push(modelArtifact.id);
+    recordPhase("model-artifact-registered", { artifactId: modelArtifact.id });
+
+    const manifestPath = path.join(ctx.artifactDir, "hunyuan-global-image-to-model-manifest.json");
+    writeJson(manifestPath, {
+      source: "hunyuan-global",
+      workflowId: HUNYUAN_GLOBAL_WORKFLOW_ID,
+      targetUrl: HUNYUAN_GLOBAL_TARGET_URL,
+      pageUrl: authenticatedUrl,
+      viewImages: uploadPlan.map(({ field, selectorKey, label, imagePath }) => ({ field, selectorKey, label, imagePath })),
+      settings: {
+        modelFaceCount: input.modelFaceCount,
+        retopologyType: input.retopologyType,
+        generateTexture: input.generateTexture,
+        autoRig: input.autoRig,
+        exportFormat: exportSelection.actual,
+        requestedExportFormat: exportSelection.requested
+      },
+      phases: phaseEvents,
+      model: {
+        artifactId: modelArtifact.id,
+        ...modelManifest
+      },
+      download: downloadedModel
+    });
+    const manifestArtifact = await ctx.addArtifact({
+      kind: "json",
+      name: path.basename(manifestPath),
+      path: manifestPath,
+      mimeType: "application/json",
+      metadata: { source: "hunyuan-global", modelArtifactId: modelArtifact.id }
+    });
+    artifactIds.push(manifestArtifact.id);
+
+    await ctx.step("Hunyuan Global completed", 100, { modelArtifactId: modelArtifact.id });
+    return {
+      artifactIds,
+      modelArtifactId: modelArtifact.id,
+      manifestArtifactId: manifestArtifact.id,
+      summary: "Hunyuan Global Image to 3D Model completed."
     };
   }
 
@@ -1357,6 +2145,508 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
     } catch {
       return false;
     }
+  }
+
+  async function ensureExtensionHunyuanSlotAccepted(
+    target: ExtensionBrowserTarget,
+    upload: HunyuanViewUpload,
+    selectors: HunyuanSelectorConfig,
+    uploadingText: string,
+    timeoutMs: number,
+    signal: AbortSignal,
+    recordPhase: (phase: string, data?: unknown) => void
+  ): Promise<HunyuanSlotAcceptanceResult> {
+    let lastSnapshot: HunyuanSlotDetectionSnapshot | undefined;
+    const fileName = path.basename(upload.imagePath);
+
+    for (let attempt = 1; attempt <= HUNYUAN_SLOT_DETECTION_MAX_ATTEMPTS; attempt += 1) {
+      const files = browserExtension.stageFiles([upload.imagePath]);
+      await browserExtension.action(
+        target,
+        { kind: "attach-file", selector: selectors.viewUploadInputs![upload.selectorKey]!, files },
+        { signal, timeoutMs: 60_000 }
+      );
+      recordPhase(`uploaded-${upload.selectorKey}`, { imagePath: upload.imagePath, fileName, attempt });
+
+      await waitForExtensionTextAbsentStable(target, uploadingText, timeoutMs, signal);
+      const snapshot = await waitForExtensionHunyuanSlotDetectionState(
+        target,
+        upload,
+        selectors,
+        uploadingText,
+        Math.min(timeoutMs, HUNYUAN_SLOT_DETECTION_STATE_TIMEOUT_MS),
+        signal
+      );
+      lastSnapshot = snapshot;
+      recordPhase(`slot-detection-${upload.selectorKey}`, { ...snapshot, attempt, fileName });
+
+      if (snapshot.state === "accepted") {
+        return { slot: upload.selectorKey, label: upload.label, attempts: attempt, fileName };
+      }
+
+      if (attempt < HUNYUAN_SLOT_DETECTION_MAX_ATTEMPTS) {
+        recordPhase(`slot-detection-retry-${upload.selectorKey}`, { ...snapshot, attempt, fileName });
+        await clearExtensionHunyuanSlotUpload(target, upload, selectors, signal);
+        continue;
+      }
+    }
+
+    throw new HunyuanSlotDetectionRetryExhaustedError(upload, HUNYUAN_SLOT_DETECTION_MAX_ATTEMPTS, lastSnapshot!);
+  }
+
+  async function waitForExtensionHunyuanSlotDetectionState(
+    target: ExtensionBrowserTarget,
+    upload: HunyuanViewUpload,
+    selectors: HunyuanSelectorConfig,
+    uploadingText: string,
+    timeoutMs: number,
+    signal: AbortSignal
+  ): Promise<HunyuanSlotDetectionSnapshot> {
+    const deadline = Date.now() + timeoutMs;
+    let lastSnapshot: HunyuanSlotDetectionSnapshot | undefined;
+
+    while (Date.now() < deadline) {
+      const snapshot = await readExtensionHunyuanSlotDetectionSnapshot(target, upload, selectors, uploadingText, signal);
+      lastSnapshot = snapshot;
+      if (snapshot.state === "accepted" || snapshot.state === "failed") return snapshot;
+      await waitWithSignal(500, signal);
+    }
+
+    throw new Error(
+      `Timed out waiting for Hunyuan Global slot detection state. slot=${upload.selectorKey}; ` +
+        `lastState=${lastSnapshot?.state ?? "unknown"}; text=${lastSnapshot?.text ?? ""}`
+    );
+  }
+
+  async function readExtensionHunyuanSlotDetectionSnapshot(
+    target: ExtensionBrowserTarget,
+    upload: HunyuanViewUpload,
+    selectors: HunyuanSelectorConfig,
+    uploadingText: string,
+    signal: AbortSignal
+  ): Promise<HunyuanSlotDetectionSnapshot> {
+    const containerSelector = hunyuanSlotContainerSelector(selectors, upload.selectorKey);
+    const text = await extensionExtractText(target, containerSelector, signal);
+    const failureText = selectors.slotDetectionFailedText;
+    const runningSelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotDetectionRunningSelector);
+    const acceptedSelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotAcceptedThumbnailSelector);
+    const emptySelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotEmptySelector);
+    const failed = textIncludes(text, failureText);
+    const runningVisible = await extensionSelectorVisible(target, runningSelector, signal);
+    const thumbnailVisible = await extensionSelectorVisible(target, acceptedSelector, signal);
+    const emptyVisible = await extensionSelectorVisible(target, emptySelector, signal);
+    const processing = runningVisible || textIncludes(text, uploadingText);
+    const state: HunyuanSlotDetectionStateName = failed
+      ? "failed"
+      : processing
+        ? "processing"
+        : thumbnailVisible
+          ? "accepted"
+          : emptyVisible
+            ? "empty"
+            : "processing";
+
+    return {
+      slot: upload.selectorKey,
+      label: upload.label,
+      state,
+      containerSelector,
+      text,
+      ...(failed && failureText ? { failureText } : {}),
+      thumbnailVisible,
+      runningVisible,
+      emptyVisible
+    };
+  }
+
+  async function clearExtensionHunyuanSlotUpload(
+    target: ExtensionBrowserTarget,
+    upload: HunyuanViewUpload,
+    selectors: HunyuanSelectorConfig,
+    signal: AbortSignal
+  ): Promise<void> {
+    const containerSelector = hunyuanSlotContainerSelector(selectors, upload.selectorKey);
+    const thumbnailSelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotAcceptedThumbnailSelector);
+    const removeSelector = scopeHunyuanSlotSelector(containerSelector, selectors.slotRemoveButtonSelector);
+    if (!hasSelector(removeSelector)) {
+      await browserExtension.action(target, { kind: "click", selector: thumbnailSelector ?? containerSelector }, { signal, timeoutMs: 10_000 }).catch(() => undefined);
+      await waitWithSignal(250, signal);
+      return;
+    }
+
+    for (let round = 0; round < 2; round += 1) {
+      if (await extensionSelectorVisible(target, removeSelector, signal)) {
+        try {
+          await extensionClickHunyuanControl(target, removeSelector, "slotRemoveButtonSelector", signal, 30_000);
+          await waitWithSignal(500, signal);
+          return;
+        } catch {
+        }
+      }
+
+      await browserExtension.action(target, { kind: "click", selector: thumbnailSelector ?? containerSelector }, { signal, timeoutMs: 10_000 }).catch(() => undefined);
+      await waitWithSignal(250, signal);
+    }
+
+    await waitWithSignal(250, signal);
+  }
+
+  async function extensionExtractText(target: ExtensionBrowserTarget, selector: string, signal: AbortSignal): Promise<string> {
+    try {
+      const result = normalizeRecord(
+        await browserExtension.extract(target, { kind: "text", selector }, { signal, timeoutMs: 10_000 })
+      );
+      return stringValue(result.text).replace(/\s+/g, " ").trim();
+    } catch {
+      return "";
+    }
+  }
+
+  async function extensionClickHunyuanControl(
+    target: ExtensionBrowserTarget,
+    selector: string,
+    selectorKey: string,
+    signal: AbortSignal,
+    timeoutMs = 120_000
+  ): Promise<void> {
+    try {
+      await browserExtension.action(target, { kind: "click", selector }, { signal, timeoutMs });
+    } catch (error) {
+      throw new Error(`Hunyuan Global selector ${selectorKey} could not be clicked. selector=${selector}; ${formatErrorMessage(error)}`);
+    }
+  }
+
+  async function closeExtensionHunyuanMultipleViewsModal(
+    target: ExtensionBrowserTarget,
+    selectors: HunyuanSelectorConfig,
+    signal: AbortSignal
+  ): Promise<void> {
+    const modalOpen = await extensionTextPresent(target, HUNYUAN_GLOBAL_TEXT.addMultipleViews, signal);
+    if (
+      !modalOpen &&
+      (await extensionSelectorVisible(target, selectors.modelDropdown, signal)) &&
+      (await extensionSelectorVisible(target, selectors.generateButton, signal))
+    ) {
+      return;
+    }
+    const closeSelectors = [selectors.multipleViewsConfirmButton, ".hy-multi-view-grid__header-close"].filter(hasSelector);
+    let lastError: unknown;
+    for (const closeSelector of closeSelectors) {
+      try {
+        await extensionClickHunyuanControl(target, closeSelector, "multipleViewsConfirmButton", signal, 30_000);
+        await waitForExtensionTextAbsentStable(target, HUNYUAN_GLOBAL_TEXT.addMultipleViews, 15_000, signal);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!(await extensionTextPresent(target, HUNYUAN_GLOBAL_TEXT.addMultipleViews, signal))) {
+      return;
+    }
+    throw new Error(
+      `Hunyuan Global multiview modal did not close after uploads. Configure multipleViewsConfirmButton. ` +
+        `closeSelector=${selectors.multipleViewsConfirmButton ?? ""}; fallbackSelectors=${closeSelectors.join(", ")}; ` +
+        `lastError=${lastError ? formatErrorMessage(lastError) : ""}`
+    );
+  }
+
+  async function waitForExtensionTextAbsentStable(
+    target: ExtensionBrowserTarget,
+    text: string,
+    timeoutMs: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    if (!hasSelector(text)) return;
+    const deadline = Date.now() + timeoutMs;
+    let stableSince = 0;
+    while (Date.now() < deadline) {
+      const present = await extensionTextPresent(target, text, signal);
+      if (!present) {
+        stableSince ||= Date.now();
+        if (Date.now() - stableSince >= 1_000) return;
+      } else {
+        stableSince = 0;
+      }
+      await waitWithSignal(250, signal);
+    }
+    throw new Error(`Timed out waiting for Hunyuan Global text to disappear: ${text}`);
+  }
+
+  async function extensionWaitForHunyuanReady(
+    target: ExtensionBrowserTarget,
+    selector: string | undefined,
+    text: string | undefined,
+    timeoutMs: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    if (!hasSelector(selector) && !hasSelector(text)) {
+      throw new Error("Hunyuan Global ready wait requires a selector or text.");
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await extensionSelectorVisible(target, selector, signal)) return;
+      if (await extensionTextPresent(target, text, signal)) return;
+      await waitWithSignal(750, signal);
+    }
+    throw new Error(`Timed out waiting for Hunyuan Global ready state. selector=${selector ?? ""}; text=${text ?? ""}`);
+  }
+
+  async function extensionClickAndVerifyActionStarted(
+    target: ExtensionBrowserTarget,
+    input: {
+      selector: string;
+      selectorKey: string;
+      runningSelector?: string;
+      runningText?: string;
+      readySelector?: string;
+      readyText?: string;
+      requireRunningBeforeReady?: boolean;
+    },
+    signal: AbortSignal
+  ): Promise<"running" | "control-hidden" | "ready"> {
+    await extensionClickHunyuanControl(target, input.selector, input.selectorKey, signal, 120_000);
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      if (await extensionSelectorVisible(target, input.runningSelector, signal)) return "running";
+      if (await extensionTextPresent(target, input.runningText, signal)) return "running";
+      const actionStillVisible = await extensionSelectorVisible(target, input.selector, signal);
+      const ready =
+        (await extensionSelectorVisible(target, input.readySelector, signal)) ||
+        (await extensionTextPresent(target, input.readyText, signal));
+      if (!actionStillVisible) return ready && !input.requireRunningBeforeReady ? "ready" : "control-hidden";
+      await waitWithSignal(750, signal);
+    }
+    throw new Error(
+      `Hunyuan Global action ${input.selectorKey} did not enter a running or ready state after clicking. selector=${input.selector}; runningSelector=${input.runningSelector ?? ""}; runningText=${input.runningText ?? ""}; readySelector=${input.readySelector ?? ""}; readyText=${input.readyText ?? ""}`
+    );
+  }
+
+  async function extensionWaitForHunyuanReadyAfterRunning(
+    target: ExtensionBrowserTarget,
+    startState: "running" | "control-hidden" | "ready",
+    runningSelector: string | undefined,
+    runningText: string | undefined,
+    readySelector: string | undefined,
+    readyText: string | undefined,
+    timeoutMs: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    if (!hasSelector(readySelector) && !hasSelector(readyText)) {
+      throw new Error("Hunyuan Global ready-after-running wait requires a ready selector or ready text.");
+    }
+    const deadline = Date.now() + timeoutMs;
+    let stableReadySince = 0;
+    let observedRunning = startState === "running";
+    while (Date.now() < deadline) {
+      const running =
+        (await extensionSelectorVisible(target, runningSelector, signal)) ||
+        (await extensionTextPresent(target, runningText, signal)) ||
+        (await extensionTextPresent(target, HUNYUAN_GLOBAL_TEXT.generating, signal)) ||
+        (await extensionTextPresent(target, HUNYUAN_GLOBAL_TEXT.estimatedRemaining, signal));
+      if (running) {
+        observedRunning = true;
+        stableReadySince = 0;
+        await waitWithSignal(750, signal);
+        continue;
+      }
+
+      const ready = (await extensionSelectorVisible(target, readySelector, signal)) || (await extensionTextPresent(target, readyText, signal));
+      if (ready && (observedRunning || startState === "ready")) {
+        stableReadySince ||= Date.now();
+        if (Date.now() - stableReadySince >= 1_000) return;
+      } else {
+        stableReadySince = 0;
+      }
+      await waitWithSignal(750, signal);
+    }
+    throw new Error(
+      `Timed out waiting for Hunyuan Global action to finish. runningSelector=${runningSelector ?? ""}; runningText=${runningText ?? ""}; readySelector=${readySelector ?? ""}; readyText=${readyText ?? ""}`
+    );
+  }
+
+  async function selectExtensionHunyuanExportFormat(
+    target: ExtensionBrowserTarget,
+    selectors: HunyuanSelectorConfig,
+    requested: HunyuanExportFormat,
+    signal: AbortSignal
+  ): Promise<HunyuanExportFormatResolution> {
+    await extensionClickHunyuanControl(target, selectors.exportFormatDropdown!, "exportFormatDropdown", signal, 30_000);
+    if (await tryClickExtensionHunyuanExportOption(target, selectors, requested, signal)) {
+      return { requested, actual: requested, availableOptions: [] };
+    }
+    if (requested !== "obj" && (await tryClickExtensionHunyuanExportOption(target, selectors, "obj", signal))) {
+      return {
+        requested,
+        actual: "obj",
+        availableOptions: [],
+        fallbackReason: `Requested ${requested.toUpperCase()} export could not be clicked; using OBJ fallback.`
+      };
+    }
+    throw new Error(
+      `Hunyuan Global export format ${requested.toUpperCase()} could not be selected. requestedSelector=${selectors.exportFormatOptions?.[requested] ?? ""}; objSelector=${selectors.exportFormatOptions?.obj ?? ""}`
+    );
+  }
+
+  async function tryClickExtensionHunyuanExportOption(
+    target: ExtensionBrowserTarget,
+    selectors: HunyuanSelectorConfig,
+    format: HunyuanExportFormat,
+    signal: AbortSignal
+  ): Promise<boolean> {
+    const optionSelector = selectors.exportFormatOptions?.[format] ?? hunyuanExportOptionSelector(format.toUpperCase());
+    try {
+      await extensionClickHunyuanControl(target, optionSelector, `exportFormatOptions.${format}`, signal, 30_000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function selectHunyuanGlobalDownloadPackage(
+    initialDownload: Awaited<ReturnType<WorkflowSdk["extension"]["browser"]["waitForDownload"]>>,
+    input: {
+      exportFormat: HunyuanExportFormat;
+      generateTexture: boolean;
+      signal: AbortSignal;
+      step: WorkflowContext["step"];
+      recordPhase: (phase: string, data?: unknown) => void;
+      browserExtension: WorkflowSdk["extension"]["browser"];
+    }
+  ): Promise<{
+    download: Awaited<ReturnType<WorkflowSdk["extension"]["browser"]["waitForDownload"]>>;
+    relatedDownloads: Array<Awaited<ReturnType<WorkflowSdk["extension"]["browser"]["waitForDownload"]>>>;
+    packageWaitError?: string;
+  }> {
+    const initialExtension = path.extname(initialDownload.filename).toLowerCase();
+    if (input.exportFormat !== "obj" || !input.generateTexture || initialExtension === ".zip") {
+      return { download: initialDownload, relatedDownloads: [] };
+    }
+
+    input.recordPhase("downloaded-intermediate", {
+      filename: path.basename(initialDownload.filename),
+      chromeDownload: initialDownload,
+      reason: "textured OBJ exports may complete as a later package archive"
+    });
+    await input.step("Waiting for Hunyuan Global texture package", 95, {
+      firstDownload: path.basename(initialDownload.filename),
+      expectedArchive: "zip",
+      timeoutMs: HUNYUAN_GLOBAL_TEXTURE_PACKAGE_DOWNLOAD_TIMEOUT_MS
+    });
+
+    const packageWatch = input.browserExtension.startDownloadWatch();
+    try {
+      const packageDownload = await input.browserExtension.waitForDownload(packageWatch.id, {
+        signal: input.signal,
+        timeoutMs: HUNYUAN_GLOBAL_TEXTURE_PACKAGE_DOWNLOAD_TIMEOUT_MS
+      });
+      if (path.extname(packageDownload.filename).toLowerCase() === ".zip") {
+        input.recordPhase("download-package-selected", {
+          initialDownload: path.basename(initialDownload.filename),
+          packageDownload: path.basename(packageDownload.filename)
+        });
+        return { download: packageDownload, relatedDownloads: [initialDownload] };
+      }
+      input.recordPhase("download-package-ignored", {
+        initialDownload: path.basename(initialDownload.filename),
+        extraDownload: path.basename(packageDownload.filename),
+        reason: "extra download was not a zip archive"
+      });
+      return { download: initialDownload, relatedDownloads: [packageDownload] };
+    } catch (error) {
+      const packageWaitError = formatErrorMessage(error);
+      input.recordPhase("download-package-wait-failed", {
+        initialDownload: path.basename(initialDownload.filename),
+        error: packageWaitError
+      });
+      return { download: initialDownload, relatedDownloads: [], packageWaitError };
+    }
+  }
+
+  async function copyExtensionDownloadToArtifactDir(
+    download: { filename: string; mime?: string; [key: string]: unknown },
+    artifactDir: string,
+    inferMime: (filePath: string) => string | null
+  ): Promise<Record<string, unknown> & { path: string; filename: string; mimeType: string | null }> {
+    if (!download.filename || !fs.existsSync(download.filename)) {
+      throw new Error(`Chrome reported a completed download, but the file was not found: ${download.filename || "(missing filename)"}`);
+    }
+    const targetPath = path.join(artifactDir, path.basename(download.filename));
+    if (path.resolve(download.filename) !== path.resolve(targetPath)) {
+      fs.copyFileSync(download.filename, targetPath);
+    }
+    const reportedMime = typeof download.mime === "string" ? download.mime : null;
+    return {
+      path: targetPath,
+      filename: path.basename(targetPath),
+      mimeType: inferMime(targetPath) ?? reportedMime,
+      chromeDownload: download
+    };
+  }
+
+  function hunyuanOwnedSurfaceFromRoutedClient(
+    target: HunyuanExtensionTabTarget,
+    client: ExtensionClientStatus
+  ): HunyuanOwnedBrowserSurface | undefined {
+    if (target.mode !== "new" || client.openedByController !== true || typeof client.openedTabId !== "number") return undefined;
+    return {
+      tabId: client.openedTabId,
+      ...(client.openedWindowId !== undefined ? { windowId: client.openedWindowId } : {}),
+      ...(client.openedControllerId ? { controllerId: client.openedControllerId } : client.controllerId ? { controllerId: client.controllerId } : {}),
+      routingToken: target.routingToken,
+      source: "routed-client"
+    };
+  }
+
+  function hunyuanOwnedSurfaceFromError(target: HunyuanExtensionTabTarget, error: unknown): HunyuanOwnedBrowserSurface | undefined {
+    if (target.mode !== "new" || !error || typeof error !== "object") return undefined;
+    const openedSurface = normalizeRecord((error as { openedSurface?: unknown }).openedSurface);
+    const tabId = numberValue(openedSurface.openedTabId);
+    if (tabId === undefined) return undefined;
+    const windowId = numberValue(openedSurface.openedWindowId);
+    const controllerId = stringValue(openedSurface.openedControllerId);
+    return {
+      tabId,
+      ...(windowId !== undefined ? { windowId } : {}),
+      ...(controllerId ? { controllerId } : {}),
+      routingToken: target.routingToken,
+      source: "routed-open-error"
+    };
+  }
+
+  async function cleanupHunyuanOwnedBrowserSurface(
+    surface: HunyuanOwnedBrowserSurface | undefined,
+    ctx: WorkflowContext
+  ): Promise<void> {
+    if (!surface) return;
+    try {
+      await browserExtension.closeTab(surface.tabId, {
+        controllerId: surface.controllerId,
+        timeoutMs: 20_000
+      });
+      await ctx.event("hunyuan-global.browser-cleanup", "Closed BLINK-owned Hunyuan Global browser tab.", surface).catch(() => undefined);
+    } catch (error) {
+      await ctx
+        .event("hunyuan-global.browser-cleanup-failed", "Could not close BLINK-owned Hunyuan Global browser tab.", {
+          ...surface,
+          error: formatErrorMessage(error)
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  function waitWithSignal(timeoutMs: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.reject(new Error("Operation cancelled"));
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(resolve, timeoutMs);
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timeout);
+          reject(new Error("Operation cancelled"));
+        },
+        { once: true }
+      );
+    });
   }
 
   return [...HUNYUAN_SITES.map((site) => createHunyuanImageToModelWorkflow(site)), createHunyuanGlobalExtensionWorkflow()];
@@ -1938,14 +3228,32 @@ async function safeWaitForTimeout(page: any, timeoutMs: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, timeoutMs));
 }
 
+function sleepWithSignal(timeoutMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error("Operation cancelled"));
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(resolve, timeoutMs);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timeout);
+        reject(new Error("Operation cancelled"));
+      },
+      { once: true }
+    );
+  });
+}
+
 function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 function hunyuanControllerManualMessage(error: unknown): string {
   const message = formatErrorMessage(error);
-  if (/controller/i.test(message)) {
+  if (/No compatible BLINK browser controller/i.test(message)) {
     return `The BLINK browser controller for the intended Chrome profile is not connected. Do not open chrome.exe or paste the routed Hunyuan Global URL into another Chrome profile; that bypasses the BLINK extension controller and can open the wrong profile. Open the BLINK extension popup in the Chrome profile that has the unpacked BLINK extension, wait until it reports at least 1 browser controller, then resume this run. ${message}`;
+  }
+  if (/controller command was not completed|Timed out waiting for BLINK browser controller command/i.test(message)) {
+    return `The BLINK browser controller is connected, but it did not complete the command to open the Hunyuan Global window. Do not open chrome.exe or paste the routed URL into another Chrome profile. Open the BLINK extension popup in the intended Chrome profile to wake the controller, confirm it reports at least 1 browser controller, then resume this run. ${message}`;
   }
   return `The Based BLINK browser controller opened Hunyuan Global but could not connect to the routed page. Do not open chrome.exe or paste the routed URL into another Chrome profile. Confirm the extension has site access for 3d.hunyuanglobal.com in the controller-owned window, open the BLINK extension popup in that profile, refresh the opened Hunyuan page, then resume this run. ${message}`;
 }
@@ -1960,8 +3268,21 @@ function createDefaultHunyuanGlobalTab(): HunyuanExtensionTabTarget {
 function redactHunyuanTarget(target: HunyuanExtensionTabTarget): Record<string, unknown> {
   return {
     mode: target.mode,
-    ...(target.mode === "existing" ? { clientId: target.clientId, url: target.url, title: target.title } : {}),
-    ...(target.mode === "new" ? { routingToken: target.routingToken, url: target.url, title: target.title, openMode: target.openMode } : {})
+    ...(target.mode === "existing"
+      ? { clientId: target.clientId, url: target.url, title: target.title, tabId: target.tabId, windowId: target.windowId, controllerId: target.controllerId }
+      : {}),
+    ...(target.mode === "new"
+      ? {
+          routingToken: target.routingToken,
+          url: target.url,
+          title: target.title,
+          openMode: target.openMode,
+          clientId: target.clientId,
+          tabId: target.tabId,
+          windowId: target.windowId,
+          controllerId: target.controllerId
+        }
+      : {})
   };
 }
 
@@ -1975,6 +3296,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 

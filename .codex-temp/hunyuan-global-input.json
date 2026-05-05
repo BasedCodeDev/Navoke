@@ -1,0 +1,9 @@
+{
+    "frontImage":  "C:\\Users\\User\\Downloads\\08-08-tldrawFile__69_-chatgpt-chatgpt.png",
+    "backImage":  "C:\\Users\\User\\Downloads\\08-08-08-08-tldrawFile__69_-chatgpt-chatgpt-chatgpt.png",
+    "modelFaceCount":  "50k",
+    "retopologyType":  "quad",
+    "generateTexture":  true,
+    "autoRig":  false,
+    "exportFormat":  "obj"
+}

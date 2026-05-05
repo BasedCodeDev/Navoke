@@ -7,7 +7,7 @@ describe("generic browser extension popup", () => {
   it("warns when compatible tabs exist but no browser controller is connected", async () => {
     const harness = loadPopupHarness({
       statusBody: {
-        requiredProtocolVersion: 4,
+        requiredProtocolVersion: 6,
         compatible: 1,
         incompatible: 0,
         compatibleControllers: 0,
@@ -27,7 +27,7 @@ describe("generic browser extension popup", () => {
   it("surfaces popup-triggered controller heartbeat failures", async () => {
     const harness = loadPopupHarness({
       statusBody: {
-        requiredProtocolVersion: 4,
+        requiredProtocolVersion: 6,
         compatible: 1,
         incompatible: 0,
         compatibleControllers: 0,
@@ -45,7 +45,7 @@ describe("generic browser extension popup", () => {
   it("shows the connected browser controller id when available", async () => {
     const harness = loadPopupHarness({
       statusBody: {
-        requiredProtocolVersion: 4,
+        requiredProtocolVersion: 6,
         compatible: 1,
         incompatible: 0,
         compatibleControllers: 1,
@@ -58,6 +58,25 @@ describe("generic browser extension popup", () => {
 
     expect(harness.status.className).toBe("status ok");
     expect(harness.status.textContent).toContain("controller controller-1");
+  });
+
+  it("shows controller command polling diagnostics when available", async () => {
+    const harness = loadPopupHarness({
+      statusBody: {
+        requiredProtocolVersion: 6,
+        compatible: 1,
+        incompatible: 0,
+        compatibleControllers: 1,
+        connectedControllers: [{ id: "controller-1", compatible: true, diagnostics: { lastControllerCommand: { status: "completed" } } }],
+        controllerCommandDiagnostics: { lastPollResult: "leased" }
+      },
+      controllerPulse: { ok: true, controllerHeartbeat: { ok: true, controllerId: "controller-1" } }
+    });
+
+    await harness.refresh();
+
+    expect(harness.status.textContent).toContain("last controller poll leased");
+    expect(harness.status.textContent).toContain("background command completed");
   });
 });
 

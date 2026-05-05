@@ -271,8 +271,8 @@ describe("ChatGPT plugin browser-extension workflows", () => {
               url: "https://chatgpt.example/c/test-conversation",
               title: "ChatGPT test conversation",
               status: "connected",
-              protocolVersion: 4,
-              extensionVersion: "0.1.2",
+              protocolVersion: 6,
+              extensionVersion: "0.1.8",
               routingToken: target.mode === "new" ? target.routingToken : undefined,
               compatible: true,
               lastSeenAt: new Date().toISOString(),
@@ -286,8 +286,8 @@ describe("ChatGPT plugin browser-extension workflows", () => {
           url: "https://chatgpt.example/c/recovered",
           title: "Recovered ChatGPT tab",
           status: "connected",
-          protocolVersion: 4,
-          extensionVersion: "0.1.2",
+          protocolVersion: 6,
+          extensionVersion: "0.1.8",
           routingToken: target.mode === "new" ? target.routingToken : undefined,
           compatible: true,
           lastSeenAt: new Date().toISOString(),
@@ -843,7 +843,7 @@ function runTransformWithFakeBrowser(input: {
     if (input.useFastTimeoutClock) fakeNow += Math.max(ms, 3_600_000);
   };
   sdk.extension.browser = {
-    protocolVersion: 4,
+    protocolVersion: 6,
     findCompatibleClientForTarget:
       input.findCompatibleClientForTarget ??
       ((target) => ({
@@ -885,7 +885,15 @@ function runTransformWithFakeBrowser(input: {
     },
     openTab: async () => ({ ok: true }),
     openWindow: async () => ({ ok: true }),
+    closeTab: async () => ({ ok: true }),
     focusTarget: async () => ({ ok: true }),
+    startDownloadWatch: () => ({ id: "download-watch-1", startedAt: new Date().toISOString() }),
+    waitForDownload: async () => ({
+      watchId: "download-watch-1",
+      filename: "C:\\tmp\\unused-download.zip",
+      state: "complete",
+      completedAt: new Date().toISOString()
+    }),
     stageFiles: (filePaths) =>
       filePaths.map((filePath, index) => ({
         id: `file-${index}`,
@@ -1020,7 +1028,7 @@ function runSequenceWithFakeBrowser(input: {
 
   sdk.sleep = async () => undefined;
   sdk.extension.browser = {
-    protocolVersion: 4,
+    protocolVersion: 6,
     findCompatibleClientForTarget: (target) => ({
       id: target.mode === "existing" ? target.clientId : "client-1",
       url: "https://chatgpt.example/c/test-conversation",
@@ -1045,7 +1053,15 @@ function runSequenceWithFakeBrowser(input: {
     }),
     openTab: async () => ({ ok: true }),
     openWindow: async () => ({ ok: true }),
+    closeTab: async () => ({ ok: true }),
     focusTarget: async () => ({ ok: true }),
+    startDownloadWatch: () => ({ id: "download-watch-1", startedAt: new Date().toISOString() }),
+    waitForDownload: async () => ({
+      watchId: "download-watch-1",
+      filename: "C:\\tmp\\unused-download.zip",
+      state: "complete",
+      completedAt: new Date().toISOString()
+    }),
     stageFiles: (filePaths) =>
       filePaths.map((filePath, index) => ({
         id: `file-${index}`,

@@ -234,6 +234,14 @@ export class SqliteStore {
     return row ? rowToWorkflowLibraryEntry(row) : null;
   }
 
+  getWorkflowLibraryEntryBySourceRunId(sourceRunId: string): WorkflowLibraryEntry | null {
+    const row = this.get<Record<string, unknown>>(
+      "select * from workflow_library_entries where source_run_id = ? order by created_at asc, id asc",
+      [sourceRunId]
+    );
+    return row ? rowToWorkflowLibraryEntry(row) : null;
+  }
+
   updateWorkflowLibraryEntry(
     id: string,
     patch: Partial<Pick<WorkflowLibraryEntry, "name" | "input">>

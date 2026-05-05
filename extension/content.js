@@ -2,7 +2,7 @@
 if (globalThis.__basedBlinkBrowserControllerContentStarted) return;
 globalThis.__basedBlinkBrowserControllerContentStarted = true;
 
-const BLINK_EXTENSION_PROTOCOL_VERSION = 4;
+const BLINK_EXTENSION_PROTOCOL_VERSION = 6;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const API_BASE_URL = "http://127.0.0.1:39201";
 const ROUTING_TOKEN_PARAM = "based-blink-tab";
@@ -63,6 +63,9 @@ function apiUrl(path) {
 }
 
 async function apiFetch(path, options = {}) {
+  const relayed = await relayApiFetch(path, options);
+  if (relayed) return apiFetchBodyFromRelay(relayed);
+
   const response = await fetch(apiUrl(path), {
     ...options,
     headers: {
@@ -77,6 +80,35 @@ async function apiFetch(path, options = {}) {
     throw new Error(body?.error || body?.message || `BLINK API request failed with ${response.status}`);
   }
   return body;
+}
+
+async function relayApiFetch(path, options = {}) {
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "api-fetch",
+      path,
+      options: {
+        method: options.method || "GET",
+        headers: options.headers || {},
+        ...(options.body !== undefined ? { body: String(options.body) } : {})
+      }
+    });
+    if (result?.type === "api-fetch-result" || result?.type === "api-fetch-error") return result;
+  } catch {
+    // Fall back to direct fetch for existing pages where the background has not reloaded yet.
+  }
+  return null;
+}
+
+function apiFetchBodyFromRelay(result) {
+  if (result.type === "api-fetch-error") {
+    throw new Error(result.error || `BLINK API request failed with ${result.status || "unknown status"}`);
+  }
+  if (result.status === 204) return null;
+  if (!result.ok) {
+    throw new Error(result.body?.error || result.body?.message || `BLINK API request failed with ${result.status}`);
+  }
+  return result.body ?? null;
 }
 
 async function heartbeat() {
@@ -201,13 +233,89 @@ function requireSelector(selector) {
 }
 
 function firstElement(selector) {
-  const element = document.querySelector(requireSelector(selector));
+  const element = elementsForSelector(selector)[0] || null;
   if (!element) throw new Error(`Element not found: ${selector}`);
   return element;
 }
 
 function elementsForSelector(selector) {
-  return Array.from(document.querySelectorAll(requireSelector(selector)));
+  const normalized = normalizeSelectorForDom(requireSelector(selector));
+  if (normalized.textSelector) return textSelectorElements(normalized.textSelector);
+
+  let elements;
+  try {
+    elements = Array.from(document.querySelectorAll(normalized.cssSelector));
+  } catch (error) {
+    throw new Error(`Invalid selector: ${selector}; normalized=${normalized.cssSelector}; ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!normalized.textFilter) return elements;
+  return elements.filter((element) => elementMatchesTextFilter(element, normalized.textFilter));
+}
+
+function normalizeSelectorForDom(selector) {
+  const trimmed = selector.trim();
+  if (trimmed.startsWith("text=")) {
+    return { cssSelector: "*", textSelector: parseTextSelector(trimmed.slice(5).trim()) };
+  }
+
+  const textFilters = [];
+  const cssSelector = trimmed
+    .replace(/:visible\b/g, "")
+    .replace(/:has-text\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)/g, (_match, quotedText) => {
+      textFilters.push(unquoteSelectorText(quotedText));
+      return "";
+    })
+    .trim();
+
+  return {
+    cssSelector: cssSelector || "*",
+    textFilter:
+      textFilters.length > 0
+        ? {
+            text: textFilters[textFilters.length - 1],
+            textMatch: "contains",
+            caseSensitive: true
+          }
+        : null
+  };
+}
+
+function parseTextSelector(value) {
+  if (value.startsWith("/") && value.lastIndexOf("/") > 0) {
+    const lastSlash = value.lastIndexOf("/");
+    return {
+      text: value.slice(1, lastSlash),
+      textMatch: "regex",
+      caseSensitive: !value.slice(lastSlash + 1).includes("i")
+    };
+  }
+  return {
+    text: unquoteSelectorText(value),
+    textMatch: "contains",
+    caseSensitive: false
+  };
+}
+
+function unquoteSelectorText(value) {
+  const trimmed = String(value || "").trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    try {
+      return JSON.parse(trimmed.startsWith("'") ? `"${trimmed.slice(1, -1).replace(/"/g, '\\"')}"` : trimmed);
+    } catch {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+function textSelectorElements(filter) {
+  const candidates = Array.from(document.querySelectorAll("body *")).filter((element) => elementMatchesTextFilter(element, filter));
+  const deepest = candidates.filter((element) => !Array.from(element.children || []).some((child) => elementMatchesTextFilter(child, filter)));
+  return deepest.sort((left, right) => {
+    const leftRect = left.getBoundingClientRect();
+    const rightRect = right.getBoundingClientRect();
+    return leftRect.width * leftRect.height - rightRect.width * rightRect.height;
+  });
 }
 
 function firstActionableElement(selector, textFilter) {
@@ -362,7 +470,7 @@ async function performAction(action) {
   if (action.kind === "click") {
     const textFilter = createTextFilter(action);
     const { element, candidateCount, visibleCount, enabledCount, textMatchCount } = firstActionableElement(action.selector, textFilter);
-    element.click();
+    clickElement(element);
     return {
       ok: true,
       action: "click",
@@ -419,7 +527,7 @@ async function performAction(action) {
       form.requestSubmit(element instanceof HTMLElement ? element : undefined);
       return { ok: true, action: "submit", selector: action.selector, candidateCount, visibleCount, enabledCount };
     }
-    element.click();
+    clickElement(element);
     return { ok: true, action: "submit", selector: action.selector, candidateCount, visibleCount, enabledCount };
   }
   if (action.kind === "select") {
@@ -447,9 +555,7 @@ async function performAction(action) {
     }
     const dataTransfer = new DataTransfer();
     for (const file of action.files || []) {
-      const response = await fetch(apiUrl(file.url));
-      if (!response.ok) throw new Error(`Could not fetch staged file ${file.name}: ${response.status}`);
-      const blob = await response.blob();
+      const blob = await fetchStagedFileBlob(file);
       dataTransfer.items.add(new File([blob], file.name, { type: file.mimeType || blob.type || "application/octet-stream" }));
     }
     element.files = dataTransfer.files;
@@ -458,6 +564,57 @@ async function performAction(action) {
     return { ok: true, action: "attach-file", selector: action.selector, count: dataTransfer.files.length };
   }
   throw new Error(`Unsupported BLINK browser action kind: ${action.kind || "unknown"}`);
+}
+
+function clickElement(element) {
+  element.scrollIntoView?.({ block: "center", inline: "center" });
+  try {
+    element.focus?.({ preventScroll: true });
+  } catch {
+    element.focus?.();
+  }
+  if (typeof element.click === "function") {
+    element.click();
+    return;
+  }
+  element.dispatchEvent(
+    typeof MouseEvent === "function"
+      ? new MouseEvent("click", { bubbles: true, cancelable: true })
+      : new Event("click", { bubbles: true, cancelable: true })
+  );
+}
+
+async function fetchStagedFileBlob(file) {
+  const relayed = await relayApiFetchBinary(file.url);
+  if (relayed) {
+    return new Blob([base64ToUint8Array(relayed.base64 || "")], {
+      type: file.mimeType || relayed.mimeType || "application/octet-stream"
+    });
+  }
+
+  const response = await fetch(apiUrl(file.url));
+  if (!response.ok) throw new Error(`Could not fetch staged file ${file.name}: ${response.status}`);
+  return response.blob();
+}
+
+async function relayApiFetchBinary(path) {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "api-fetch-binary", path });
+    if (result?.type === "api-fetch-binary-result") return result;
+    if (result?.type === "api-fetch-binary-error") {
+      throw new Error(result.error || `Could not fetch staged file: ${result.status || "unknown status"}`);
+    }
+  } catch {
+    // Fall back to direct fetch for older background scripts or pages that permit localhost fetches.
+  }
+  return null;
+}
+
+function base64ToUint8Array(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
 function collectPageState() {
@@ -558,7 +715,8 @@ function imageFingerprint(image) {
 
 function collectWaitState(condition, networkIdle) {
   const selector = condition?.kind === "element" ? condition.selector : undefined;
-  const element = selector ? document.querySelector(selector) : null;
+  const elements = selector ? elementsForSelector(selector) : [];
+  const element = elements[0] || null;
   const imageSelector = condition?.kind === "image-count" && condition.selector ? condition.selector : "img";
   return {
     url: location.href,
@@ -568,7 +726,7 @@ function collectWaitState(condition, networkIdle) {
       ? {
           element: {
             selector,
-            count: document.querySelectorAll(selector).length,
+            count: elements.length,
             visible: isVisible(element),
             disabled: isDisabled(element)
           }
@@ -766,7 +924,7 @@ async function extract(query) {
   if (!query || typeof query !== "object") throw new Error("BLINK browser extract query is required.");
   if (query.kind === "element-state") {
     const selector = requireSelector(query.selector);
-    const elements = Array.from(document.querySelectorAll(selector));
+    const elements = elementsForSelector(selector);
     const visibleElements = elements.filter(isVisible);
     const enabledElements = elements.filter((element) => !isDisabled(element));
     const first = visibleElements[0] || elements[0] || null;

@@ -189,6 +189,7 @@ export interface SystemInfo {
       incompatibilityReason?: string;
       lastSeenAt: string;
       capabilities?: string[];
+      diagnostics?: Record<string, unknown>;
     }>;
     compatibleControllers: number;
     incompatibleControllers: number;
@@ -209,6 +210,30 @@ export interface SystemInfo {
         controllerHeartbeatOk?: boolean;
         controllerHeartbeatAt?: string;
         controllerHeartbeatError?: string;
+      }>;
+    };
+    controllerCommandDiagnostics?: {
+      pendingCount: number;
+      runningCount: number;
+      lastPollAt?: string;
+      lastPollControllerId?: string;
+      lastPollResult?: "leased" | "none" | "error";
+      lastPollCommandId?: string;
+      lastPollError?: string;
+      lastCompletionAt?: string;
+      lastCompletionCommandId?: string;
+      lastCompletionStatus?: "completed" | "failed";
+      lastCompletionError?: string;
+      recentCommands: Array<{
+        id: string;
+        controllerId: string;
+        commandKind: string;
+        status: string;
+        createdAt: string;
+        updatedAt: string;
+        ageMs: number;
+        url?: string;
+        error?: string;
       }>;
     };
   };

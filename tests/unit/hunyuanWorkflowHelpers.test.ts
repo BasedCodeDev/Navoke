@@ -126,14 +126,18 @@ describe("Hunyuan workflow helpers", () => {
     ).toEqual([]);
     expect(selectors.loginStartSelector).toBe("button, a, [role='button']");
     expect(selectors.loginStartText).toBe("Start Using");
-    expect(selectors.loginReadyText).toBe("Image to 3D");
+    expect(selectors.loginReadyText).toBe("Image-to-3D");
     expect(selectors.loginRequiredSelector).toContain("email");
-    expect(selectors.imageTo3dTab).toContain("Image to 3D");
+    expect(selectors.imageTo3dTab).toContain("Image-to-3D");
     expect(selectors.multipleImagesTab).toContain("Multiple Images");
     expect(selectors.faceCountButtons?.["50k"]).toContain(".qaUJkqcCF813NIqHGF3U:visible:has-text(\"50k\")");
-    expect(selectors.modelTypeGeometryTexturePhased).toContain("Texture");
+    expect(selectors.modelTypeGeometryTexturePhased).toContain("Generation type");
+    expect(selectors.modelTypeGeometryTexturePhased).toContain("Staged Generation");
     expect(selectors.generateButton).toContain("Generate");
-    expect(selectors.retopologyTypeButtons?.quad).toContain("Quad");
+    expect(selectors.geometryReadySelector).toContain("Smart Topology");
+    expect(selectors.retopologyTypeButtons?.quad).toContain("Quadrilaterals");
+    expect(selectors.generateTextureButton).toContain("Generate texture");
+    expect(selectors.textureRunningText).toBe("Estimated time");
     expect(selectors.downloadButton).toContain("Download");
   });
 
@@ -143,7 +147,7 @@ describe("Hunyuan workflow helpers", () => {
 
     expect(workflow.manifest).toMatchObject({
       requiresBrowser: false,
-      outputKinds: ["json"],
+      outputKinds: ["model", "download", "json"],
       uiCapabilities: ["extension.tabRouting"],
       targetUrl: "https://3d.hunyuanglobal.com/"
     });
@@ -199,15 +203,13 @@ describe("Hunyuan workflow helpers", () => {
       inspect: async () => {
         inspectCount += 1;
         if (inspectCount === 1) return { url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" };
-        if (inspectCount === 2) return { url: "https://3d.hunyuanglobal.com/login-email", title: "Login" };
-        return { url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" };
+        return { url: "https://3d.hunyuanglobal.com/login-email", title: "Login" };
       },
       extract: async (_target: unknown, query: any) => {
         if (query.kind === "element-state") return { visible: false };
         if (query.kind === "text") {
           if (inspectCount === 1) return { text: "Start Using" };
-          if (inspectCount === 2) return { text: "Start Using HY 3D" };
-          return { text: "Image to 3D" };
+          return { text: "Start Using HY 3D" };
         }
         return {};
       },
@@ -225,20 +227,22 @@ describe("Hunyuan workflow helpers", () => {
       selectors: {}
     });
 
-    const result = await workflow.run(input, {
-      runId: "run-hunyuan",
-      signal: new AbortController().signal,
-      paths: {},
-      artifactDir: "C:\\tmp",
-      step: async () => undefined,
-      event: async () => undefined,
-      waitForManualAction: async () => {
-        manualWaits += 1;
-      },
-      addArtifact: async () => ({ id: "unused" })
-    });
+    await expect(
+      workflow.run(input, {
+        runId: "run-hunyuan",
+        signal: new AbortController().signal,
+        paths: {},
+        artifactDir: "C:\\tmp",
+        step: async () => undefined,
+        event: async () => undefined,
+        waitForManualAction: async () => {
+          manualWaits += 1;
+        },
+        addArtifact: async () => ({ id: "unused" })
+      })
+    ).rejects.toThrow("still requires manual action");
 
-    expect(manualWaits).toBe(1);
+    expect(manualWaits).toBe(4);
     expect(actions).toEqual([
       {
         kind: "click",
@@ -248,10 +252,593 @@ describe("Hunyuan workflow helpers", () => {
         caseSensitive: false
       }
     ]);
-    expect(result).toMatchObject({
-      artifactIds: [],
-      summary: expect.stringContaining("authenticated")
+  });
+
+  it("runs the Hunyuan Global extension flow through textured OBJ package registration", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hunyuan-global-flow-"));
+    const downloadDir = path.join(tempDir, "downloads");
+    const artifactDir = path.join(tempDir, "artifacts");
+    fs.mkdirSync(downloadDir);
+    fs.mkdirSync(artifactDir);
+    const frontPath = path.join(tempDir, "front.png");
+    const backPath = path.join(tempDir, "back.png");
+    const downloadedObj = path.join(downloadDir, "hunyuan-model.obj");
+    const downloadedZip = path.join(downloadDir, "hunyuan-model-package.zip");
+    fs.writeFileSync(frontPath, "front");
+    fs.writeFileSync(backPath, "back");
+    fs.writeFileSync(downloadedObj, "o model\n");
+    fs.writeFileSync(downloadedZip, "zip");
+
+    try {
+      const sdk = createWorkflowSdk() as any;
+      const actions: any[] = [];
+      const artifacts: any[] = [];
+      const closedTabs: any[] = [];
+      let downloadWatchCount = 0;
+      let downloadWaitCount = 0;
+      let runningTextPolls = 0;
+      let runningTextMode: "generate" | "texture" = "generate";
+      sdk.files.extractZip = async (_zipPath: string, targetDir: string) => {
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.writeFileSync(path.join(targetDir, "package-model.obj"), "mtllib material.mtl\no model\n");
+        fs.writeFileSync(path.join(targetDir, "material.mtl"), "newmtl material\n");
+        fs.writeFileSync(path.join(targetDir, "texture_pbr.png"), "texture");
+      };
+      sdk.extension.browser = {
+        ...sdk.extension.browser,
+        findCompatibleClientForTarget: () => ({
+          id: "tab-1",
+          url: "https://3d.hunyuanglobal.com/",
+          title: "Hunyuan Global",
+          status: "connected",
+          protocolVersion: 6,
+          extensionVersion: "0.1.8",
+          compatible: true,
+          lastSeenAt: new Date().toISOString()
+        }),
+        ensureRoutedTab: async () => ({
+          id: "tab-1",
+          url: "https://3d.hunyuanglobal.com/",
+          title: "Hunyuan Global",
+          status: "connected",
+          protocolVersion: 6,
+          extensionVersion: "0.1.8",
+          compatible: true,
+          lastSeenAt: new Date().toISOString(),
+          openedByController: true,
+          openedAction: "open-window",
+          openedTabId: 42,
+          openedWindowId: 7,
+          openedControllerId: "controller-1"
+        }),
+        closeTab: async (tabId: number, options: unknown) => {
+          closedTabs.push({ tabId, options });
+          return { ok: true };
+        },
+        stageFiles: (filePaths: string[]) =>
+          filePaths.map((filePath, index) => ({
+            id: `file-${index}`,
+            name: path.basename(filePath),
+            mimeType: "image/png",
+            url: `/api/extension/files/file-${index}`
+          })),
+        startDownloadWatch: () => ({ id: `watch-${++downloadWatchCount}`, startedAt: new Date().toISOString() }),
+        waitForDownload: async (watchId: string) => {
+          downloadWaitCount += 1;
+          return {
+            watchId,
+            filename: downloadWaitCount === 1 ? downloadedObj : downloadedZip,
+            state: "complete",
+            completedAt: new Date().toISOString()
+          };
+        },
+        inspect: async () => ({ url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" }),
+        extract: async (_target: unknown, query: any) => {
+          if (query.kind === "element-state") {
+            const selector = String(query.selector ?? "");
+            if (/loading|spinner|progress/i.test(selector)) return { count: 0, visible: false, visibleCount: 0, enabledCount: 0, disabled: false };
+            return { count: 1, visible: true, visibleCount: 1, enabledCount: 1, disabled: false };
+          }
+          if (query.kind === "text") {
+            if (query.selector) return { text: "Uploaded reference image" };
+            if (runningTextPolls > 0) {
+              runningTextPolls -= 1;
+              return { text: runningTextMode === "texture" ? "Texture Estimated time 59 second" : "Generating Estimated remaining" };
+            }
+            return { text: "Image-to-3D Multiple Images Generate Smart Retopology Generate Texture Download" };
+          }
+          return {};
+        },
+        action: async (_target: unknown, action: unknown) => {
+          actions.push(action);
+          if (
+            typeof (action as { kind?: unknown }).kind === "string" &&
+            (action as { kind: string }).kind === "click" &&
+            /Generate|Smart Retopology/.test(String((action as { selector?: unknown }).selector ?? ""))
+          ) {
+            runningTextMode = /Generate texture/.test(String((action as { selector?: unknown }).selector ?? "")) ? "texture" : "generate";
+            runningTextPolls = 2;
+          }
+          return { ok: true };
+        }
+      };
+
+      const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+      if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+      const input = workflow.inputSchema.parse({
+        frontImage: frontPath,
+        backImage: backPath,
+        selectors: {}
+      });
+
+      const result = await workflow.run(input, {
+        runId: "run-hunyuan-global",
+        signal: new AbortController().signal,
+        paths: {},
+        artifactDir,
+        step: async () => undefined,
+        event: async () => undefined,
+        waitForManualAction: async () => {
+          throw new Error("Manual action should not be required.");
+        },
+        addArtifact: async (artifact) => {
+          const id = `artifact-${artifacts.length + 1}`;
+          artifacts.push({ id, ...artifact });
+          return { id };
+        }
+      });
+
+      expect(actions.map((action) => action.kind)).toContain("attach-file");
+      expect(actions.some((action) => action.kind === "click" && String(action.selector).includes("download__dropdown"))).toBe(true);
+      expect(actions.some((action) => action.kind === "click" && String(action.selector).includes("OBJ"))).toBe(true);
+      expect(result).toMatchObject({ modelArtifactId: "artifact-1", manifestArtifactId: "artifact-2" });
+      expect(artifacts[0]).toMatchObject({
+        kind: "model",
+        name: "package-model.obj",
+        metadata: expect.objectContaining({
+          mtlFileName: "material.mtl",
+          textureFileNames: ["texture_pbr.png"],
+          originalArchive: expect.objectContaining({ filename: "hunyuan-model-package.zip", deleted: true })
+        })
+      });
+      expect(fs.existsSync(path.join(artifactDir, "model-assets", "package-model.obj"))).toBe(true);
+      expect(fs.existsSync(path.join(artifactDir, "model-assets", "material.mtl"))).toBe(true);
+      expect(fs.existsSync(path.join(artifactDir, "model-assets", "texture_pbr.png"))).toBe(true);
+      expect(fs.existsSync(path.join(artifactDir, "hunyuan-global-image-to-model-manifest.json"))).toBe(true);
+      expect(closedTabs).toEqual([{ tabId: 42, options: { controllerId: "controller-1", timeoutMs: 20_000 } }]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  it("retries only the Hunyuan Global slot that reports Detection failed before closing the multiview modal", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hunyuan-global-detection-retry-"));
+    const downloadDir = path.join(tempDir, "downloads");
+    const artifactDir = path.join(tempDir, "artifacts");
+    fs.mkdirSync(downloadDir);
+    fs.mkdirSync(artifactDir);
+    const frontPath = path.join(tempDir, "front.png");
+    const backPath = path.join(tempDir, "back.png");
+    const downloadedObj = path.join(downloadDir, "hunyuan-model.obj");
+    fs.writeFileSync(frontPath, "front");
+    fs.writeFileSync(backPath, "back");
+    fs.writeFileSync(downloadedObj, "o model\n");
+
+    try {
+      const sdk = createWorkflowSdk() as any;
+      const actions: any[] = [];
+      const slotState: Record<string, "empty" | "accepted" | "failed"> = { front: "empty", back: "empty" };
+      let backAttachAttempts = 0;
+      let runningTextPolls = 0;
+      let runningTextMode: "generate" | "texture" = "generate";
+      let modalOpen = true;
+      sdk.extension.browser = {
+        ...sdk.extension.browser,
+        ensureRoutedTab: async () => ({
+          id: "tab-1",
+          url: "https://3d.hunyuanglobal.com/",
+          title: "Hunyuan Global",
+          status: "connected",
+          protocolVersion: 5,
+          extensionVersion: "0.1.6",
+          compatible: true,
+          lastSeenAt: new Date().toISOString()
+        }),
+        closeTab: async () => ({ ok: true }),
+        stageFiles: (filePaths: string[]) =>
+          filePaths.map((filePath, index) => ({
+            id: `file-${index}`,
+            name: path.basename(filePath),
+            mimeType: "image/png",
+            url: `/api/extension/files/file-${index}`
+          })),
+        startDownloadWatch: () => ({ id: "watch-1", startedAt: new Date().toISOString() }),
+        waitForDownload: async () => ({
+          watchId: "watch-1",
+          filename: downloadedObj,
+          state: "complete",
+          completedAt: new Date().toISOString()
+        }),
+        inspect: async () => ({ url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" }),
+        extract: async (_target: unknown, query: any) => {
+          const selector = String(query.selector ?? "");
+          if (query.kind === "element-state") {
+            if (/loading|spinner|progress/i.test(selector)) return { count: 0, visible: false, visibleCount: 0, enabledCount: 0, disabled: false };
+            if (/hy-upload-card--back/.test(selector) && /remove|delete|t-icon-close/i.test(selector)) {
+              return { count: 0, visible: false, visibleCount: 0, enabledCount: 0, disabled: false };
+            }
+            if (/hy-upload-card--front/.test(selector) && /img|preview|thumbnail|t-image/i.test(selector)) {
+              const visible = slotState.front === "accepted";
+              return { count: visible ? 1 : 0, visible, visibleCount: visible ? 1 : 0, enabledCount: visible ? 1 : 0, disabled: false };
+            }
+            if (/hy-upload-card--back/.test(selector) && /img|preview|thumbnail|t-image/i.test(selector)) {
+              const visible = slotState.back === "accepted" || slotState.back === "failed";
+              return { count: visible ? 1 : 0, visible, visibleCount: visible ? 1 : 0, enabledCount: visible ? 1 : 0, disabled: false };
+            }
+            return { count: 1, visible: true, visibleCount: 1, enabledCount: 1, disabled: false };
+          }
+          if (query.kind === "text") {
+            if (/hy-upload-card--front/.test(selector)) return { text: slotState.front === "accepted" ? "Uploaded reference image" : "" };
+            if (/hy-upload-card--back/.test(selector)) {
+              return { text: slotState.back === "failed" ? "Detection failed" : slotState.back === "accepted" ? "Uploaded reference image" : "" };
+            }
+            if (runningTextPolls > 0) {
+              runningTextPolls -= 1;
+              return { text: runningTextMode === "texture" ? "Texture Estimated time 59 second" : "Generating Estimated remaining" };
+            }
+            return {
+              text: `${modalOpen ? "Add Multi-view " : ""}Image-to-3D Multiple Images Generate Smart Retopology Generate Texture Download`
+            };
+          }
+          return {};
+        },
+        action: async (_target: unknown, action: any) => {
+          actions.push(action);
+          if (action.kind === "attach-file" && String(action.selector).includes("hy-upload-card--front")) {
+            slotState.front = "accepted";
+          }
+          if (action.kind === "attach-file" && String(action.selector).includes("hy-upload-card--back")) {
+            backAttachAttempts += 1;
+            slotState.back = backAttachAttempts === 1 ? "failed" : "accepted";
+          }
+          if (action.kind === "click" && String(action.selector).includes("hy-upload-card--back") && /remove|delete|t-icon-close/i.test(String(action.selector))) {
+            slotState.back = "empty";
+          }
+          if (action.kind === "click" && String(action.selector).includes("hy-multi-view-grid__header-close")) {
+            modalOpen = false;
+          }
+          if (action.kind === "click" && /Generate|Smart Retopology/.test(String(action.selector ?? ""))) {
+            runningTextMode = /Generate texture/.test(String(action.selector ?? "")) ? "texture" : "generate";
+            runningTextPolls = 2;
+          }
+          return { ok: true };
+        }
+      };
+
+      const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+      if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+      const input = workflow.inputSchema.parse({ frontImage: frontPath, backImage: backPath, selectors: {} });
+
+      await workflow.run(input, {
+        runId: "run-hunyuan-global",
+        signal: new AbortController().signal,
+        paths: {},
+        artifactDir,
+        step: async () => undefined,
+        event: async () => undefined,
+        waitForManualAction: async () => {
+          throw new Error("Manual action should not be required.");
+        },
+        addArtifact: async () => ({ id: `artifact-${actions.length}` })
+      });
+
+      const frontAttachIndexes = actions
+        .map((action, index) => ({ action, index }))
+        .filter(({ action }) => action.kind === "attach-file" && String(action.selector).includes("hy-upload-card--front"))
+        .map(({ index }) => index);
+      const backAttachIndexes = actions
+        .map((action, index) => ({ action, index }))
+        .filter(({ action }) => action.kind === "attach-file" && String(action.selector).includes("hy-upload-card--back"))
+        .map(({ index }) => index);
+      const backRemoveIndex = actions.findIndex(
+        (action) => action.kind === "click" && String(action.selector).includes("hy-upload-card--back") && /remove|delete|t-icon-close/i.test(String(action.selector))
+      );
+      const closeIndex = actions.findIndex((action) => action.kind === "click" && String(action.selector).includes("hy-multi-view-grid__header-close"));
+      const generateIndex = actions.findIndex((action) => action.kind === "click" && String(action.selector).includes("Generate"));
+
+      expect(frontAttachIndexes).toHaveLength(1);
+      expect(backAttachIndexes).toHaveLength(2);
+      expect(backRemoveIndex).toBe(-1);
+      expect(closeIndex).toBeGreaterThan(backAttachIndexes[1]);
+      expect(generateIndex).toBeGreaterThan(closeIndex);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  it("records diagnostics and pauses for manual recovery when Hunyuan Global detection retries are exhausted", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hunyuan-global-detection-exhausted-"));
+    const frontPath = path.join(tempDir, "front.png");
+    const backPath = path.join(tempDir, "back.png");
+    fs.writeFileSync(frontPath, "front");
+    fs.writeFileSync(backPath, "back");
+
+    try {
+      const sdk = createWorkflowSdk() as any;
+      const actions: any[] = [];
+      const artifacts: any[] = [];
+      const manualWaits: any[] = [];
+      const slotState: Record<string, "empty" | "accepted" | "failed"> = { front: "empty", back: "empty" };
+      let modalOpen = true;
+      sdk.extension.browser = {
+        ...sdk.extension.browser,
+        ensureRoutedTab: async () => ({
+          id: "tab-1",
+          url: "https://3d.hunyuanglobal.com/",
+          title: "Hunyuan Global",
+          status: "connected",
+          protocolVersion: 5,
+          extensionVersion: "0.1.6",
+          compatible: true,
+          lastSeenAt: new Date().toISOString()
+        }),
+        closeTab: async () => ({ ok: true }),
+        stageFiles: (filePaths: string[]) =>
+          filePaths.map((filePath, index) => ({
+            id: `file-${index}`,
+            name: path.basename(filePath),
+            mimeType: "image/png",
+            url: `/api/extension/files/file-${index}`
+          })),
+        inspect: async () => ({ url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global", bodyText: "Detection failed" }),
+        extract: async (_target: unknown, query: any) => {
+          const selector = String(query.selector ?? "");
+          if (query.kind === "element-state") {
+            if (/loading|spinner|progress/i.test(selector)) return { count: 0, visible: false, visibleCount: 0, enabledCount: 0, disabled: false };
+            if (/hy-upload-card--back/.test(selector) && /remove|delete|t-icon-close/i.test(selector)) {
+              const visible = slotState.back === "failed";
+              return { count: visible ? 1 : 0, visible, visibleCount: visible ? 1 : 0, enabledCount: visible ? 1 : 0, disabled: false };
+            }
+            if (/hy-upload-card--front/.test(selector) && /img|preview|thumbnail|t-image/i.test(selector)) {
+              const visible = slotState.front === "accepted";
+              return { count: visible ? 1 : 0, visible, visibleCount: visible ? 1 : 0, enabledCount: visible ? 1 : 0, disabled: false };
+            }
+            if (/hy-upload-card--back/.test(selector) && /img|preview|thumbnail|t-image/i.test(selector)) {
+              const visible = slotState.back === "accepted" || slotState.back === "failed";
+              return { count: visible ? 1 : 0, visible, visibleCount: visible ? 1 : 0, enabledCount: visible ? 1 : 0, disabled: false };
+            }
+            return { count: 1, visible: true, visibleCount: 1, enabledCount: 1, disabled: false };
+          }
+          if (query.kind === "text") {
+            if (/hy-upload-card--front/.test(selector)) return { text: slotState.front === "accepted" ? "Uploaded reference image" : "" };
+            if (/hy-upload-card--back/.test(selector)) {
+              return { text: slotState.back === "failed" ? "Detection failed" : slotState.back === "accepted" ? "Uploaded reference image" : "" };
+            }
+            return { text: `${modalOpen ? "Add Multi-view " : ""}Image-to-3D Multiple Images Generate` };
+          }
+          return {};
+        },
+        action: async (_target: unknown, action: any) => {
+          actions.push(action);
+          if (action.kind === "attach-file" && String(action.selector).includes("hy-upload-card--front")) slotState.front = "accepted";
+          if (action.kind === "attach-file" && String(action.selector).includes("hy-upload-card--back")) slotState.back = "failed";
+          if (action.kind === "click" && String(action.selector).includes("hy-upload-card--back") && /remove|delete|t-icon-close/i.test(String(action.selector))) {
+            slotState.back = "empty";
+          }
+          if (action.kind === "click" && String(action.selector).includes("hy-multi-view-grid__header-close")) modalOpen = false;
+          if (action.kind === "click" && String(action.selector).includes("model-version-select")) throw new Error("stop after manual recovery");
+          return { ok: true };
+        }
+      };
+
+      const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+      if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+      const input = workflow.inputSchema.parse({ frontImage: frontPath, backImage: backPath, selectors: {} });
+
+      await expect(
+        workflow.run(input, {
+          runId: "run-hunyuan-global",
+          signal: new AbortController().signal,
+          paths: {},
+          artifactDir: tempDir,
+          step: async () => undefined,
+          event: async () => undefined,
+          waitForManualAction: async (message, data) => {
+            manualWaits.push({ message, data });
+            slotState.back = "accepted";
+          },
+          addArtifact: async (artifact) => {
+            const id = `artifact-${artifacts.length + 1}`;
+            artifacts.push({ id, ...artifact });
+            return { id };
+          }
+        })
+      ).rejects.toThrow("stop after manual recovery");
+
+      const backAttachCount = actions.filter((action) => action.kind === "attach-file" && String(action.selector).includes("hy-upload-card--back")).length;
+      expect(backAttachCount).toBe(5);
+      expect(manualWaits).toHaveLength(1);
+      expect(manualWaits[0].message).toContain("repeatedly rejected the Back view");
+      expect(manualWaits[0].data).toMatchObject({ slot: "back", attempts: 5, calibrationArtifactId: "artifact-1" });
+      expect(artifacts[0]).toMatchObject({ kind: "json", metadata: expect.objectContaining({ phase: "slot-detection", slot: "back", attempts: 5 }) });
+      expect(fs.existsSync(path.join(tempDir, "hunyuan-global-detection-failed-back.json"))).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }, 25_000);
+
+  it("closes the BLINK-opened Hunyuan Global tab after workflow failure", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hunyuan-global-failure-cleanup-"));
+    const frontPath = path.join(tempDir, "front.png");
+    const backPath = path.join(tempDir, "back.png");
+    fs.writeFileSync(frontPath, "front");
+    fs.writeFileSync(backPath, "back");
+
+    try {
+      const sdk = createWorkflowSdk() as any;
+      const closedTabs: any[] = [];
+      const events: any[] = [];
+      sdk.extension.browser = {
+        ...sdk.extension.browser,
+        ensureRoutedTab: async () => ({
+          id: "tab-1",
+          url: "https://3d.hunyuanglobal.com/",
+          title: "Hunyuan Global",
+          status: "connected",
+          protocolVersion: 6,
+          extensionVersion: "0.1.8",
+          compatible: true,
+          lastSeenAt: new Date().toISOString(),
+          openedByController: true,
+          openedAction: "open-window",
+          openedTabId: 42,
+          openedWindowId: 7,
+          openedControllerId: "controller-1"
+        }),
+        closeTab: async (tabId: number, options: unknown) => {
+          closedTabs.push({ tabId, options });
+          return { ok: true };
+        },
+        inspect: async () => ({ url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" }),
+        extract: async (_target: unknown, query: any) => (query.kind === "text" ? { text: "Image-to-3D Multiple Images" } : { visible: false }),
+        action: async () => {
+          throw new Error("primary workflow failure");
+        }
+      };
+
+      const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+      if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+      const input = workflow.inputSchema.parse({ frontImage: frontPath, backImage: backPath });
+
+      await expect(
+        workflow.run(input, {
+          runId: "run-hunyuan-global",
+          signal: new AbortController().signal,
+          paths: {},
+          artifactDir: tempDir,
+          step: async () => undefined,
+          event: async (type, message, data) => {
+            events.push({ type, message, data });
+          },
+          waitForManualAction: async () => {
+            throw new Error("Manual action should not be required.");
+          },
+          addArtifact: async () => ({ id: "unused" })
+        })
+      ).rejects.toThrow("primary workflow failure");
+
+      expect(closedTabs).toEqual([{ tabId: 42, options: { controllerId: "controller-1", timeoutMs: 20_000 } }]);
+      expect(events).toContainEqual(expect.objectContaining({ type: "hunyuan-global.browser-cleanup" }));
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not close an existing user-selected Hunyuan Global tab after workflow failure", async () => {
+    const sdk = createWorkflowSdk() as any;
+    sdk.extension.browser = {
+      ...sdk.extension.browser,
+      ensureRoutedTab: async () => ({
+        id: "tab-1",
+        url: "https://3d.hunyuanglobal.com/",
+        title: "Hunyuan Global",
+        status: "connected",
+        protocolVersion: 6,
+        extensionVersion: "0.1.8",
+        compatible: true,
+        lastSeenAt: new Date().toISOString()
+      }),
+      closeTab: async () => {
+        throw new Error("Existing selected tabs must not be closed.");
+      },
+      inspect: async () => ({ url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" }),
+      extract: async (_target: unknown, query: any) => (query.kind === "text" ? { text: "Image-to-3D Multiple Images" } : { visible: false }),
+      action: async () => {
+        throw new Error("primary workflow failure");
+      }
+    };
+
+    const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+    if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+    const input = workflow.inputSchema.parse({
+      frontImage: "C:\\tmp\\front.png",
+      backImage: "C:\\tmp\\back.png",
+      extensionTab: { mode: "existing", clientId: "tab-1" }
     });
+
+    await expect(
+      workflow.run(input, {
+        runId: "run-hunyuan-global",
+        signal: new AbortController().signal,
+        paths: {},
+        artifactDir: "C:\\tmp",
+        step: async () => undefined,
+        event: async () => undefined,
+        waitForManualAction: async () => {
+          throw new Error("Manual action should not be required.");
+        },
+        addArtifact: async () => ({ id: "unused" })
+      })
+    ).rejects.toThrow("primary workflow failure");
+  });
+
+  it("does not mask the original Hunyuan Global failure when tab cleanup fails", async () => {
+    const sdk = createWorkflowSdk() as any;
+    const events: any[] = [];
+    sdk.extension.browser = {
+      ...sdk.extension.browser,
+      ensureRoutedTab: async () => ({
+        id: "tab-1",
+        url: "https://3d.hunyuanglobal.com/",
+        title: "Hunyuan Global",
+        status: "connected",
+        protocolVersion: 6,
+        extensionVersion: "0.1.8",
+        compatible: true,
+        lastSeenAt: new Date().toISOString(),
+        openedByController: true,
+        openedAction: "open-window",
+        openedTabId: 42,
+        openedWindowId: 7,
+        openedControllerId: "controller-1"
+      }),
+      closeTab: async () => {
+        throw new Error("cleanup failed");
+      },
+      inspect: async () => ({ url: "https://3d.hunyuanglobal.com/", title: "Hunyuan Global" }),
+      extract: async (_target: unknown, query: any) => (query.kind === "text" ? { text: "Image-to-3D Multiple Images" } : { visible: false }),
+      action: async () => {
+        throw new Error("primary workflow failure");
+      }
+    };
+
+    const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+    if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+    const input = workflow.inputSchema.parse({ frontImage: "C:\\tmp\\front.png", backImage: "C:\\tmp\\back.png" });
+
+    await expect(
+      workflow.run(input, {
+        runId: "run-hunyuan-global",
+        signal: new AbortController().signal,
+        paths: {},
+        artifactDir: "C:\\tmp",
+        step: async () => undefined,
+        event: async (type, message, data) => {
+          events.push({ type, message, data });
+        },
+        waitForManualAction: async () => {
+          throw new Error("Manual action should not be required.");
+        },
+        addArtifact: async () => ({ id: "unused" })
+      })
+    ).rejects.toThrow("primary workflow failure");
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "hunyuan-global.browser-cleanup-failed",
+        data: expect.objectContaining({ error: "cleanup failed" })
+      })
+    );
   });
 
   it("reports a profile-safe manual action when Hunyuan Global has tabs but no browser controller", async () => {
@@ -311,6 +898,53 @@ describe("Hunyuan workflow helpers", () => {
     expect(steps.some((message) => message.includes("tabs are connected, but the browser controller is not connected"))).toBe(true);
     expect(manualMessages[0]).toContain("Do not open chrome.exe");
     expect(manualMessages[0]).toContain("intended Chrome profile");
+  });
+
+  it("reports site-access guidance when Hunyuan Global opens but the routed page does not connect", async () => {
+    const sdk = createWorkflowSdk() as any;
+    const manualMessages: string[] = [];
+    sdk.extension.browser = {
+      ...sdk.extension.browser,
+      status: () => ({
+        compatible: 0,
+        compatibleControllers: 1,
+        connectedClients: [],
+        connectedControllers: [{ id: "controller-1", compatible: true, diagnostics: { lastControllerCommand: { status: "completed" } } }],
+        controllerCommandDiagnostics: { lastPollResult: "leased", lastCompletionStatus: "completed" }
+      }),
+      ensureRoutedTab: async () => {
+        throw new Error(
+          'Opened a routed BLINK browser window, but no compatible page client connected. openResult={"ok":true,"injection":{"injected":false,"reason":"Cannot access contents of url"}}'
+        );
+      }
+    };
+
+    const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+    if (!workflow) throw new Error("Expected Hunyuan Global workflow.");
+    const input = workflow.inputSchema.parse({
+      frontImage: "C:\\tmp\\front.png",
+      backImage: "C:\\tmp\\back.png",
+      selectors: {}
+    });
+
+    await expect(
+      workflow.run(input, {
+        runId: "run-hunyuan",
+        signal: new AbortController().signal,
+        paths: {},
+        artifactDir: "C:\\tmp",
+        step: async () => undefined,
+        event: async () => undefined,
+        waitForManualAction: async (message) => {
+          manualMessages.push(message);
+        },
+        addArtifact: async () => ({ id: "unused" })
+      })
+    ).rejects.toThrow("still requires manual action");
+
+    expect(manualMessages[0]).toContain("could not connect to the routed page");
+    expect(manualMessages[0]).toContain("site access");
+    expect(manualMessages[0]).toContain("Cannot access contents of url");
   });
 
   it("clicks a visible later candidate when the first matching setting candidate is hidden", async () => {

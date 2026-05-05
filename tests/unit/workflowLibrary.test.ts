@@ -93,6 +93,36 @@ describe("workflow library", () => {
     store.close();
   });
 
+  it("prevents saving the same source run twice until the library entry is deleted", async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "blink-library-"));
+    tempDirs.push(projectDir);
+    const sourcePath = path.join(projectDir, "source.png");
+    fs.writeFileSync(sourcePath, "image");
+    const paths = createRuntimePaths(projectDir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const workflow = workflowRegistration();
+    const workflows = new Map([[workflow.definition.manifest.id, workflow]]);
+    const run = store.createRun({
+      id: "run-1",
+      workflowId: workflow.definition.manifest.id,
+      name: "Source run",
+      status: "completed",
+      input: { images: [sourcePath] }
+    });
+
+    const entry = createWorkflowLibraryEntryFromRun({ store, paths, workflows, runId: run.id, name: "Reusable" });
+    expect(() => createWorkflowLibraryEntryFromRun({ store, paths, workflows, runId: run.id })).toThrow(
+      /already saved to the library/
+    );
+
+    store.deleteWorkflowLibraryEntry(entry.id);
+    fs.rmSync(path.join(paths.libraryDir, entry.id), { recursive: true, force: true });
+    const recreated = createWorkflowLibraryEntryFromRun({ store, paths, workflows, runId: run.id, name: "Reusable again" });
+    expect(recreated.sourceRunId).toBe(run.id);
+    expect(store.listWorkflowLibraryEntries()).toHaveLength(1);
+    store.close();
+  });
+
   it("merges input overrides recursively and replaces arrays", () => {
     expect(
       mergeLibraryInput(

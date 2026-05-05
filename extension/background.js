@@ -1,4 +1,4 @@
-const BLINK_EXTENSION_PROTOCOL_VERSION = 4;
+const BLINK_EXTENSION_PROTOCOL_VERSION = 6;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const API_BASE_URL = "http://127.0.0.1:39201";
 const CONTROLLER_ID_STORAGE_KEY = "basedBlinkBrowserControllerId";
@@ -8,9 +8,18 @@ let lastControllerHeartbeat = {
   ok: false,
   checkedAt: "",
   error: "Controller heartbeat has not run yet.",
-  capabilities: ["open-tab", "open-window", "focus-tab"]
+  capabilities: ["open-tab", "open-window", "focus-tab", "close-tab"]
 };
 let lastControllerCommandError = "";
+let lastControllerCommand = {
+  checkedAt: "",
+  status: "not-run"
+};
+let controllerTickInFlight = null;
+let lastDownloadEvent = {
+  checkedAt: "",
+  status: "not-run"
+};
 
 function apiUrl(path) {
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
@@ -34,6 +43,82 @@ async function apiFetch(path, options = {}) {
   return body;
 }
 
+async function apiFetchForContent(path, options = {}) {
+  if (typeof path !== "string" || !path.startsWith("/api/extension/")) {
+    return { type: "api-fetch-error", ok: false, status: 400, error: "Unsupported BLINK extension API relay path." };
+  }
+  try {
+    const response = await fetch(apiUrl(path), {
+      method: options.method || "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      },
+      ...(options.body !== undefined ? { body: String(options.body) } : {})
+    });
+    const text = await response.text();
+    const body = text ? JSON.parse(text) : null;
+    return {
+      type: "api-fetch-result",
+      ok: response.ok,
+      status: response.status,
+      body
+    };
+  } catch (error) {
+    return {
+      type: "api-fetch-error",
+      ok: false,
+      status: 0,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function apiFetchBinaryForContent(path) {
+  if (!isSupportedContentFileRelayPath(path)) {
+    return { type: "api-fetch-binary-error", ok: false, status: 400, error: "Unsupported BLINK binary relay path." };
+  }
+  try {
+    const response = await fetch(apiUrl(path));
+    if (!response.ok) {
+      return { type: "api-fetch-binary-error", ok: false, status: response.status, error: `BLINK file request failed with ${response.status}` };
+    }
+    const contentType = response.headers.get("content-type") || "application/octet-stream";
+    const buffer = await response.arrayBuffer();
+    return {
+      type: "api-fetch-binary-result",
+      ok: true,
+      status: response.status,
+      mimeType: contentType,
+      base64: arrayBufferToBase64(buffer)
+    };
+  } catch (error) {
+    return {
+      type: "api-fetch-binary-error",
+      ok: false,
+      status: 0,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+function isSupportedContentFileRelayPath(path) {
+  return (
+    typeof path === "string" &&
+    (path.startsWith("/api/extension/files/") || /^\/api\/lab\/sessions\/[^/]+\/files\/[^/]+/.test(path))
+  );
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
 function getControllerId() {
   if (!controllerIdPromise) {
     controllerIdPromise = chrome.storage.local.get(CONTROLLER_ID_STORAGE_KEY).then(async (stored) => {
@@ -54,7 +139,8 @@ async function controllerHeartbeat() {
     controllerId,
     protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
     extensionVersion: EXTENSION_VERSION,
-    capabilities: ["open-tab", "open-window", "focus-tab"]
+    capabilities: ["open-tab", "open-window", "focus-tab", "close-tab"],
+    diagnostics: controllerDiagnostics()
   };
   try {
     const result = await apiFetch("/api/extension/controller/heartbeat", {
@@ -84,22 +170,76 @@ async function controllerHeartbeat() {
 
 async function pollControllerCommands() {
   const controllerId = await getControllerId();
+  const checkedAt = new Date().toISOString();
   const command = await apiFetch(`/api/extension/controller/commands/next?controllerId=${encodeURIComponent(controllerId)}`);
-  if (!command) return null;
+  if (!command) {
+    lastControllerCommand = {
+      checkedAt,
+      controllerId,
+      status: "none"
+    };
+    return null;
+  }
+  lastControllerCommand = {
+    checkedAt,
+    controllerId,
+    status: "running",
+    commandId: command.id,
+    commandKind: command?.command?.kind || "unknown"
+  };
   try {
     const result = await performControllerCommand(command);
     await apiFetch(`/api/extension/controller/commands/${encodeURIComponent(command.id)}/complete`, {
       method: "POST",
       body: JSON.stringify({ result })
     });
+    lastControllerCommand = {
+      checkedAt: new Date().toISOString(),
+      controllerId,
+      status: "completed",
+      commandId: command.id,
+      commandKind: command?.command?.kind || "unknown",
+      result: summarizeControllerCommandResult(result)
+    };
     return result;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     await apiFetch(`/api/extension/controller/commands/${encodeURIComponent(command.id)}/fail`, {
       method: "POST",
-      body: JSON.stringify({ message: error instanceof Error ? error.message : String(error) })
+      body: JSON.stringify({ message })
     });
+    lastControllerCommand = {
+      checkedAt: new Date().toISOString(),
+      controllerId,
+      status: "failed",
+      commandId: command.id,
+      commandKind: command?.command?.kind || "unknown",
+      error: message
+    };
     throw error;
   }
+}
+
+function summarizeControllerCommandResult(result) {
+  if (!result || typeof result !== "object") return result ?? null;
+  return {
+    ok: result.ok === true,
+    action: result.action || "",
+    tabId: typeof result.tabId === "number" ? result.tabId : result.tabId ?? null,
+    windowId: typeof result.windowId === "number" ? result.windowId : result.windowId ?? null,
+    url: result.url || "",
+    title: result.title || "",
+    injection: result.injection || null
+  };
+}
+
+function controllerDiagnostics() {
+  return {
+    serviceWorkerCheckedAt: new Date().toISOString(),
+    lastControllerCommand,
+    lastControllerCommandError,
+    lastDownloadEvent
+  };
 }
 
 async function performControllerCommand(payload) {
@@ -107,8 +247,30 @@ async function performControllerCommand(payload) {
     throw new Error("Unsupported BLINK controller command payload.");
   }
   const command = payload.command;
-  if (!command || (command.kind !== "open-tab" && command.kind !== "open-window" && command.kind !== "focus-tab")) {
+  if (!command || (command.kind !== "open-tab" && command.kind !== "open-window" && command.kind !== "focus-tab" && command.kind !== "close-tab")) {
     throw new Error(`Unsupported BLINK controller command kind: ${command?.kind || "unknown"}`);
+  }
+  if (command.kind === "close-tab") {
+    if (typeof command.tabId !== "number") throw new Error("BLINK close-tab command requires tabId.");
+    try {
+      await chrome.tabs.remove(command.tabId);
+      return {
+        ok: true,
+        action: "close-tab",
+        tabId: command.tabId
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/no tab with id|cannot find|not found/i.test(message)) {
+        return {
+          ok: true,
+          action: "close-tab",
+          tabId: command.tabId,
+          alreadyClosed: true
+        };
+      }
+      throw error;
+    }
   }
   if (command.kind === "focus-tab") {
     if (typeof command.tabId !== "number") throw new Error("BLINK focus-tab command requires tabId.");
@@ -202,6 +364,14 @@ if (chrome.tabs?.onUpdated?.addListener) {
 }
 
 async function tickController() {
+  if (controllerTickInFlight) return controllerTickInFlight;
+  controllerTickInFlight = tickControllerOnce().finally(() => {
+    controllerTickInFlight = null;
+  });
+  return controllerTickInFlight;
+}
+
+async function tickControllerOnce() {
   let heartbeatResult = null;
   try {
     heartbeatResult = await controllerHeartbeat();
@@ -209,6 +379,7 @@ async function tickController() {
     return {
       ok: false,
       controllerHeartbeat: lastControllerHeartbeat,
+      backgroundDiagnostics: controllerDiagnostics(),
       commandError: lastControllerCommandError || ""
     };
   }
@@ -220,6 +391,7 @@ async function tickController() {
       ok: true,
       controllerHeartbeat: lastControllerHeartbeat,
       heartbeatResult,
+      backgroundDiagnostics: controllerDiagnostics(),
       commandResult: commandResult ?? null
     };
   } catch (error) {
@@ -228,6 +400,7 @@ async function tickController() {
       ok: false,
       controllerHeartbeat: lastControllerHeartbeat,
       heartbeatResult,
+      backgroundDiagnostics: controllerDiagnostics(),
       commandError: lastControllerCommandError
     };
   }
@@ -272,11 +445,112 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "api-fetch") {
+    apiFetchForContent(message.path, message.options || {})
+      .then((result) => sendResponse(result))
+      .catch((error) =>
+        sendResponse({
+          type: "api-fetch-error",
+          ok: false,
+          status: 0,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      );
+    return true;
+  }
+
+  if (message?.type === "api-fetch-binary") {
+    apiFetchBinaryForContent(message.path)
+      .then((result) => sendResponse(result))
+      .catch((error) =>
+        sendResponse({
+          type: "api-fetch-binary-error",
+          ok: false,
+          status: 0,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      );
+    return true;
+  }
+
   return false;
+});
+
+async function postDownloadEvent(event) {
+  lastDownloadEvent = {
+    checkedAt: new Date().toISOString(),
+    status: event.state || event.type || "unknown",
+    downloadId: event.downloadId ?? null,
+    filename: event.filename || ""
+  };
+  try {
+    await apiFetch("/api/extension/downloads/event", {
+      method: "POST",
+      body: JSON.stringify(event)
+    });
+  } catch (error) {
+    lastDownloadEvent = {
+      ...lastDownloadEvent,
+      status: "post-failed",
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function downloadItemById(downloadId) {
+  if (!chrome.downloads || typeof chrome.downloads.search !== "function") return null;
+  const items = await chrome.downloads.search({ id: downloadId });
+  return Array.isArray(items) ? items[0] || null : null;
+}
+
+function downloadEventFromItem(type, item) {
+  return {
+    type,
+    downloadId: item?.id ?? null,
+    url: item?.url || "",
+    finalUrl: item?.finalUrl || "",
+    filename: item?.filename || "",
+    mime: item?.mime || "",
+    state: item?.state || "",
+    danger: item?.danger || "",
+    error: item?.error || "",
+    totalBytes: item?.totalBytes ?? null,
+    fileSize: item?.fileSize ?? null,
+    exists: item?.exists ?? null,
+    startTime: item?.startTime || "",
+    endTime: item?.endTime || "",
+    receivedAt: new Date().toISOString()
+  };
+}
+
+chrome.downloads?.onCreated?.addListener?.((item) => {
+  void postDownloadEvent(downloadEventFromItem("created", item));
+});
+
+chrome.downloads?.onChanged?.addListener?.((delta) => {
+  if (!delta?.id) return;
+  const currentState = delta.state?.current || "";
+  const completed = currentState === "complete" || currentState === "interrupted";
+  if (!completed && !delta.filename?.current) return;
+  void downloadItemById(delta.id)
+    .then((item) => postDownloadEvent(downloadEventFromItem(currentState || "changed", item || { id: delta.id, state: currentState })))
+    .catch((error) =>
+      postDownloadEvent({
+        type: currentState || "changed",
+        downloadId: delta.id,
+        state: currentState,
+        error: error instanceof Error ? error.message : String(error),
+        receivedAt: new Date().toISOString()
+      })
+    );
 });
 
 chrome.runtime.onInstalled?.addListener(() => void tickController());
 chrome.runtime.onStartup?.addListener(() => void tickController());
+chrome.alarms?.create?.("based-blink-controller-poll", { periodInMinutes: 1 });
+chrome.alarms?.onAlarm?.addListener?.((alarm) => {
+  if (alarm?.name === "based-blink-controller-poll") void tickController();
+});
 
 void tickController();
 setInterval(tickController, 2500);
@@ -284,7 +558,12 @@ setInterval(tickController, 2500);
 globalThis.__BasedBlinkBrowserControllerBackgroundTest = {
   performControllerCommand,
   controllerHeartbeat,
+  apiFetchForContent,
+  apiFetchBinaryForContent,
   pollControllerCommands,
   tickController,
-  lastControllerHeartbeat: () => lastControllerHeartbeat
+  postDownloadEvent,
+  lastControllerHeartbeat: () => lastControllerHeartbeat,
+  lastControllerCommand: () => lastControllerCommand,
+  lastDownloadEvent: () => lastDownloadEvent
 };

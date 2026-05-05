@@ -146,6 +146,17 @@ For plugin reloads, try `blink --project <project-dir> plugin-install <plugin-di
 
 When a run reaches `waiting_manual` or emits `manual_action.required`, report the current step to the user and wait for them to complete the browser action. After they confirm, call `blink --project <project-dir> resume <runId>` and continue watching.
 
+## Clean Up After Yourself
+
+Treat browser windows opened during CLI-driven workflow testing as resources you own until the run reaches a terminal state.
+
+- Prefer `blink run ... --wait` or keep watching with `blink watch <runId>` until the run is `completed`, `failed`, or `cancelled`.
+- If you stop working on a queued, running, or waiting run, call `blink --project <project-dir> cancel <runId>` before moving on.
+- Workflows that open routed browser tabs through the BLINK controller should close their own run-owned tabs at terminal cleanup. Do not close user-selected existing tabs.
+- If you manually open a browser window outside BLINK workflow control, close it manually once it is no longer needed.
+- Do not close a window while the run is in `waiting_manual`; the user may need it for login, verification, account checks, or site access setup.
+- After a cancelled or failed calibration run, call `blink --project <project-dir> get <runId>` first if you still need artifacts, screenshots, events, or trace paths for debugging.
+
 ## Artifacts
 
 Use `blink --project <project-dir> get <runId>` after completion. Artifact records include the local artifact path, kind, MIME type, and metadata. Prefer returning artifact paths and a short summary rather than copying file contents.

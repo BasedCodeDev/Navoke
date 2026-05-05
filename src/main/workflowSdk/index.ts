@@ -97,11 +97,20 @@ export interface WorkflowSdk {
         url: string,
         options?: { focused?: boolean; signal?: AbortSignal; timeoutMs?: number }
       ): Promise<unknown>;
+      closeTab(
+        tabId: number,
+        options?: { controllerId?: string; signal?: AbortSignal; timeoutMs?: number }
+      ): Promise<unknown>;
       focusTarget(
         target: ExtensionBrowserTarget,
         options?: { signal?: AbortSignal; timeoutMs?: number }
       ): Promise<unknown>;
       stageFiles(filePaths: string[]): ExtensionCommandFilePayload[];
+      startDownloadWatch(): ReturnType<typeof extensionBridge.startDownloadWatch>;
+      waitForDownload(
+        watchId: string,
+        options?: { signal?: AbortSignal; timeoutMs?: number }
+      ): ReturnType<typeof extensionBridge.waitForDownload>;
       executeCommand(
         target: ExtensionBrowserTarget,
         command: ExtensionCommandInput,
@@ -182,6 +191,13 @@ export function createWorkflowSdk(): WorkflowSdk {
             timeoutMs: options?.timeoutMs,
             signal: options?.signal
           }),
+        closeTab: (tabId, options) =>
+          extensionBridge.closeTabWithController({
+            tabId,
+            controllerId: options?.controllerId,
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
         focusTarget: (target, options) =>
           extensionBridge.focusTarget({
             target,
@@ -189,6 +205,13 @@ export function createWorkflowSdk(): WorkflowSdk {
             signal: options?.signal
           }),
         stageFiles: (filePaths) => extensionBridge.stageFiles(filePaths),
+        startDownloadWatch: () => extensionBridge.startDownloadWatch(),
+        waitForDownload: (watchId, options) =>
+          extensionBridge.waitForDownload({
+            watchId,
+            timeoutMs: options?.timeoutMs,
+            signal: options?.signal
+          }),
         executeCommand: (target, command, options) =>
           extensionBridge.executeCommandForTarget({
             target,

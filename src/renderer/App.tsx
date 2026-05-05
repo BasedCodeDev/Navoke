@@ -35,7 +35,6 @@ import {
   closeLabSession,
   createLabSession,
   createRun,
-  createRunFromWorkflowLibraryEntry,
   deleteRun,
   deleteWorkflowLibraryEntry,
   focusExtensionClient,
@@ -76,6 +75,7 @@ import {
   type WorkflowSummary
 } from "@/lib/api";
 import { cn, formatDate, isMotionActiveStatus, statusTone } from "@/lib/utils";
+import { savedLibrarySourceRunIds } from "@/lib/workflowLibrary";
 import {
   THEME_STORAGE_KEY,
   appThemes,
@@ -306,6 +306,8 @@ export default function App(): JSX.Element {
   const [newRunModalMode, setNewRunModalMode] = useState<"fresh" | "resubmit" | "library" | null>(null);
   const [resubmitSourceRun, setResubmitSourceRun] = useState<RunRecord | null>(null);
   const [librarySourceEntry, setLibrarySourceEntry] = useState<WorkflowLibraryEntry | null>(null);
+  const [libraryDrawerOpen, setLibraryDrawerOpen] = useState(false);
+  const [libraryToast, setLibraryToast] = useState<{ id: number; message: string } | null>(null);
   const [resubmitValidation, setResubmitValidation] = useState<ReusedInputValidationState>({ status: "idle", files: [] });
   const [resubmitError, setResubmitError] = useState<string | null>(null);
 
@@ -371,6 +373,12 @@ export default function App(): JSX.Element {
       unsubscribe?.();
     };
   }, [apiBaseUrl, hasProject, queryClient, selectedRunId]);
+
+  useEffect(() => {
+    if (!libraryToast) return;
+    const timeout = window.setTimeout(() => setLibraryToast(null), 2_400);
+    return () => window.clearTimeout(timeout);
+  }, [libraryToast]);
 
   const workflows = workflowsQuery.data ?? [];
   const plugins = pluginsQuery.data?.plugins ?? [];
@@ -488,7 +496,8 @@ export default function App(): JSX.Element {
 
   const saveRunToLibraryMutation = useMutation({
     mutationFn: (runId: string) => saveRunToWorkflowLibrary({ runId }),
-    onSuccess: () => {
+    onSuccess: (entry) => {
+      setLibraryToast({ id: Date.now(), message: `Saved "${entry.name}" to Library.` });
       void queryClient.invalidateQueries({ queryKey: ["library"] });
     },
     onError: (error) =>
@@ -518,21 +527,6 @@ export default function App(): JSX.Element {
     onError: (error) =>
       setActionError({
         title: "Could not delete library entry",
-        message: error instanceof Error ? error.message : String(error)
-      })
-  });
-
-  const runLibraryEntryMutation = useMutation({
-    mutationFn: (entry: WorkflowLibraryEntry) => createRunFromWorkflowLibraryEntry({ entryId: entry.id }),
-    onSuccess: (run) => {
-      setSelectedRunId(run.id);
-      void queryClient.invalidateQueries({ queryKey: ["runs"] });
-      void queryClient.invalidateQueries({ queryKey: ["run"] });
-      void queryClient.invalidateQueries({ queryKey: ["system"] });
-    },
-    onError: (error) =>
-      setActionError({
-        title: "Could not run library entry",
         message: error instanceof Error ? error.message : String(error)
       })
   });
@@ -581,6 +575,7 @@ export default function App(): JSX.Element {
     : null;
   const selectedRunIds = new Set([selectedRunId]);
   const cliAgentRuns = useMemo(() => activeCliAgentRuns(runsQuery.data ?? []), [runsQuery.data]);
+  const savedRunIds = useMemo(() => savedLibrarySourceRunIds(libraryQuery.data ?? []), [libraryQuery.data]);
   const extensionClients = systemQuery.data?.extension.connectedClients ?? [];
   const compatibleExtensionClients = useMemo(() => extensionClients.filter((client) => client.compatible), [extensionClients]);
   const requiredExtensionProtocol = systemQuery.data?.extension.requiredProtocolVersion ?? 7;
@@ -1228,22 +1223,6 @@ export default function App(): JSX.Element {
                   New Run
                 </Button>
               </div>
-              {hasProject ? (
-                <WorkflowLibraryPanel
-                  entries={libraryQuery.data ?? []}
-                  runs={runsQuery.data ?? []}
-                  workflows={workflows}
-                  isLoading={libraryQuery.isLoading}
-                  runningEntryId={runLibraryEntryMutation.variables?.id ?? null}
-                  deletingEntryId={deleteLibraryEntryMutation.variables ?? null}
-                  onUse={openLibraryEntryModal}
-                  onRun={(entry) => runLibraryEntryMutation.mutate(entry)}
-                  onRename={(entryId, nextName) =>
-                    renameLibraryEntryMutation.mutateAsync({ entryId, nextName }).then(() => undefined)
-                  }
-                  onDelete={(entryId) => deleteLibraryEntryMutation.mutate(entryId)}
-                />
-              ) : null}
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                 {!hasProject ? (
                   <div className="rounded-md border border-dashed p-8 text-center text-muted-foreground">
@@ -1259,6 +1238,7 @@ export default function App(): JSX.Element {
                     onSelect={() => setSelectedRunId(run.id)}
                     onResubmit={() => openResubmitNewModal(run)}
                     onSaveToLibrary={() => saveRunToLibraryMutation.mutate(run.id)}
+                    isSavedToLibrary={savedRunIds.has(run.id)}
                     isSavingToLibrary={saveRunToLibraryMutation.variables === run.id && saveRunToLibraryMutation.isPending}
                   />
                 ))}
@@ -1271,6 +1251,25 @@ export default function App(): JSX.Element {
 
       </div>
       )}
+
+      {!showLanding && hasProject ? (
+        <WorkflowLibraryDrawer
+          entries={libraryQuery.data ?? []}
+          runs={runsQuery.data ?? []}
+          workflows={workflows}
+          isLoading={libraryQuery.isLoading}
+          isOpen={libraryDrawerOpen}
+          deletingEntryId={deleteLibraryEntryMutation.variables ?? null}
+          onOpenChange={setLibraryDrawerOpen}
+          onUse={openLibraryEntryModal}
+          onRename={(entryId, nextName) =>
+            renameLibraryEntryMutation.mutateAsync({ entryId, nextName }).then(() => undefined)
+          }
+          onDelete={(entryId) => deleteLibraryEntryMutation.mutate(entryId)}
+        />
+      ) : null}
+
+      {libraryToast ? <LibraryToast message={libraryToast.message} /> : null}
 
       <LocalRuntimeFooter config={configQuery.data} system={systemQuery.data} />
 
@@ -3506,15 +3505,15 @@ function ExtensionTabRoutingPanel({
   );
 }
 
-function WorkflowLibraryPanel({
+function WorkflowLibraryDrawer({
   entries,
   runs,
   workflows,
   isLoading,
-  runningEntryId,
+  isOpen,
   deletingEntryId,
+  onOpenChange,
   onUse,
-  onRun,
   onRename,
   onDelete
 }: {
@@ -3522,52 +3521,98 @@ function WorkflowLibraryPanel({
   runs: RunRecord[];
   workflows: WorkflowSummary[];
   isLoading: boolean;
-  runningEntryId: string | null;
+  isOpen: boolean;
   deletingEntryId: string | null;
+  onOpenChange(isOpen: boolean): void;
   onUse(entry: WorkflowLibraryEntry): void;
-  onRun(entry: WorkflowLibraryEntry): void;
   onRename(entryId: string, nextName: string): Promise<void>;
   onDelete(entryId: string): void;
 }): JSX.Element {
   const runsById = useMemo(() => new Map(runs.map((run) => [run.id, run])), [runs]);
+  const entryCards = entries.map((entry) => {
+    const sourceRun = entry.sourceRunId ? runsById.get(entry.sourceRunId) : undefined;
+    const availability = resolveRunWorkflowAvailability(libraryEntryToRunRecord(entry), workflows);
+    return (
+      <WorkflowLibraryEntryCard
+        key={entry.id}
+        entry={entry}
+        sourceRun={sourceRun}
+        workflowAvailability={availability}
+        isDeleting={deletingEntryId === entry.id}
+        onUse={() => onUse(entry)}
+        onRename={(nextName) => onRename(entry.id, nextName)}
+        onDelete={() => onDelete(entry.id)}
+      />
+    );
+  });
 
   return (
-    <section className="shrink-0 space-y-2 rounded-lg border border-border bg-card p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Library</h3>
-          <Badge className={cn("border", toneClassNames.neutral)}>{entries.length}</Badge>
-        </div>
-        {isLoading ? <span className="text-xs text-muted-foreground">Loading...</span> : null}
+    <div className="pointer-events-none fixed inset-x-0 bottom-6 z-40 px-5">
+      <div className="mx-auto flex max-w-[1500px] justify-end">
+        {!isOpen ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="pointer-events-auto rounded-b-none border-b-0 bg-card shadow-lg"
+            onClick={() => onOpenChange(true)}
+            aria-expanded={false}
+            aria-controls="workflow-library-drawer"
+          >
+            <BookOpen className="h-4 w-4" />
+            Library
+            <Badge className={cn("border", toneClassNames.neutral)}>{entries.length}</Badge>
+          </Button>
+        ) : null}
       </div>
-      {entries.length === 0 ? (
-        <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-          Save reusable runs here from the run list.
-        </div>
-      ) : (
-        <div className="grid gap-2 lg:grid-cols-2">
-          {entries.map((entry) => {
-            const sourceRun = entry.sourceRunId ? runsById.get(entry.sourceRunId) : undefined;
-            const availability = resolveRunWorkflowAvailability(libraryEntryToRunRecord(entry), workflows);
-            return (
-              <WorkflowLibraryEntryCard
-                key={entry.id}
-                entry={entry}
-                sourceRun={sourceRun}
-                workflowAvailability={availability}
-                isRunning={runningEntryId === entry.id}
-                isDeleting={deletingEntryId === entry.id}
-                onUse={() => onUse(entry)}
-                onRun={() => onRun(entry)}
-                onRename={(nextName) => onRename(entry.id, nextName)}
-                onDelete={() => onDelete(entry.id)}
-              />
-            );
-          })}
-        </div>
-      )}
-    </section>
+
+      {isOpen ? (
+        <section
+          id="workflow-library-drawer"
+          className="pointer-events-auto mx-auto max-w-[1500px] overflow-hidden rounded-t-lg border border-border bg-card shadow-xl"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <h3 className="text-sm font-semibold">Library</h3>
+              <Badge className={cn("border", toneClassNames.neutral)}>{entries.length}</Badge>
+              {isLoading ? <span className="text-xs text-muted-foreground">Loading...</span> : null}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => onOpenChange(false)}
+              aria-label="Close library drawer"
+              aria-expanded={true}
+              aria-controls="workflow-library-drawer"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="max-h-[45vh] overflow-y-auto p-3">
+            {entries.length === 0 ? (
+              <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                Save reusable runs here from the run list.
+              </div>
+            ) : (
+              <div className="grid gap-2 lg:grid-cols-2">{entryCards}</div>
+            )}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function LibraryToast({ message }: { message: string }): JSX.Element {
+  return (
+    <div className="fixed bottom-16 right-5 z-[80] max-w-sm rounded-md border border-border bg-card px-3 py-2 text-sm shadow-lg" role="status">
+      <div className="flex items-start gap-2">
+        <CheckCircle2 className={cn("mt-0.5 h-4 w-4 shrink-0", toneTextClassNames.success)} />
+        <div className="min-w-0 truncate">{message}</div>
+      </div>
+    </div>
   );
 }
 
@@ -3575,20 +3620,16 @@ function WorkflowLibraryEntryCard({
   entry,
   sourceRun,
   workflowAvailability,
-  isRunning,
   isDeleting,
   onUse,
-  onRun,
   onRename,
   onDelete
 }: {
   entry: WorkflowLibraryEntry;
   sourceRun?: RunRecord;
   workflowAvailability: RunWorkflowAvailability;
-  isRunning: boolean;
   isDeleting: boolean;
   onUse(): void;
-  onRun(): void;
   onRename(nextName: string): Promise<void>;
   onDelete(): void;
 }): JSX.Element {
@@ -3624,8 +3665,29 @@ function WorkflowLibraryEntryCard({
     }
   }
 
+  function useEntry(): void {
+    if (workflowUnavailable || isEditing) return;
+    onUse();
+  }
+
   return (
-    <div className="rounded-md border border-border bg-background p-3">
+    <div
+      className={cn(
+        "rounded-md border border-border bg-background p-3 transition",
+        workflowUnavailable || isEditing ? "" : "cursor-pointer hover:border-primary focus-within:border-primary"
+      )}
+      role="button"
+      tabIndex={workflowUnavailable || isEditing ? -1 : 0}
+      aria-disabled={workflowUnavailable}
+      title={workflowUnavailable ? workflowAvailability.message : "Use this library entry"}
+      onClick={useEntry}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          useEntry();
+        }
+      }}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           {isEditing ? (
@@ -3659,18 +3721,29 @@ function WorkflowLibraryEntryCard({
           ) : null}
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
-          <Button type="button" variant="outline" size="sm" onClick={onUse} disabled={workflowUnavailable} title={workflowAvailability.message}>
-            <Copy className="h-4 w-4" />
-            Use
-          </Button>
-          <Button type="button" size="sm" onClick={onRun} disabled={workflowUnavailable || isRunning} title={workflowAvailability.message}>
-            <Play className="h-4 w-4" />
-            Run
-          </Button>
-          <Button type="button" variant="outline" size="icon" onClick={() => setIsEditing(true)} title="Rename library entry">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={(event) => {
+              event.stopPropagation();
+              setIsEditing(true);
+            }}
+            title="Rename library entry"
+          >
             <Pencil className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="outline" size="icon" onClick={onDelete} disabled={isDeleting} title="Delete library entry">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+            disabled={isDeleting}
+            title="Delete library entry"
+          >
             <Trash2 className="h-4 w-4" />
           </Button>
         </div>
@@ -3687,6 +3760,7 @@ function RunRow({
   onSelect,
   onResubmit,
   onSaveToLibrary,
+  isSavedToLibrary,
   isSavingToLibrary
 }: {
   run: RunRecord;
@@ -3695,10 +3769,17 @@ function RunRow({
   onSelect: () => void;
   onResubmit: () => void;
   onSaveToLibrary: () => void;
+  isSavedToLibrary: boolean;
   isSavingToLibrary: boolean;
 }): JSX.Element {
   const workflowUnavailable = workflowAvailability.status === "missing" || workflowAvailability.status === "version-mismatch";
   const motionActive = isMotionActiveStatus(run.status);
+  const saveTitle = isSavedToLibrary
+    ? "Already saved to library"
+    : isSavingToLibrary
+      ? "Saving to library..."
+      : "Save this run configuration to the library";
+  const saveAriaLabel = isSavedToLibrary ? `${run.name} is already saved to library` : `Save ${run.name} to library`;
   return (
     <div
       className={cn(
@@ -3730,28 +3811,30 @@ function RunRow({
           {isCliRun(run) ? <Badge className={cn("border", toneClassNames.neutral)}>{runOriginLabel(run)}</Badge> : null}
           <RunStatusBadge status={run.status} />
           {workflowUnavailable ? <Badge className={cn("border", toneClassNames.danger)}>plugin missing</Badge> : null}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onSaveToLibrary}
-            disabled={isSavingToLibrary}
-            title="Save this run configuration to the library"
-          >
-            <Save className="h-4 w-4" />
-            Save to Library
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onResubmit}
-            disabled={workflowUnavailable}
-            title={workflowUnavailable ? workflowAvailability.message : "Resubmit New"}
-          >
-            <Copy className="h-4 w-4" />
-            Resubmit New
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onResubmit}
+              disabled={workflowUnavailable}
+              title={workflowUnavailable ? workflowAvailability.message : "Resubmit New"}
+            >
+              <Copy className="h-4 w-4" />
+              Resubmit New
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={onSaveToLibrary}
+              disabled={isSavedToLibrary || isSavingToLibrary}
+              title={saveTitle}
+              aria-label={saveAriaLabel}
+            >
+              <Save className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
     </div>

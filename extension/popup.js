@@ -1,4 +1,4 @@
-const BLINK_EXTENSION_PROTOCOL_VERSION = 4;
+const BLINK_EXTENSION_PROTOCOL_VERSION = 6;
 const API_BASE_URL = "http://127.0.0.1:39201";
 
 async function refresh() {
@@ -26,10 +26,14 @@ async function refresh() {
           : "";
     const controller = Array.isArray(body.connectedControllers) ? body.connectedControllers.find((candidate) => candidate.compatible) : null;
     const controllerProblem = compatibleControllers <= 0;
+    const commandDiagnostics = body.controllerCommandDiagnostics || {};
+    const backgroundCommand = controller?.diagnostics?.lastControllerCommand || controllerPulse?.backgroundDiagnostics?.lastControllerCommand || null;
     const details = [];
     if (controller?.id) details.push(`controller ${controller.id}`);
     if (controllerProblem) details.push("open this popup in the intended Chrome profile; do not open routed URLs with chrome.exe");
     if (controllerHeartbeatError) details.push(`controller heartbeat: ${controllerHeartbeatError}`);
+    if (commandDiagnostics.lastPollResult) details.push(`last controller poll ${commandDiagnostics.lastPollResult}`);
+    if (backgroundCommand?.status) details.push(`background command ${backgroundCommand.status}`);
     status.className = `status ${
       incompatible > 0 || requiredProtocolVersion !== BLINK_EXTENSION_PROTOCOL_VERSION || controllerProblem || controllerHeartbeatError ? "warn" : "ok"
     }`;
