@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, shell } from "electron";
 import { ApiServer } from "./api/server";
 import { SqliteStore } from "./db/sqliteStore";
 import { extensionBridge } from "./extension/extensionBridge";
@@ -197,6 +197,32 @@ async function chooseProjectDirectory(title: string): Promise<string | null> {
 function registerIpc(): void {
   ipcMain.handle("app:get-config", () => getConfig());
 
+  ipcMain.handle("window:minimize", (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    window?.minimize();
+  });
+
+  ipcMain.handle("window:toggle-maximize", (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    if (!window) return { isMaximized: false };
+    if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window.maximize();
+    }
+    return { isMaximized: window.isMaximized() };
+  });
+
+  ipcMain.handle("window:get-state", (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    return { isMaximized: Boolean(window?.isMaximized()) };
+  });
+
+  ipcMain.handle("window:close", (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    window?.close();
+  });
+
   ipcMain.handle("project:open", async (_event, targetPath?: string) => {
     const projectDir = targetPath?.trim() || (await chooseProjectDirectory("Open Based BLINK project folder"));
     if (!projectDir) return { ...getConfig(), projectDialogCancelled: true };
@@ -239,6 +265,13 @@ function resolveAppIconPath(): string | undefined {
   return resolveAssetPath(relativePath) ?? resolveAssetPath(APP_ICON_PNG_RELATIVE_PATH);
 }
 
+function resolveAppIcon(): Electron.NativeImage | undefined {
+  const appIconPath = resolveAppIconPath();
+  if (!appIconPath) return undefined;
+  const image = nativeImage.createFromPath(appIconPath);
+  return image.isEmpty() ? undefined : image;
+}
+
 function resolveAssetPath(relativePath: string): string | undefined {
   const candidates = [
     path.join(__dirname, "../renderer", relativePath),
@@ -250,16 +283,17 @@ function resolveAssetPath(relativePath: string): string | undefined {
 function createWindow(): BrowserWindow {
   if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
 
-  const appIconPath = resolveAppIconPath();
+  const appIcon = resolveAppIcon();
   const window = new BrowserWindow({
     title: "Based BLINK",
     width: 1440,
     height: 960,
     minWidth: 1120,
     minHeight: 720,
+    frame: false,
     autoHideMenuBar: true,
     backgroundColor: "#f8fafc",
-    ...(appIconPath ? { icon: appIconPath } : {}),
+    ...(appIcon ? { icon: appIcon } : {}),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -267,6 +301,9 @@ function createWindow(): BrowserWindow {
       sandbox: false
     }
   });
+  if (appIcon) {
+    window.setIcon(appIcon);
+  }
   mainWindow = window;
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;

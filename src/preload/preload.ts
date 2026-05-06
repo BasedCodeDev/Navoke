@@ -7,5 +7,11 @@ contextBridge.exposeInMainWorld("basedBlink", {
   selectFiles: (options?: { title?: string; filters?: Array<{ name: string; extensions: string[] }> }) =>
     ipcRenderer.invoke("dialog:select-files", options),
   openPath: (path: string) => ipcRenderer.invoke("shell:open-path", path),
-  openExternal: (url: string) => ipcRenderer.invoke("shell:open-external", url)
+  openExternal: (url: string) => ipcRenderer.invoke("shell:open-external", url),
+  windowControls: {
+    minimize: () => ipcRenderer.invoke("window:minimize"),
+    toggleMaximize: () => ipcRenderer.invoke("window:toggle-maximize"),
+    getState: () => ipcRenderer.invoke("window:get-state"),
+    close: () => ipcRenderer.invoke("window:close")
+  }
 });

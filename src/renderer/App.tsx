@@ -14,7 +14,10 @@ import {
   FlaskConical,
   FolderOpen,
   Info,
+  Maximize2,
+  Minimize2,
   MousePointerClick,
+  Minus,
   Package,
   Palette,
   Pencil,
@@ -823,7 +826,7 @@ export default function App(): JSX.Element {
 
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-background text-foreground transition-colors">
-      <header className="shrink-0 border-b border-border bg-card">
+      <header className="app-drag-region shrink-0 border-b border-border bg-card">
         <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-5 py-3">
           <div className="flex min-w-0 items-center gap-3">
             <img
@@ -839,7 +842,7 @@ export default function App(): JSX.Element {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="app-no-drag flex items-center gap-2">
             {!showLanding ? (
               <>
                 <Badge
@@ -859,7 +862,7 @@ export default function App(): JSX.Element {
                 ) : null}
                 <Button type="button" variant="outline" size="sm" onClick={() => setShowProjectLanding(true)}>
                   <FolderOpen className="h-4 w-4" />
-                  Open Project
+                  Switch Project
                 </Button>
                 <Button
                   type="button"
@@ -883,6 +886,7 @@ export default function App(): JSX.Element {
             >
               <Palette className="h-4 w-4" />
             </Button>
+            <AppWindowControls />
           </div>
         </div>
       </header>
@@ -1083,6 +1087,70 @@ export default function App(): JSX.Element {
         />
       ) : null}
     </main>
+  );
+}
+
+function AppWindowControls(): JSX.Element | null {
+  const controls = window.basedBlink?.windowControls;
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    if (!controls) return;
+    let active = true;
+    void controls
+      .getState()
+      .then((state) => {
+        if (active) setIsMaximized(state.isMaximized);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [controls]);
+
+  if (!controls) return null;
+
+  return (
+    <div className="app-no-drag ml-1 flex overflow-hidden rounded-md border border-border bg-background">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-8 w-10 rounded-none"
+        aria-label="Minimize window"
+        title="Minimize"
+        onClick={() => void controls.minimize().catch(() => undefined)}
+      >
+        <Minus className="h-4 w-4" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-8 w-10 rounded-none"
+        aria-label={isMaximized ? "Restore window" : "Maximize window"}
+        title={isMaximized ? "Restore" : "Maximize"}
+        onClick={() =>
+          void controls
+            .toggleMaximize()
+            .then((state) => setIsMaximized(state.isMaximized))
+            .catch(() => undefined)
+        }
+      >
+        {isMaximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-8 w-10 rounded-none hover:bg-destructive hover:text-destructive-foreground"
+        aria-label="Close window"
+        title="Close"
+        onClick={() => void controls.close().catch(() => undefined)}
+      >
+        <X className="h-4 w-4" />
+      </Button>
+    </div>
   );
 }
 

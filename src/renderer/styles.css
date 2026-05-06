@@ -100,6 +100,15 @@ body {
   overflow: hidden;
 }
 
+.app-drag-region {
+  -webkit-app-region: drag;
+}
+
+.app-no-drag,
+.app-no-drag * {
+  -webkit-app-region: no-drag;
+}
+
 @keyframes based-blink-activity-pulse {
   0%,
   100% {

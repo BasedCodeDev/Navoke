@@ -12,6 +12,10 @@ declare global {
     pluginRootDir: string | null;
   }
 
+  interface BasedBlinkWindowState {
+    isMaximized: boolean;
+  }
+
   interface Window {
     basedBlink: {
       getConfig(): Promise<BasedBlinkConfig>;
@@ -23,6 +27,12 @@ declare global {
       }): Promise<string[]>;
       openPath(path: string): Promise<string>;
       openExternal(url: string): Promise<void>;
+      windowControls?: {
+        minimize(): Promise<void>;
+        toggleMaximize(): Promise<BasedBlinkWindowState>;
+        getState(): Promise<BasedBlinkWindowState>;
+        close(): Promise<void>;
+      };
     };
   }
 
