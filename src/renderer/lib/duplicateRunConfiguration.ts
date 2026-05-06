@@ -92,7 +92,10 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
     base.hunyuanSelectorsJson = selectorsJsonField(input, run.workflowId);
     base.extensionTabSelection = resolveDuplicateExtensionTabSelection(input, options);
   } else if (isChatGptWorkflowInput(input, options.workflow)) {
-    if ("sourceImages" in input || "prompts" in input) {
+    if ("prompt" in input && !("subjectImages" in input) && !("sourceImages" in input) && !("prompts" in input)) {
+      base.prompt = stringField(input, "prompt");
+      base.masterPromptSuffix = DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX;
+    } else if ("sourceImages" in input || "prompts" in input) {
       base.sourceFiles = stringArrayField(input, "sourceImages");
       base.sequencePrompts = stringArrayField(input, "prompts");
       base.masterPrompt = stringField(input, "masterPrompt");
@@ -126,7 +129,13 @@ export function buildDuplicateRunConfiguration(run: RunRecord, options: Duplicat
 }
 
 function isChatGptWorkflowInput(input: Record<string, unknown>, workflow: WorkflowSummary | undefined): boolean {
-  return Boolean(workflow?.manifest.uiCapabilities?.includes("extension.tabRouting")) || "masterPrompt" in input || "subjectImages" in input || "sourceImages" in input;
+  return (
+    Boolean(workflow?.manifest.uiCapabilities?.includes("extension.tabRouting")) ||
+    "masterPrompt" in input ||
+    "subjectImages" in input ||
+    "sourceImages" in input ||
+    "prompt" in input
+  );
 }
 
 function isBrowserProfileWorkflowInput(input: Record<string, unknown>, workflow: WorkflowSummary | undefined): boolean {

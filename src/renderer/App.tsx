@@ -384,6 +384,7 @@ export default function App(): JSX.Element {
   const plugins = pluginsQuery.data?.plugins ?? [];
   const selectedWorkflow = workflows.find((workflow) => workflow.manifest.id === selectedWorkflowId);
   const isExtensionWorkflow = workflowHasCapability(selectedWorkflow, "extension.tabRouting");
+  const isChatGptPromptWorkflow = selectedWorkflow?.manifest.id === "based-blink.chatgpt.extension-image-prompt";
   const isChatGptSequenceWorkflow = selectedWorkflow?.manifest.id === "based-blink.chatgpt.extension-image-sequence";
   const isHunyuanWorkflow = isHunyuanWorkflowId(selectedWorkflow?.manifest.id);
   const usesBrowserProfile = workflowHasCapability(selectedWorkflow, "browser.profile");
@@ -441,6 +442,8 @@ export default function App(): JSX.Element {
           : workflowHasCapability(selectedWorkflow, "extension.tabRouting")
               ? isChatGptSequenceWorkflow
                 ? { sourceImages: sourceFiles, prompts: sequencePrompts, masterPrompt, masterPromptSuffix, extensionTab }
+                : isChatGptPromptWorkflow
+                  ? { prompt, extensionTab }
                 : { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, extensionTab }
               : { images: selectedFiles, prompt, modelName, delayMs: 1_200 };
 
@@ -890,7 +893,17 @@ export default function App(): JSX.Element {
       ) : null}
 
       {isExtensionWorkflow ? (
-        isChatGptSequenceWorkflow ? (
+        isChatGptPromptWorkflow ? (
+          <div className="space-y-1.5">
+            <Label>Prompt</Label>
+            <Textarea
+              className="min-h-28 py-1.5"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="Describe the image ChatGPT should generate."
+            />
+          </div>
+        ) : isChatGptSequenceWorkflow ? (
           <>
             <ImagePicker
               label="Source image"
@@ -2433,6 +2446,58 @@ function ChatGptArtifactPairs({
   onOpenDataFolder(): void | Promise<unknown>;
 }): JSX.Element {
   const pairing = buildChatGptArtifactPairing(input, artifacts);
+  if (input.kind === "prompt") {
+    const pair = pairing.pairs[0];
+    return (
+      <div className="space-y-4">
+        <article className="rounded-md border border-border bg-background p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-medium">Prompt</div>
+              <div className="text-xs text-muted-foreground">Single generated image</div>
+            </div>
+            <Badge className={cn("border", toneClassNames.neutral)}>
+              {pair?.primaryOutput ? "1 result" : "Missing result"}
+            </Badge>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3">
+              <div className="text-xs font-medium text-muted-foreground">Prompt sent to GPT</div>
+              <div className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">{input.prompt}</div>
+            </div>
+            <div className="space-y-3">
+              <div className="text-xs font-medium text-muted-foreground">GPT result</div>
+              {pair?.primaryOutput ? (
+                <OutputImagePreview artifact={pair.primaryOutput} />
+              ) : (
+                <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
+                  No output artifact is paired with this prompt yet.
+                </div>
+              )}
+            </div>
+          </div>
+        </article>
+
+        {pairing.otherArtifacts.length > 0 ? (
+          <div className="space-y-3">
+            <div className="flex justify-end">
+              <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run.runDir}>
+                <FolderOpen className="h-4 w-4" />
+                Data folder
+              </Button>
+            </div>
+            <h4 className="text-sm font-semibold">Other artifacts</h4>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {pairing.otherArtifacts.map((artifact) => (
+                <ArtifactPreview key={artifact.id} artifact={artifact} />
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   if (input.kind === "sequence") {
     const sourceImage = input.sourceImages[0] ?? "";
     const setupPrompt = chatGptSequenceSetupPrompt(input.masterPrompt, input.masterPromptSuffix);

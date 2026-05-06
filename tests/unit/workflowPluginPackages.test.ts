@@ -62,7 +62,7 @@ describe("workflow plugin packages", () => {
     });
   });
 
-  it("loads the ChatGPT workflow package with image transform and image sequence workflows", async () => {
+  it("loads the ChatGPT workflow package with prompt, image transform, and image sequence workflows", async () => {
     const manager = new PluginManager(tempDir());
     await manager.installFromPath(path.join(repoRoot, "plugins", "based-blink-chatgpt"));
 
@@ -73,7 +73,8 @@ describe("workflow plugin packages", () => {
     });
     expect(manager.listWorkflowRegistrations().map((registration) => registration.definition.manifest.id)).toEqual([
       "based-blink.chatgpt.extension-image-transform",
-      "based-blink.chatgpt.extension-image-sequence"
+      "based-blink.chatgpt.extension-image-sequence",
+      "based-blink.chatgpt.extension-image-prompt"
     ]);
     const workflow = manager
       .listWorkflowRegistrations()
@@ -81,6 +82,9 @@ describe("workflow plugin packages", () => {
     const sequenceWorkflow = manager
       .listWorkflowRegistrations()
       .find((registration) => registration.definition.manifest.id === "based-blink.chatgpt.extension-image-sequence")!.definition;
+    const promptWorkflow = manager
+      .listWorkflowRegistrations()
+      .find((registration) => registration.definition.manifest.id === "based-blink.chatgpt.extension-image-prompt")!.definition;
     expect(workflow.inputSchema.safeParse({ referenceImages: [], subjectImages: [], masterPrompt: "" }).success).toBe(false);
     expect(
       workflow.inputSchema.safeParse({
@@ -99,6 +103,13 @@ describe("workflow plugin packages", () => {
         sourceImages: ["C:\\tmp\\one.png"],
         prompts: ["  Back view  ", "Side view"],
         masterPrompt: "",
+        extensionTab: { mode: "existing", clientId: "client-1" }
+      }).success
+    ).toBe(true);
+    expect(promptWorkflow.inputSchema.safeParse({ prompt: "" }).success).toBe(false);
+    expect(
+      promptWorkflow.inputSchema.safeParse({
+        prompt: "Generate a small brass key on a white background.",
         extensionTab: { mode: "existing", clientId: "client-1" }
       }).success
     ).toBe(true);

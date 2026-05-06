@@ -1,6 +1,11 @@
 import type { ArtifactRecord } from "./api";
 
-export type ChatGptRunInputModel = ChatGptSubjectRunInputModel | ChatGptSequenceRunInputModel;
+export type ChatGptRunInputModel = ChatGptSubjectRunInputModel | ChatGptSequenceRunInputModel | ChatGptPromptRunInputModel;
+
+export interface ChatGptPromptRunInputModel {
+  kind: "prompt";
+  prompt: string;
+}
 
 export interface ChatGptSubjectRunInputModel {
   kind: "subjects";
@@ -43,7 +48,8 @@ export interface ChatGptArtifactPairing {
 
 const CHATGPT_PAIRABLE_WORKFLOW_IDS = new Set([
   "based-blink.chatgpt.extension-image-transform",
-  "based-blink.chatgpt.extension-image-sequence"
+  "based-blink.chatgpt.extension-image-sequence",
+  "based-blink.chatgpt.extension-image-prompt"
 ]);
 
 export function supportsChatGptArtifactPairing(workflowId: string | undefined, input: unknown): boolean {
@@ -65,6 +71,13 @@ export function getChatGptRunInput(input: unknown): ChatGptRunInputModel | null 
     };
   }
 
+  if (typeof record.prompt === "string" && !record.subjectImages && !record.sourceImages) {
+    return {
+      kind: "prompt",
+      prompt: record.prompt
+    };
+  }
+
   const subjectImages = readStringArray(record.subjectImages) ?? readStringArray(record.images);
   if (!subjectImages) return null;
   return {
@@ -77,8 +90,25 @@ export function getChatGptRunInput(input: unknown): ChatGptRunInputModel | null 
 }
 
 export function buildChatGptArtifactPairing(input: ChatGptRunInputModel, artifacts: ArtifactRecord[]): ChatGptArtifactPairing {
+  if (input.kind === "prompt") return buildChatGptPromptArtifactPairing(input, artifacts);
   if (input.kind === "sequence") return buildChatGptSequenceArtifactPairing(input, artifacts);
   return buildChatGptSubjectArtifactPairing(input, artifacts);
+}
+
+function buildChatGptPromptArtifactPairing(input: ChatGptPromptRunInputModel, artifacts: ArtifactRecord[]): ChatGptArtifactPairing {
+  const outputEntries = artifacts
+    .map((artifact) => ({ artifact, metadata: getChatGptOutputMetadata(artifact) }))
+    .filter((entry): entry is { artifact: ArtifactRecord; metadata: ChatGptOutputMetadata } => Boolean(entry.metadata));
+  const outputs = outputEntries
+    .filter(({ metadata }) => outputMatchesPromptImage(metadata))
+    .map(({ artifact }) => artifact);
+  const usedOutputIds = new Set(outputs.map((artifact) => artifact.id));
+  for (const { artifact } of outputEntries) usedOutputIds.add(artifact.id);
+
+  return {
+    pairs: [{ index: 0, prompt: input.prompt, primaryOutput: outputs[0] ?? null }],
+    otherArtifacts: artifacts.filter((artifact) => !usedOutputIds.has(artifact.id))
+  };
 }
 
 function buildChatGptSubjectArtifactPairing(input: ChatGptSubjectRunInputModel, artifacts: ArtifactRecord[]): ChatGptArtifactPairing {
@@ -156,6 +186,11 @@ function outputMatchesSubject(metadata: ChatGptOutputMetadata, index: number, su
 function outputMatchesPrompt(metadata: ChatGptOutputMetadata, index: number): boolean {
   if (metadata.pairId) return metadata.pairId === `prompt-${index + 1}`;
   return metadata.workflowKind === "image-sequence" && metadata.promptIndex === index;
+}
+
+function outputMatchesPromptImage(metadata: ChatGptOutputMetadata): boolean {
+  if (metadata.pairId) return metadata.pairId === "prompt";
+  return metadata.workflowKind === "image-prompt";
 }
 
 function readStringArray(value: unknown): string[] | null {

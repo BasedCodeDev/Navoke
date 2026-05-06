@@ -64,6 +64,31 @@ describe("ChatGPT artifact pairing", () => {
     ).toBe(false);
   });
 
+  it("pairs a single prompt image output", () => {
+    expect(
+      supportsChatGptArtifactPairing("based-blink.chatgpt.extension-image-prompt", {
+        prompt: "Generate a small brass key."
+      })
+    ).toBe(true);
+
+    const output = artifact("prompt-image", 0, "");
+    output.metadata = {
+      source: "chatgpt-extension",
+      workflowKind: "image-prompt",
+      pairId: "prompt"
+    };
+
+    const pairing = buildChatGptArtifactPairing({ kind: "prompt", prompt: "Generate a small brass key." }, [
+      output,
+      manifestArtifact()
+    ]);
+
+    expect(pairing.pairs).toEqual([
+      expect.objectContaining({ index: 0, prompt: "Generate a small brass key.", primaryOutput: output })
+    ]);
+    expect(pairing.otherArtifacts.map((item) => item.id)).toEqual(["manifest"]);
+  });
+
   it("renders four subjects with one output each", () => {
     const pairing = buildChatGptArtifactPairing(input, [
       artifact("out-1", 0),

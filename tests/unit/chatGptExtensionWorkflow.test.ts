@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createWorkflows, normalizeChatGptExtensionOutputs, normalizeChatGptExtensionSequenceOutputs } from "../../plugins/based-blink-chatgpt/src";
+import {
+  createWorkflows,
+  normalizeChatGptExtensionOutputs,
+  normalizeChatGptExtensionPromptImageOutputs,
+  normalizeChatGptExtensionSequenceOutputs
+} from "../../plugins/based-blink-chatgpt/src";
 import { createWorkflowSdk } from "../../src/main/workflowSdk";
 
 type FakeFindCompatibleClientForTarget = ReturnType<typeof createWorkflowSdk>["extension"]["browser"]["findCompatibleClientForTarget"];
@@ -58,6 +63,28 @@ describe("ChatGPT plugin browser-extension workflows", () => {
       "Side view"
     ]);
     expect(normalized.map((item) => item.pairId)).toEqual(["prompt-1", "prompt-2"]);
+  });
+
+  it("defaults the prompt-image workflow to a routed new window", () => {
+    const workflow = workflows.find((candidate) => candidate.manifest.id === "based-blink.chatgpt.extension-image-prompt")!;
+    const parsed = workflow.inputSchema.safeParse({
+      prompt: "Generate a small brass key on a white background."
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const extensionTab = (parsed.data as { extensionTab: { mode: string; routingToken?: string; url?: string; openMode?: string } }).extensionTab;
+    expect(extensionTab.mode).toBe("new");
+    expect(extensionTab.openMode).toBe("window");
+    expect(extensionTab.routingToken).toEqual(expect.any(String));
+    expect(extensionTab.url).toContain("based-blink-tab=");
+  });
+
+  it("normalizes one output for a single prompt image workflow", () => {
+    expect(normalizeChatGptExtensionPromptImageOutputs([output(0, "first")]).base64).toBe("first");
+    expect(() => normalizeChatGptExtensionPromptImageOutputs([])).toThrow(/did not return/);
+    expect(() => normalizeChatGptExtensionPromptImageOutputs([output(0, "first"), output(0, "second")])).toThrow(
+      /distinct output images/
+    );
   });
 
   it("passes master and per-subject prompt text into generic browser fill actions", async () => {
@@ -344,6 +371,76 @@ describe("ChatGPT plugin browser-extension workflows", () => {
 
     expect(attachFileNames(actions)).toEqual([["source.png"]]);
     expect(fillActionValues(actions)).toEqual(["Setup prompt", "First prompt"]);
+  });
+
+  it("submits a single prompt and captures one generated image", async () => {
+    const generatedBase64 = Buffer.from("single prompt generated output").toString("base64");
+    const { actions, artifacts, run } = runPromptImageWithFakeBrowser({
+      prompt: "Generate a small brass key on a white background.",
+      imageExtractResult: {
+        images: [
+          {
+            src: "https://images.example.test/content?id=file_prompt_image",
+            fingerprint: "https://images.example.test/content?id=file_prompt_image|512x512",
+            stableSourceId: "id:file_prompt_image",
+            alt: "Generated image",
+            messageRole: "assistant",
+            width: 512,
+            height: 512,
+            mimeType: "image/png",
+            base64: generatedBase64
+          }
+        ]
+      }
+    });
+
+    await run;
+
+    expect(attachFileNames(actions)).toEqual([]);
+    expect(fillActionValues(actions)).toEqual(["Generate a small brass key on a white background."]);
+    expect(clickActionCount(actions)).toBe(1);
+    expect(artifacts.map((artifact) => artifact.base64)).toEqual([generatedBase64]);
+  });
+
+  it("captures an existing prompt image after a post-submit extension disconnect without resubmitting", async () => {
+    const prompt = "Generate a small silver button on a plain white background.";
+    const generatedBase64 = Buffer.from("single prompt generated output after disconnect").toString("base64");
+    let failedClick = false;
+    let failedCaptureExtract = false;
+    const { actions, artifacts, run } = runPromptImageWithFakeBrowser({
+      prompt,
+      actionError: (action) => {
+        if (failedClick || action.kind !== "click") return undefined;
+        failedClick = true;
+        return new Error("Timed out waiting for browser extension command test-command.");
+      },
+      extractError: (query) => {
+        if (failedCaptureExtract || query.kind !== "images" || !query.includeBase64) return undefined;
+        failedCaptureExtract = true;
+        return new Error("Timed out waiting for browser extension command test-command.");
+      },
+      imageExtractResult: {
+        images: [
+          {
+            src: "https://images.example.test/content?id=file_prompt_image_after_disconnect",
+            fingerprint: "https://images.example.test/content?id=file_prompt_image_after_disconnect|512x512",
+            stableSourceId: "id:file_prompt_image_after_disconnect",
+            alt: "Generated image",
+            messageRole: "assistant",
+            width: 512,
+            height: 512,
+            mimeType: "image/png",
+            base64: generatedBase64
+          }
+        ]
+      }
+    });
+
+    await run;
+
+    expect(fillActionValues(actions)).toEqual([prompt]);
+    expect(clickActionCount(actions)).toBe(1);
+    expect(artifacts.map((artifact) => artifact.base64)).toEqual([generatedBase64]);
   });
 
   it("appends the sequence setup prompt suffix when it is provided", async () => {
@@ -1007,6 +1104,181 @@ function runTransformWithFakeBrowser(input: {
       fs.rmSync(artifactDir, { recursive: true, force: true });
     });
   return { actions, artifacts, commandTargets, updates, run };
+}
+
+function runPromptImageWithFakeBrowser(input: {
+  prompt: string;
+  imageExtractResult?: { images: Array<Record<string, unknown>> };
+  actionError?: (action: { kind: string; [key: string]: unknown }) => Error | undefined;
+  extractError?: (query: { kind: string; [key: string]: unknown }) => Error | undefined;
+}): {
+  actions: unknown[];
+  artifacts: Array<{ path: string; base64: string }>;
+  run: Promise<unknown>;
+} {
+  const sdk = createWorkflowSdk();
+  const actions: unknown[] = [];
+  const artifacts: Array<{ path: string; base64: string }> = [];
+
+  sdk.sleep = async () => undefined;
+  sdk.extension.browser = {
+    protocolVersion: 6,
+    status: () => ({
+      requiredProtocolVersion: 6,
+      connected: 1,
+      compatible: 1,
+      incompatible: 0,
+      connectedClients: [],
+      clients: [],
+      connectedControllers: [],
+      controllers: [],
+      compatibleControllers: 1,
+      incompatibleControllers: 0,
+      controllerDiagnostics: {
+        compatibleTabsWithController: 1,
+        compatibleTabsWithoutController: 0,
+        latestControllerHeartbeatAt: "",
+        latestControllerHeartbeatOk: true,
+        connectedTabDiagnostics: []
+      },
+      controllerCommandDiagnostics: {
+        pendingCount: 0,
+        runningCount: 0,
+        lastPollAt: "",
+        lastPollControllerId: "",
+        lastPollResult: "none",
+        lastCompletionAt: "",
+        lastCompletionCommandId: "",
+        lastCompletionStatus: "completed",
+        recentCommands: []
+      }
+    }),
+    findCompatibleClientForTarget: (target) => ({
+      id: target.mode === "existing" ? target.clientId : "client-1",
+      url: "https://chatgpt.example/c/test-conversation",
+      title: "ChatGPT test tab",
+      status: "connected",
+      protocolVersion: 6,
+      extensionVersion: "0.1.0",
+      compatible: true,
+      lastSeenAt: new Date().toISOString(),
+      capabilities: ["inspect", "action", "extract"]
+    }),
+    ensureRoutedTab: async (target) => ({
+      id: target.mode === "existing" ? target.clientId : "client-1",
+      url: "https://chatgpt.example/c/test-conversation",
+      title: "ChatGPT test tab",
+      status: "connected",
+      protocolVersion: 6,
+      extensionVersion: "0.1.0",
+      compatible: true,
+      lastSeenAt: new Date().toISOString(),
+      capabilities: ["inspect", "action", "extract"]
+    }),
+    openTab: async () => ({ ok: true }),
+    openWindow: async () => ({ ok: true }),
+    closeTab: async () => ({ ok: true }),
+    focusTarget: async () => ({ ok: true }),
+    stageFiles: (filePaths) =>
+      filePaths.map((filePath, index) => ({
+        id: `file-${index}`,
+        name: path.basename(filePath),
+        mimeType: "image/png",
+        url: `/api/extension/files/file-${index}`
+      })),
+    startDownloadWatch: () => ({ id: "watch-1", startedAt: new Date().toISOString() }),
+    waitForDownload: async () => ({
+      watchId: "watch-1",
+      filename: "C:\\tmp\\unused-download.zip",
+      state: "complete",
+      completedAt: new Date().toISOString()
+    }),
+    executeCommand: async () => ({}),
+    inspect: async () => ({ url: "https://chatgpt.example/c/test-conversation", title: "ChatGPT test tab" }),
+    action: async (_target, action) => {
+      actions.push(action);
+      const actionError = input.actionError?.(action as { kind: string; [key: string]: unknown });
+      if (actionError) throw actionError;
+      if (action.kind === "fill") {
+        return { ok: true, action: "fill", observedLength: action.value.length, valueLength: action.value.length };
+      }
+      return { ok: true };
+    },
+    wait: async () => ({ satisfied: true }),
+    extract: async (_target, query) => {
+      const extractError = input.extractError?.(query as { kind: string; [key: string]: unknown });
+      if (extractError) throw extractError;
+      if (query.kind === "element-state") {
+        if (String(query.selector).toLowerCase().includes("remove file")) {
+          return { count: 0, visible: false, disabled: false };
+        }
+        return String(query.selector).toLowerCase().includes("stop")
+          ? { count: 0, visible: false, disabled: false }
+          : { count: 1, visible: true, disabled: false };
+      }
+      if (query.kind === "images" && query.includeBase64) {
+        return (
+          input.imageExtractResult ?? {
+            images: [
+              {
+                src: "blob:prompt-output",
+                fingerprint: "blob:prompt-output|512x512",
+                alt: "Generated image",
+                width: 512,
+                height: 512,
+                mimeType: "image/png",
+                base64: Buffer.from("single prompt generated image").toString("base64")
+              }
+            ]
+          }
+        );
+      }
+      if (query.kind === "images") return { images: [] };
+      return {};
+    }
+  };
+
+  const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === "based-blink.chatgpt.extension-image-prompt")!;
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatgpt-prompt-image-test-"));
+  const run = workflow
+    .run(
+      workflow.inputSchema.parse({
+        prompt: input.prompt,
+        extensionTab: { mode: "existing", clientId: "client-1" }
+      }),
+      {
+        runId: "run-prompt-image-test",
+        artifactDir,
+        signal: new AbortController().signal,
+        previousOutput: null,
+        step: async () => undefined,
+        event: async () => undefined,
+        updateOutput: async () => undefined,
+        isPauseRequested: () => false,
+        pauseIfRequested: async () => undefined,
+        waitForManualAction: async () => {
+          throw new Error("Manual action was not expected in this test.");
+        },
+        addArtifact: async (artifact) => {
+          if (artifact.kind === "image") {
+            artifacts.push({ path: artifact.path, base64: fs.readFileSync(artifact.path).toString("base64") });
+          }
+          return ({
+            id: `artifact-${path.basename(artifact.path)}`,
+            runId: "run-prompt-image-test",
+            kind: artifact.kind,
+            name: artifact.name,
+            path: artifact.path,
+            mimeType: artifact.mimeType ?? null,
+            size: 1,
+            metadata: artifact.metadata ?? null,
+            createdAt: new Date().toISOString()
+          }) as never;
+        }
+      }
+    )
+    .finally(() => fs.rmSync(artifactDir, { recursive: true, force: true }));
+  return { actions, artifacts, run };
 }
 
 function runSequenceWithFakeBrowser(input: {

@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "pluginApiVersion": "1",
   "entrypoint": "dist/index.js",
-  "workflows": ["based-blink.chatgpt.extension-image-transform", "based-blink.chatgpt.extension-image-sequence"],
+  "workflows": [
+    "based-blink.chatgpt.extension-image-transform",
+    "based-blink.chatgpt.extension-image-sequence",
+    "based-blink.chatgpt.extension-image-prompt"
+  ],
   "capabilities": ["filesystem.artifacts", "extension.browser"]
 }

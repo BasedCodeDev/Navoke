@@ -201,6 +201,26 @@ describe("duplicate run configuration", () => {
     expect(duplicate.filePaths).toEqual(["C:\\runs\\inputs\\source.png"]);
   });
 
+  it("copies ChatGPT single prompt runs", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({
+        workflowId: "based-blink.chatgpt.extension-image-prompt",
+        input: {
+          prompt: "Generate a small brass key.",
+          extensionTab: { mode: "existing", clientId: "tab-1" }
+        }
+      }),
+      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
+    );
+
+    expect(duplicate).toMatchObject({
+      workflowId: "based-blink.chatgpt.extension-image-prompt",
+      prompt: "Generate a small brass key.",
+      extensionTabSelection: "tab-1"
+    });
+    expect(duplicate.filePaths).toEqual([]);
+  });
+
   it("prefills the ChatGPT sequence setup suffix when old runs did not store one", () => {
     const duplicate = buildDuplicateRunConfiguration(
       run({
