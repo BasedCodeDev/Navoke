@@ -611,24 +611,7 @@ export class ApiServer {
 
 function getRunInputFilePath(input: unknown, field: string, index: number): string | undefined {
   if (!Number.isInteger(index) || index < 0) return undefined;
-  if (
-    ![
-      "images",
-      "referenceImages",
-      "subjectImages",
-      "sourceImages",
-      "frontImage",
-      "backImage",
-      "leftImage",
-      "rightImage",
-      "topImage",
-      "bottomImage",
-      "left45Image",
-      "right45Image"
-    ].includes(field)
-  ) {
-    return undefined;
-  }
+  if (!/^[A-Za-z0-9_.-]+$/.test(field)) return undefined;
   if (!input || typeof input !== "object") return undefined;
   const value = (input as Record<string, unknown>)[field];
   if (typeof value === "string") return index === 0 ? value : undefined;

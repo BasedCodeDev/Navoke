@@ -1,18 +1,55 @@
 import { describe, expect, it } from "vitest";
 import type { RunRecord, SystemInfo, WorkflowSummary } from "../../src/renderer/lib/api";
-import {
-  DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX,
-  buildDuplicateRunConfiguration,
-  collectRunInputFilePaths
-} from "../../src/renderer/lib/duplicateRunConfiguration";
+import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "../../src/renderer/lib/duplicateRunConfiguration";
 
 type ExtensionClient = SystemInfo["extension"]["connectedClients"][number];
-const chatGptWorkflow = {
-  manifest: { uiCapabilities: ["extension.tabRouting"] }
-} as WorkflowSummary;
-const hunyuanWorkflow = {
-  manifest: { uiCapabilities: ["browser.profile"] }
-} as WorkflowSummary;
+
+const browserWorkflow = workflow({
+  id: "vendor.example.browser-transform",
+  uiCapabilities: ["extension.tabRouting"],
+  inputFields: [
+    { name: "referenceFiles", label: "Reference files", type: "fileList" },
+    { name: "subjectFiles", label: "Subject files", type: "fileList", required: true },
+    { name: "instruction", label: "Instruction", type: "textarea", defaultValue: "Default instruction" },
+    { name: "settings", label: "Settings", type: "json", defaultValue: { quality: "draft" } }
+  ]
+});
+
+const profileWorkflow = workflow({
+  id: "vendor.example.profile-model",
+  uiCapabilities: ["browser.profile"],
+  inputFields: [
+    { name: "primaryFile", label: "Primary file", type: "fileList", fileValue: "single", required: true },
+    { name: "secondaryFiles", label: "Secondary files", type: "fileList" },
+    { name: "mode", label: "Mode", type: "select", defaultValue: "fast", options: [{ label: "Fast", value: "fast" }] }
+  ]
+});
+
+function workflow(input: Pick<WorkflowSummary["manifest"], "id" | "inputFields" | "uiCapabilities">): WorkflowSummary {
+  return {
+    manifest: {
+      id: input.id,
+      title: "Example Workflow",
+      description: "Example workflow for duplicate-run tests.",
+      category: "utility",
+      version: "0.0.0",
+      concurrency: 1,
+      requiresBrowser: false,
+      outputKinds: ["json"],
+      inputFields: input.inputFields,
+      uiCapabilities: input.uiCapabilities
+    },
+    plugin: {
+      id: "vendor.example",
+      name: "Example Plugin",
+      version: "0.0.0",
+      source: "user",
+      apiVersion: "1",
+      capabilities: []
+    },
+    availability: { status: "available" }
+  };
+}
 
 function run(input: Partial<RunRecord> & { workflowId: string; input: unknown }): RunRecord {
   return {
@@ -36,11 +73,11 @@ function run(input: Partial<RunRecord> & { workflowId: string; input: unknown })
 function client(input: Partial<ExtensionClient> & { id: string }): ExtensionClient {
   return {
     id: input.id,
-    url: input.url ?? "https://chatgpt.com/",
-    title: input.title ?? "ChatGPT",
+    url: input.url ?? "https://example.test/",
+    title: input.title ?? "Example",
     status: input.status ?? "ready",
-    protocolVersion: input.protocolVersion ?? 4,
-    extensionVersion: input.extensionVersion ?? "0.8.0",
+    protocolVersion: input.protocolVersion ?? 1,
+    extensionVersion: input.extensionVersion ?? "0.1.0",
     routingToken: input.routingToken,
     compatible: input.compatible ?? true,
     incompatibilityReason: input.incompatibilityReason,
@@ -49,28 +86,30 @@ function client(input: Partial<ExtensionClient> & { id: string }): ExtensionClie
 }
 
 describe("duplicate run configuration", () => {
-  it("copies ChatGPT prompts, images, and a still-connected target tab", () => {
+  it("copies manifest-declared values and a still-connected target tab", () => {
     const duplicate = buildDuplicateRunConfiguration(
       run({
-        workflowId: "based-blink.chatgpt.extension-image-transform",
+        workflowId: browserWorkflow.manifest.id,
         input: {
-          referenceImages: ["C:\\runs\\inputs\\reference.png"],
-          subjectImages: ["C:\\runs\\inputs\\subject-a.png", "C:\\runs\\inputs\\subject-b.png"],
-          masterPrompt: "Setup prompt",
-          subjectInstruction: "Change the hands.",
+          referenceFiles: ["C:\\runs\\inputs\\reference.png"],
+          subjectFiles: ["C:\\runs\\inputs\\subject-a.png", "C:\\runs\\inputs\\subject-b.png"],
+          instruction: "Apply the requested change.",
+          settings: { quality: "final" },
           extensionTab: { mode: "existing", clientId: "tab-1" }
         }
       }),
-      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
+      { workflow: browserWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
     );
 
     expect(duplicate).toMatchObject({
-      workflowId: "based-blink.chatgpt.extension-image-transform",
+      workflowId: browserWorkflow.manifest.id,
       name: "Source run (1)",
-      referenceFiles: ["C:\\runs\\inputs\\reference.png"],
-      subjectFiles: ["C:\\runs\\inputs\\subject-a.png", "C:\\runs\\inputs\\subject-b.png"],
-      masterPrompt: "Setup prompt",
-      subjectInstruction: "Change the hands.",
+      values: {
+        referenceFiles: ["C:\\runs\\inputs\\reference.png"],
+        subjectFiles: ["C:\\runs\\inputs\\subject-a.png", "C:\\runs\\inputs\\subject-b.png"],
+        instruction: "Apply the requested change.",
+        settings: { quality: "final" }
+      },
       extensionTabSelection: "tab-1"
     });
     expect(duplicate.filePaths).toEqual([
@@ -80,34 +119,67 @@ describe("duplicate run configuration", () => {
     ]);
   });
 
-  it("falls back to a new ChatGPT tab when the recorded target is stale", () => {
+  it("restores manifest default values when old runs do not contain a field", () => {
     const duplicate = buildDuplicateRunConfiguration(
       run({
-        workflowId: "based-blink.chatgpt.extension-image-transform",
+        workflowId: browserWorkflow.manifest.id,
         input: {
-          subjectImages: ["C:\\runs\\inputs\\subject.png"],
-          masterPrompt: "Setup",
+          subjectFiles: ["C:\\runs\\inputs\\subject.png"]
+        }
+      }),
+      { workflow: browserWorkflow, compatibleClients: [], newExtensionTabValue: "__new__" }
+    );
+
+    expect(duplicate.values).toMatchObject({
+      subjectFiles: ["C:\\runs\\inputs\\subject.png"],
+      instruction: "Default instruction",
+      settings: { quality: "draft" }
+    });
+  });
+
+  it("falls back to a new routed tab when the recorded target is stale", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({
+        workflowId: browserWorkflow.manifest.id,
+        input: {
+          subjectFiles: ["C:\\runs\\inputs\\subject.png"],
           extensionTab: { mode: "existing", clientId: "missing-tab" }
         }
       }),
-      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "other-tab" })], newExtensionTabValue: "__new__" }
+      { workflow: browserWorkflow, compatibleClients: [client({ id: "other-tab" })], newExtensionTabValue: "__new__" }
     );
 
     expect(duplicate.extensionTabSelection).toBe("__new__");
   });
 
-  it("uses the first available resubmit suffix when a copied name exists", () => {
+  it("matches a routed new-tab run to a currently connected client", () => {
     const duplicate = buildDuplicateRunConfiguration(
       run({
-        workflowId: "based-blink.chatgpt.extension-image-transform",
-        input: { subjectImages: ["C:\\runs\\inputs\\subject.png"] }
+        workflowId: browserWorkflow.manifest.id,
+        input: {
+          subjectFiles: ["C:\\runs\\inputs\\subject.png"],
+          extensionTab: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" }
+        }
       }),
       {
-        workflow: chatGptWorkflow,
+        workflow: browserWorkflow,
+        compatibleClients: [client({ id: "routed-tab", routingToken: "route-1" })],
+        newExtensionTabValue: "__new__"
+      }
+    );
+
+    expect(duplicate.extensionTabSelection).toBe("routed-tab");
+  });
+
+  it("uses the first available resubmit suffix when a copied name exists", () => {
+    const duplicate = buildDuplicateRunConfiguration(
+      run({ workflowId: browserWorkflow.manifest.id, input: { subjectFiles: ["C:\\runs\\inputs\\subject.png"] } }),
+      {
+        workflow: browserWorkflow,
         compatibleClients: [],
         existingRuns: [
-          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run", input: {} }),
-          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run (1)", input: {} })
+          run({ workflowId: browserWorkflow.manifest.id, name: "Source run", input: {} }),
+          run({ workflowId: browserWorkflow.manifest.id, name: "Source run (1)", input: {} })
         ],
         newExtensionTabValue: "__new__"
       }
@@ -118,17 +190,13 @@ describe("duplicate run configuration", () => {
 
   it("resubmits an already suffixed run from the base name", () => {
     const duplicate = buildDuplicateRunConfiguration(
-      run({
-        workflowId: "based-blink.chatgpt.extension-image-transform",
-        name: "Source run (1)",
-        input: { subjectImages: ["C:\\runs\\inputs\\subject.png"] }
-      }),
+      run({ workflowId: browserWorkflow.manifest.id, name: "Source run (1)", input: { subjectFiles: ["C:\\runs\\inputs\\subject.png"] } }),
       {
-        workflow: chatGptWorkflow,
+        workflow: browserWorkflow,
         compatibleClients: [],
         existingRuns: [
-          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run", input: {} }),
-          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run (1)", input: {} })
+          run({ workflowId: browserWorkflow.manifest.id, name: "Source run", input: {} }),
+          run({ workflowId: browserWorkflow.manifest.id, name: "Source run (1)", input: {} })
         ],
         newExtensionTabValue: "__new__"
       }
@@ -137,219 +205,56 @@ describe("duplicate run configuration", () => {
     expect(duplicate.name).toBe("Source run (2)");
   });
 
-  it("reuses the first suffix gap instead of the highest suffix", () => {
-    const duplicate = buildDuplicateRunConfiguration(
-      run({
-        workflowId: "based-blink.chatgpt.extension-image-transform",
-        input: { subjectImages: ["C:\\runs\\inputs\\subject.png"] }
-      }),
-      {
-        workflow: chatGptWorkflow,
-        compatibleClients: [],
-        existingRuns: [
-          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run", input: {} }),
-          run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Source run (2)", input: {} })
-        ],
-        newExtensionTabValue: "__new__"
-      }
-    );
-
-    expect(duplicate.name).toBe("Source run (1)");
-  });
-
   it("keeps blank source run names blank", () => {
     const duplicate = buildDuplicateRunConfiguration(
-      run({
-        workflowId: "based-blink.chatgpt.extension-image-transform",
-        name: "   ",
-        input: { subjectImages: ["C:\\runs\\inputs\\subject.png"] }
-      }),
-      {
-        workflow: chatGptWorkflow,
-        compatibleClients: [],
-        existingRuns: [run({ workflowId: "based-blink.chatgpt.extension-image-transform", name: "Untitled (1)", input: {} })],
-        newExtensionTabValue: "__new__"
-      }
+      run({ workflowId: browserWorkflow.manifest.id, name: "   ", input: { subjectFiles: ["C:\\runs\\inputs\\subject.png"] } }),
+      { workflow: browserWorkflow, compatibleClients: [], existingRuns: [], newExtensionTabValue: "__new__" }
     );
 
     expect(duplicate.name).toBe("");
   });
 
-  it("copies ChatGPT sequence source image, prompts, setup, and target tab", () => {
+  it("copies single-file and multi-file manifest fields for profile-backed workflows", () => {
     const duplicate = buildDuplicateRunConfiguration(
       run({
-        workflowId: "based-blink.chatgpt.extension-image-sequence",
+        workflowId: profileWorkflow.manifest.id,
         input: {
-          sourceImages: ["C:\\runs\\inputs\\source.png"],
-          prompts: ["Back view", "Side view"],
-          masterPrompt: "Keep the same character.",
-          masterPromptSuffix: "Only images.",
-          extensionTab: { mode: "existing", clientId: "tab-1" }
+          primaryFile: "C:\\runs\\inputs\\primary.png",
+          secondaryFiles: ["C:\\runs\\inputs\\secondary.png"]
         }
       }),
-      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
+      { workflow: profileWorkflow, compatibleClients: [], newExtensionTabValue: "__new__" }
     );
 
-    expect(duplicate).toMatchObject({
-      workflowId: "based-blink.chatgpt.extension-image-sequence",
-      sourceFiles: ["C:\\runs\\inputs\\source.png"],
-      sequencePrompts: ["Back view", "Side view"],
-      masterPrompt: "Keep the same character.",
-      masterPromptSuffix: "Only images.",
-      extensionTabSelection: "tab-1"
+    expect(duplicate.values).toMatchObject({
+      primaryFile: "C:\\runs\\inputs\\primary.png",
+      secondaryFiles: ["C:\\runs\\inputs\\secondary.png"],
+      mode: "fast"
     });
-    expect(duplicate.filePaths).toEqual(["C:\\runs\\inputs\\source.png"]);
+    expect(duplicate.filePaths).toEqual(["C:\\runs\\inputs\\primary.png", "C:\\runs\\inputs\\secondary.png"]);
   });
 
-  it("copies ChatGPT single prompt runs", () => {
-    const duplicate = buildDuplicateRunConfiguration(
-      run({
-        workflowId: "based-blink.chatgpt.extension-image-prompt",
-        input: {
-          prompt: "Generate a small brass key.",
-          extensionTab: { mode: "existing", clientId: "tab-1" }
-        }
-      }),
-      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
-    );
-
-    expect(duplicate).toMatchObject({
-      workflowId: "based-blink.chatgpt.extension-image-prompt",
-      prompt: "Generate a small brass key.",
-      extensionTabSelection: "tab-1"
-    });
-    expect(duplicate.filePaths).toEqual([]);
+  it("collects unique input file paths across manifest file fields", () => {
+    expect(
+      collectRunInputFilePaths(
+        {
+          subjectFiles: ["C:\\a.png", "C:\\b.png"],
+          referenceFiles: ["C:\\a.png"],
+          ignoredText: "not-a-file",
+          profile: { nested: "C:\\ignored.png" }
+        },
+        browserWorkflow
+      )
+    ).toEqual(["C:\\a.png", "C:\\b.png"]);
   });
 
-  it("prefills the ChatGPT sequence setup suffix when old runs did not store one", () => {
-    const duplicate = buildDuplicateRunConfiguration(
-      run({
-        workflowId: "based-blink.chatgpt.extension-image-sequence",
-        input: {
-          sourceImages: ["C:\\runs\\inputs\\source.png"],
-          prompts: ["Back view"],
-          masterPrompt: "Keep the same character.",
-          extensionTab: { mode: "existing", clientId: "tab-1" }
-        }
-      }),
-      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
-    );
-
-    expect(duplicate.masterPromptSuffix).toBe(DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX);
-  });
-
-  it("preserves a cleared ChatGPT sequence setup suffix on resubmit", () => {
-    const duplicate = buildDuplicateRunConfiguration(
-      run({
-        workflowId: "based-blink.chatgpt.extension-image-sequence",
-        input: {
-          sourceImages: ["C:\\runs\\inputs\\source.png"],
-          prompts: ["Back view"],
-          masterPrompt: "Keep the same character.",
-          masterPromptSuffix: "",
-          extensionTab: { mode: "existing", clientId: "tab-1" }
-        }
-      }),
-      { workflow: chatGptWorkflow, compatibleClients: [client({ id: "tab-1" })], newExtensionTabValue: "__new__" }
-    );
-
-    expect(duplicate.masterPromptSuffix).toBe("");
-  });
-
-  it("copies Hunyuan view images, prompt, profile, settings, selectors, and defaults export back to OBJ", () => {
-    const duplicate = buildDuplicateRunConfiguration(
-      run({
-        workflowId: "based-blink.hunyuan.image-to-model",
-        input: {
-          frontImage: "C:\\runs\\inputs\\front.png",
-          backImage: "C:\\runs\\inputs\\back.png",
-          left45Image: "C:\\runs\\inputs\\left45.png",
-          prompt: "Make a model",
-          profileName: "artist",
-          pauseForManualLogin: false,
-          modelFaceCount: "500k",
-          retopologyType: "triangle",
-          generateTexture: false,
-          autoRig: true,
-          exportFormat: "glb",
-          selectors: { generateButton: "button.generate" }
-        }
-      }),
-      { workflow: hunyuanWorkflow, compatibleClients: [], newExtensionTabValue: "__new__" }
-    );
-
-    expect(duplicate).toMatchObject({
-      hunyuanViewFiles: {
-        frontImage: ["C:\\runs\\inputs\\front.png"],
-        backImage: ["C:\\runs\\inputs\\back.png"],
-        left45Image: ["C:\\runs\\inputs\\left45.png"]
-      },
-      prompt: "Make a model",
-      profileName: "artist",
-      pauseForManualLogin: false,
-      hunyuanModelFaceCount: "500k",
-      hunyuanRetopologyType: "triangle",
-      hunyuanGenerateTexture: false,
-      hunyuanAutoRig: true,
-      hunyuanExportFormat: "obj"
-    });
-    expect(JSON.parse(duplicate.hunyuanSelectorsJson)).toMatchObject({ generateButton: "button.generate" });
-  });
-
-  it("copies Hunyuan Global view images, settings, selectors, and routed tab selection", () => {
-    const duplicate = buildDuplicateRunConfiguration(
-      run({
-        workflowId: "based-blink.hunyuan.global.image-to-model",
-        input: {
-          frontImage: "C:\\runs\\inputs\\front.png",
-          backImage: "C:\\runs\\inputs\\back.png",
-          modelFaceCount: "50k",
-          retopologyType: "quad",
-          generateTexture: true,
-          autoRig: false,
-          exportFormat: "obj",
-          selectors: { loginStartText: "Start Using" },
-          extensionTab: {
-            mode: "new",
-            routingToken: "global-route",
-            url: "https://3d.hunyuanglobal.com/#based-blink-tab=global-route"
-          }
-        }
-      }),
-      {
-        workflow: chatGptWorkflow,
-        compatibleClients: [client({ id: "hunyuan-global-tab", routingToken: "global-route", url: "https://3d.hunyuanglobal.com/" })],
-        newExtensionTabValue: "__new__"
-      }
-    );
-
-    expect(duplicate).toMatchObject({
-      hunyuanViewFiles: {
-        frontImage: ["C:\\runs\\inputs\\front.png"],
-        backImage: ["C:\\runs\\inputs\\back.png"]
-      },
-      hunyuanModelFaceCount: "50k",
-      hunyuanRetopologyType: "quad",
-      hunyuanGenerateTexture: true,
-      hunyuanAutoRig: false,
-      hunyuanExportFormat: "obj",
-      extensionTabSelection: "hunyuan-global-tab",
-      referenceFiles: [],
-      subjectFiles: []
-    });
-    expect(JSON.parse(duplicate.hunyuanSelectorsJson)).toMatchObject({ loginStartText: "Start Using" });
-  });
-
-  it("collects unique input file paths across supported file fields", () => {
+  it("falls back to file-like top-level values when no manifest is available", () => {
     expect(
       collectRunInputFilePaths({
-        images: ["C:\\a.png", "C:\\b.png"],
-        referenceImages: ["C:\\a.png"],
-        subjectImages: ["C:\\c.png"],
-        sourceImages: ["C:\\d.png"],
-        frontImage: "C:\\e.png",
-        right45Image: "C:\\f.png"
+        first: ["C:\\a.png", "C:\\b.png"],
+        second: "C:\\c.obj",
+        ignored: "plain text"
       })
-    ).toEqual(["C:\\a.png", "C:\\b.png", "C:\\c.png", "C:\\d.png", "C:\\e.png", "C:\\f.png"]);
+    ).toEqual(["C:\\a.png", "C:\\b.png", "C:\\c.obj"]);
   });
 });

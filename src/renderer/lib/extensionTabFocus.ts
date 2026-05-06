@@ -92,7 +92,7 @@ export function readExtensionTabTarget(input: unknown): ExtensionTabTargetInput 
 function readExtensionPage(output: unknown): { url: string; title?: string; clientId?: string; routingToken?: string } | null {
   if (!output || typeof output !== "object") return null;
   const record = output as Record<string, unknown>;
-  const page = (record.browserPage ?? record.chatGptPage) as unknown;
+  const page = record.browserPage as unknown;
   if (!page || typeof page !== "object") return null;
   const pageRecord = page as Record<string, unknown>;
   const url = typeof pageRecord.url === "string" ? pageRecord.url.trim() : "";

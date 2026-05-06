@@ -39,18 +39,36 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
     targetUrl?: string;
     outputKinds: Array<"image" | "json">;
     uiCapabilities?: Array<"extension.tabRouting" | "extension.focusTarget">;
+    calibrationPresets?: WorkflowCalibrationPreset[];
     inputFields: Array<{
       name: string;
       label: string;
-      type: "text" | "textarea" | "fileList" | "json" | "number" | "checkbox" | "select";
+      type: "text" | "textarea" | "fileList" | "json" | "number" | "checkbox" | "select" | "stringList";
       required?: boolean;
+      placeholder?: string;
+      defaultValue?: unknown;
       help?: string;
+      options?: Array<{ label: string; value: string }>;
+      fileValue?: "array" | "single";
+      maxFiles?: number;
+      filePickerTitle?: string;
+      fileFilters?: Array<{ name: string; extensions: string[] }>;
+      group?: string;
     }>;
   };
   inputSchema: zod.ZodType<TInput, zod.ZodTypeDef, unknown>;
   outputSchema: zod.ZodType<TOutput, zod.ZodTypeDef, unknown>;
   canResumeFailedRun?(run: RunRecord): boolean;
   run(input: TInput, ctx: WorkflowContext): Promise<TOutput>;
+}
+
+export interface WorkflowCalibrationPreset {
+  id: string;
+  label: string;
+  description?: string;
+  targetField: string;
+  defaultValue?: unknown;
+  assignments: Array<{ key: string; label: string; path: string[] }>;
 }
 
 export type ExtensionBrowserTarget =

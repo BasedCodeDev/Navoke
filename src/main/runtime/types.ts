@@ -98,12 +98,51 @@ export interface ArtifactRecord {
 export interface WorkflowInputField {
   name: string;
   label: string;
-  type: "text" | "textarea" | "fileList" | "json" | "number" | "checkbox" | "select";
+  type: "text" | "textarea" | "fileList" | "json" | "number" | "checkbox" | "select" | "stringList";
   required?: boolean;
   placeholder?: string;
   help?: string;
   defaultValue?: unknown;
   options?: Array<{ label: string; value: string }>;
+  fileValue?: "array" | "single";
+  maxFiles?: number;
+  filePickerTitle?: string;
+  fileFilters?: Array<{ name: string; extensions: string[] }>;
+  group?: string;
+}
+
+export interface WorkflowCalibrationPresetAssignment {
+  key: string;
+  label: string;
+  path: string[];
+}
+
+export interface WorkflowCalibrationPreset {
+  id: string;
+  label: string;
+  description?: string;
+  targetField: string;
+  defaultValue?: unknown;
+  assignments: WorkflowCalibrationPresetAssignment[];
+}
+
+export type WorkflowPresentationItem =
+  | { kind: "text"; label?: string; value: string }
+  | { kind: "inputFile"; label?: string; field: string; index?: number; path: string }
+  | { kind: "artifact"; label?: string; artifactId: string; preview?: "default" | "image" | "model" }
+  | { kind: "pair"; label?: string; left?: WorkflowPresentationItem; right?: WorkflowPresentationItem }
+  | { kind: "grid"; label?: string; items: WorkflowPresentationItem[] };
+
+export interface WorkflowPresentationGroup {
+  id?: string;
+  title?: string;
+  description?: string;
+  items: WorkflowPresentationItem[];
+}
+
+export interface WorkflowRunPresentation {
+  title?: string;
+  groups: WorkflowPresentationGroup[];
 }
 
 export type WorkflowUiCapability =
@@ -123,6 +162,7 @@ export interface WorkflowManifest {
   requiresBrowser: boolean;
   targetUrl?: string;
   uiCapabilities?: WorkflowUiCapability[];
+  calibrationPresets?: WorkflowCalibrationPreset[];
 }
 
 export interface WorkflowContext {

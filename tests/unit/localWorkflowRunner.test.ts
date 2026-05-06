@@ -86,7 +86,7 @@ describe("LocalWorkflowRunner", () => {
     expect(run.pluginId).toBe("test.plugin");
     expect(run.pluginVersion).toBe("1.2.3");
     expect(run.origin).toEqual({ source: "ui" });
-    expect(fs.existsSync(path.join(run.runDir!, "prompts.json"))).toBe(true);
+    expect(fs.existsSync(path.join(run.runDir!, "run-inputs.json"))).toBe(true);
 
     await waitFor(() => store.getRun(run.id)?.status === "completed");
 
@@ -97,7 +97,7 @@ describe("LocalWorkflowRunner", () => {
     store.close();
   });
 
-  it("stores CLI origin metadata on runs and prompt records", async () => {
+  it("stores CLI origin metadata on runs and input records", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
     tempDirs.push(dir);
     const paths = createRuntimePaths(dir);
@@ -138,8 +138,8 @@ describe("LocalWorkflowRunner", () => {
 
     expect(run.origin).toMatchObject({ source: "cli", agentName: "codex", pid: 123 });
     expect(store.getRun(run.id)?.origin).toMatchObject({ source: "cli", command: "blink run test.cli-origin --input input.json --wait" });
-    const prompts = JSON.parse(fs.readFileSync(path.join(run.runDir!, "prompts.json"), "utf8")) as { origin: unknown };
-    expect(prompts.origin).toMatchObject({ source: "cli", agentName: "codex" });
+    const inputRecord = JSON.parse(fs.readFileSync(path.join(run.runDir!, "run-inputs.json"), "utf8")) as { origin: unknown };
+    expect(inputRecord.origin).toMatchObject({ source: "cli", agentName: "codex" });
 
     await waitFor(() => store.getRun(run.id)?.status === "completed");
     store.close();
@@ -155,7 +155,7 @@ describe("LocalWorkflowRunner", () => {
         id: "test.extension-cli-open",
         title: "Extension CLI Open Workflow",
         description: "Runtime extension tab opener test workflow",
-        category: "chatgpt",
+        category: "utility",
         version: "0.0.0",
         concurrency: 1,
         inputFields: [],
@@ -338,7 +338,7 @@ describe("LocalWorkflowRunner", () => {
           releaseCheckpoint = resolve;
         });
         pauseObservedAtCheckpoint = ctx.isPauseRequested();
-        await ctx.pauseIfRequested("Paused at safe checkpoint", { url: "https://chatgpt.com/c/test" });
+        await ctx.pauseIfRequested("Paused at safe checkpoint", { url: "https://example.test/c/test" });
         await ctx.step("After resume", 80);
         return { ok: true };
       }
@@ -497,7 +497,7 @@ describe("LocalWorkflowRunner", () => {
     store.close();
   });
 
-  it("copies file-list inputs into the run folder and records prompts metadata", async () => {
+  it("copies file-list inputs into the run folder and records input metadata", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-runner-"));
     tempDirs.push(dir);
     const sourceDir = path.join(dir, "source");
@@ -507,7 +507,7 @@ describe("LocalWorkflowRunner", () => {
     const paths = createRuntimePaths(path.join(dir, "project"));
     const store = await SqliteStore.open(paths.dbPath);
     const workflow: WorkflowDefinition<
-      { subjectImages: string[]; referenceImages: string[]; masterPrompt: string; subjectInstruction: string },
+      { subjectFiles: string[]; referenceFiles: string[]; instruction: string; notes: string },
       { ok: boolean }
     > = {
       manifest: {
@@ -518,24 +518,24 @@ describe("LocalWorkflowRunner", () => {
         version: "0.0.0",
         concurrency: 1,
         inputFields: [
-          { name: "referenceImages", label: "Reference images", type: "fileList" },
-          { name: "subjectImages", label: "Subject images", type: "fileList", required: true },
-          { name: "masterPrompt", label: "Master prompt", type: "textarea", required: true },
-          { name: "subjectInstruction", label: "Subject instruction", type: "textarea" }
+          { name: "referenceFiles", label: "Reference files", type: "fileList" },
+          { name: "subjectFiles", label: "Subject files", type: "fileList", required: true },
+          { name: "instruction", label: "Instruction", type: "textarea", required: true },
+          { name: "notes", label: "Notes", type: "textarea" }
         ],
         outputKinds: ["json"],
         requiresBrowser: false
       },
       inputSchema: z.object({
-        subjectImages: z.array(z.string()).min(1),
-        referenceImages: z.array(z.string()).default([]),
-        masterPrompt: z.string(),
-        subjectInstruction: z.string().default("")
+        subjectFiles: z.array(z.string()).min(1),
+        referenceFiles: z.array(z.string()).default([]),
+        instruction: z.string(),
+        notes: z.string().default("")
       }),
       outputSchema: z.object({ ok: z.boolean() }),
       async run(input, ctx) {
-        expect(input.subjectImages[0]).toBe(path.join(ctx.inputDir, "subjectImages", "01-subject.png"));
-        expect(fs.existsSync(input.subjectImages[0])).toBe(true);
+        expect(input.subjectFiles[0]).toBe(path.join(ctx.inputDir, "subjectFiles", "01-subject.png"));
+        expect(fs.existsSync(input.subjectFiles[0])).toBe(true);
         expect(ctx.artifactDir).toBe(path.join(ctx.runDir, "artifacts"));
         return { ok: true };
       }
@@ -546,10 +546,10 @@ describe("LocalWorkflowRunner", () => {
       workflowId: "test.inputs",
       name: "Prompt: Copy Test",
       workflowInput: {
-        referenceImages: [],
-        subjectImages: [imagePath],
-        masterPrompt: "Master prompt text",
-        subjectInstruction: "Per subject instruction"
+        referenceFiles: [],
+        subjectFiles: [imagePath],
+        instruction: "Instruction text",
+        notes: "Per item notes"
       }
     });
 
@@ -558,22 +558,23 @@ describe("LocalWorkflowRunner", () => {
     expect(path.basename(run.runDir!)).toMatch(/^1-Prompt-Copy-Test-[\w]{8}$/);
     expect(path.basename(run.runDir!)).not.toContain(" ");
     expect(run.runNumber).toBe(1);
-    const storedInput = store.getRun(run.id)?.input as { subjectImages: string[] };
-    expect(storedInput.subjectImages[0]).toBe(path.join(run.runDir!, "inputs", "subjectImages", "01-subject.png"));
-    const promptsPath = path.join(run.runDir!, "prompts.json");
-    const prompts = JSON.parse(fs.readFileSync(promptsPath, "utf8")) as {
-      prompts: { masterPrompt: string; subjectInstruction: string };
-      imagePaths: { subjectImages: Array<{ originalPath: string; copiedPath: string }> };
+    const storedInput = store.getRun(run.id)?.input as { subjectFiles: string[] };
+    expect(storedInput.subjectFiles[0]).toBe(path.join(run.runDir!, "inputs", "subjectFiles", "01-subject.png"));
+    const runInputsPath = path.join(run.runDir!, "run-inputs.json");
+    const runInputs = JSON.parse(fs.readFileSync(runInputsPath, "utf8")) as {
+      fields: Array<{ name: string; value: unknown; copiedValue: unknown; files: Array<{ originalPath: string; copiedPath: string }> }>;
+      input: { fileMappings: Array<{ field: string; originalPath: string; copiedPath: string }> };
     };
-    expect(prompts.prompts.masterPrompt).toBe("Master prompt text");
-    expect(prompts.prompts.subjectInstruction).toBe("Per subject instruction");
-    expect(prompts.imagePaths.subjectImages).toEqual([
+    expect(runInputs.fields.find((field) => field.name === "instruction")?.value).toBe("Instruction text");
+    expect(runInputs.fields.find((field) => field.name === "notes")?.value).toBe("Per item notes");
+    expect(runInputs.fields.find((field) => field.name === "subjectFiles")?.files).toEqual([
       {
         originalPath: imagePath,
-        copiedPath: path.join(run.runDir!, "inputs", "subjectImages", "01-subject.png")
+        copiedPath: path.join(run.runDir!, "inputs", "subjectFiles", "01-subject.png")
       }
     ]);
-    expect(store.listArtifacts(run.id).some((artifact) => artifact.name === "prompts.json")).toBe(true);
+    expect(runInputs.input.fileMappings[0]).toMatchObject({ field: "subjectFiles", originalPath: imagePath });
+    expect(store.listArtifacts(run.id).some((artifact) => artifact.name === "run-inputs.json")).toBe(true);
 
     store.close();
   });
@@ -588,13 +589,13 @@ describe("LocalWorkflowRunner", () => {
     const oldRunDir = getRunDir(paths, "Old Run Name", runId, 7);
     const inputPath = path.join(oldRunDir, "inputs", "images", "01-source.png");
     const artifactPath = path.join(oldRunDir, "artifacts", "result.json");
-    const promptsPath = path.join(oldRunDir, "prompts.json");
+    const runInputsPath = path.join(oldRunDir, "run-inputs.json");
     fs.mkdirSync(path.dirname(inputPath), { recursive: true });
     fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
     fs.writeFileSync(inputPath, "image");
     fs.writeFileSync(artifactPath, "{}");
     fs.writeFileSync(
-      promptsPath,
+      runInputsPath,
       `${JSON.stringify({ runName: "Old Run Name", runDir: oldRunDir, input: { copied: { images: [inputPath] } } }, null, 2)}\n`,
       "utf8"
     );
@@ -632,16 +633,16 @@ describe("LocalWorkflowRunner", () => {
     expect((renamed.output as { resultPath: string }).resultPath).toBe(path.join(newRunDir, "artifacts", "result.json"));
     expect(store.getArtifact(artifact.id)?.path).toBe(path.join(newRunDir, "artifacts", "result.json"));
     expect(store.getArtifact(artifact.id)?.metadata).toEqual({ artifactDir: path.join(newRunDir, "artifacts") });
-    const prompts = JSON.parse(fs.readFileSync(path.join(newRunDir, "prompts.json"), "utf8")) as {
+    const runInputs = JSON.parse(fs.readFileSync(path.join(newRunDir, "run-inputs.json"), "utf8")) as {
       runName: string;
       runNumber: number;
       runDir: string;
       input: { copied: { images: string[] } };
     };
-    expect(prompts.runName).toBe("New Run Name");
-    expect(prompts.runNumber).toBe(7);
-    expect(prompts.runDir).toBe(newRunDir);
-    expect(prompts.input.copied.images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
+    expect(runInputs.runName).toBe("New Run Name");
+    expect(runInputs.runNumber).toBe(7);
+    expect(runInputs.runDir).toBe(newRunDir);
+    expect(runInputs.input.copied.images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
 
     store.close();
   });
@@ -660,7 +661,7 @@ describe("LocalWorkflowRunner", () => {
     fs.writeFileSync(inputPath, "image");
     fs.writeFileSync(artifactPath, "{}");
     fs.writeFileSync(
-      path.join(oldRunDir, "prompts.json"),
+      path.join(oldRunDir, "run-inputs.json"),
       `${JSON.stringify({ runName: "Legacy Run", runDir: oldRunDir, input: { copied: { images: [inputPath] } } }, null, 2)}\n`,
       "utf8"
     );
@@ -695,16 +696,16 @@ describe("LocalWorkflowRunner", () => {
     expect((migrated.output as { resultPath: string }).resultPath).toBe(path.join(newRunDir, "artifacts", "result.json"));
     expect(store.getArtifact("artifact-backfill")?.path).toBe(path.join(newRunDir, "artifacts", "result.json"));
     expect(store.getArtifact("artifact-backfill")?.metadata).toEqual({ artifactDir: path.join(newRunDir, "artifacts") });
-    const prompts = JSON.parse(fs.readFileSync(path.join(newRunDir, "prompts.json"), "utf8")) as {
+    const runInputs = JSON.parse(fs.readFileSync(path.join(newRunDir, "run-inputs.json"), "utf8")) as {
       runName: string;
       runNumber: number;
       runDir: string;
       input: { copied: { images: string[] } };
     };
-    expect(prompts.runName).toBe("Legacy Run");
-    expect(prompts.runNumber).toBe(1);
-    expect(prompts.runDir).toBe(newRunDir);
-    expect(prompts.input.copied.images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
+    expect(runInputs.runName).toBe("Legacy Run");
+    expect(runInputs.runNumber).toBe(1);
+    expect(runInputs.runDir).toBe(newRunDir);
+    expect(runInputs.input.copied.images[0]).toBe(path.join(newRunDir, "inputs", "images", "01-source.png"));
 
     store.close();
   });

@@ -224,6 +224,67 @@ exports.DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG = {
     downloadReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download),
     downloadButton: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download)
 };
+const HUNYUAN_SELECTOR_ASSIGNMENTS = [
+    { key: "loginStartSelector", label: "Login start selector", path: ["loginStartSelector"] },
+    { key: "loginStartText", label: "Login start text", path: ["loginStartText"] },
+    { key: "loginReadySelector", label: "Login ready selector", path: ["loginReadySelector"] },
+    { key: "loginReadyText", label: "Login ready text", path: ["loginReadyText"] },
+    { key: "loginRequiredSelector", label: "Login required selector", path: ["loginRequiredSelector"] },
+    { key: "loginRequiredText", label: "Login required text", path: ["loginRequiredText"] },
+    { key: "quotaExhaustedPopupText", label: "Quota popup text", path: ["quotaExhaustedPopupText"] },
+    { key: "quotaExhaustedPopupCloseButton", label: "Quota popup close", path: ["quotaExhaustedPopupCloseButton"] },
+    { key: "imageTo3dTab", label: "Image-to-3D tab", path: ["imageTo3dTab"] },
+    { key: "multipleImagesTab", label: "Multiple Images tab", path: ["multipleImagesTab"] },
+    { key: "addMultipleViewsButton", label: "Add Multiple Views", path: ["addMultipleViewsButton"] },
+    { key: "multipleViewsConfirmButton", label: "Multiple Views confirm", path: ["multipleViewsConfirmButton"] },
+    ...exports.HUNYUAN_VIEW_SLOTS.map((slot) => ({
+        key: `viewUploadInputs.${slot.selectorKey}`,
+        label: `${slot.label} upload input`,
+        path: ["viewUploadInputs", slot.selectorKey]
+    })),
+    ...exports.HUNYUAN_VIEW_SLOTS.map((slot) => ({
+        key: `viewSlotContainers.${slot.selectorKey}`,
+        label: `${slot.label} slot container`,
+        path: ["viewSlotContainers", slot.selectorKey]
+    })),
+    { key: "slotDetectionFailedText", label: "Slot detection failed text", path: ["slotDetectionFailedText"] },
+    { key: "slotDetectionRunningSelector", label: "Slot detection running selector", path: ["slotDetectionRunningSelector"] },
+    { key: "slotAcceptedThumbnailSelector", label: "Slot accepted thumbnail", path: ["slotAcceptedThumbnailSelector"] },
+    { key: "slotRemoveButtonSelector", label: "Slot remove button", path: ["slotRemoveButtonSelector"] },
+    { key: "slotEmptySelector", label: "Slot empty selector", path: ["slotEmptySelector"] },
+    { key: "modelDropdown", label: "Model dropdown", path: ["modelDropdown"] },
+    { key: "modelOptionV31", label: "3D generate V3.1 option", path: ["modelOptionV31"] },
+    ...exports.HUNYUAN_FACE_COUNTS.map((count) => ({
+        key: `faceCountButtons.${count}`,
+        label: `${count} face button`,
+        path: ["faceCountButtons", count]
+    })),
+    { key: "modelTypeGeometryTexturePhased", label: "Geometry + texture phased option", path: ["modelTypeGeometryTexturePhased"] },
+    { key: "promptTextbox", label: "Prompt textbox", path: ["promptTextbox"] },
+    { key: "generateButton", label: "Initial generate button", path: ["generateButton"] },
+    { key: "geometryRunningSelector", label: "Geometry running selector", path: ["geometryRunningSelector"] },
+    { key: "geometryRunningText", label: "Geometry running text", path: ["geometryRunningText"] },
+    { key: "geometryReadySelector", label: "Geometry ready selector", path: ["geometryReadySelector"] },
+    { key: "retopologyTypeButtons.triangle", label: "Triangle retopology option", path: ["retopologyTypeButtons", "triangle"] },
+    { key: "retopologyTypeButtons.quad", label: "Quad retopology option", path: ["retopologyTypeButtons", "quad"] },
+    { key: "smartRetopologyButton", label: "Smart retopology button", path: ["smartRetopologyButton"] },
+    { key: "retopologyRunningSelector", label: "Retopology running selector", path: ["retopologyRunningSelector"] },
+    { key: "retopologyRunningText", label: "Retopology running text", path: ["retopologyRunningText"] },
+    { key: "retopologyReadySelector", label: "Retopology ready selector", path: ["retopologyReadySelector"] },
+    { key: "generateTextureButton", label: "Generate texture button", path: ["generateTextureButton"] },
+    { key: "textureRunningSelector", label: "Texture running selector", path: ["textureRunningSelector"] },
+    { key: "textureRunningText", label: "Texture running text", path: ["textureRunningText"] },
+    { key: "textureReadySelector", label: "Texture ready selector", path: ["textureReadySelector"] },
+    { key: "autoRigButton", label: "Auto-rig button", path: ["autoRigButton"] },
+    { key: "autoRigRunningSelector", label: "Auto-rig running selector", path: ["autoRigRunningSelector"] },
+    { key: "autoRigRunningText", label: "Auto-rig running text", path: ["autoRigRunningText"] },
+    { key: "autoRigReadySelector", label: "Auto-rig ready selector", path: ["autoRigReadySelector"] },
+    { key: "exportFormatDropdown", label: "Export format dropdown", path: ["exportFormatDropdown"] },
+    { key: "exportFormatOptions.obj", label: "OBJ export option", path: ["exportFormatOptions", "obj"] },
+    { key: "exportFormatOptions.glb", label: "GLB export option", path: ["exportFormatOptions", "glb"] },
+    { key: "downloadReadySelector", label: "Download ready selector", path: ["downloadReadySelector"] },
+    { key: "downloadButton", label: "Download button", path: ["downloadButton"] }
+];
 const HUNYUAN_SITES = [
     {
         workflowId: exports.HUNYUAN_TENCENT_WORKFLOW_ID,
@@ -712,7 +773,8 @@ function createWorkflows(sdk) {
         artifactIds: z.array(z.string()),
         summary: z.string(),
         modelArtifactId: z.string().optional(),
-        manifestArtifactId: z.string().optional()
+        manifestArtifactId: z.string().optional(),
+        presentation: z.unknown().optional()
     });
     function createHunyuanImageToModelWorkflow(site) {
         return {
@@ -727,15 +789,24 @@ function createWorkflows(sdk) {
                 targetUrl: site.targetUrl,
                 outputKinds: ["model", "download", "trace", "screenshot", "json"],
                 uiCapabilities: ["browser.profile"],
+                calibrationPresets: [
+                    {
+                        id: `${site.workflowId}.selectors`,
+                        label: `${site.title} selectors`,
+                        targetField: "selectors",
+                        defaultValue: site.selectorDefaults,
+                        assignments: HUNYUAN_SELECTOR_ASSIGNMENTS
+                    }
+                ],
                 inputFields: [
-                    { name: "frontImage", label: "Front image", type: "fileList", required: true },
-                    { name: "backImage", label: "Back image", type: "fileList" },
-                    { name: "leftImage", label: "Left image", type: "fileList" },
-                    { name: "rightImage", label: "Right image", type: "fileList" },
-                    { name: "topImage", label: "Top image", type: "fileList" },
-                    { name: "bottomImage", label: "Bottom image", type: "fileList" },
-                    { name: "left45Image", label: "Left 45 image", type: "fileList" },
-                    { name: "right45Image", label: "Right 45 image", type: "fileList" },
+                    { name: "frontImage", label: "Front image", type: "fileList", required: true, fileValue: "single", maxFiles: 1 },
+                    { name: "backImage", label: "Back image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "leftImage", label: "Left image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "rightImage", label: "Right image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "topImage", label: "Top image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "bottomImage", label: "Bottom image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "left45Image", label: "Left 45 image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "right45Image", label: "Right 45 image", type: "fileList", fileValue: "single", maxFiles: 1 },
                     { name: "prompt", label: "Prompt", type: "textarea" },
                     {
                         name: "modelFaceCount",
@@ -772,6 +843,7 @@ function createWorkflows(sdk) {
                         name: "selectors",
                         label: "Selector config",
                         type: "json",
+                        defaultValue: site.selectorDefaults,
                         help: "Workflow Lab can override the built-in Hunyuan selector preset if the page changes."
                     }
                 ]
@@ -1164,6 +1236,7 @@ function createWorkflows(sdk) {
                         artifactIds,
                         modelArtifactId: modelArtifact.id,
                         manifestArtifactId: manifestArtifact.id,
+                        presentation: buildModelPresentation(uploadPlan, modelArtifact.id, manifestArtifact.id),
                         summary: `${site.title} completed.`
                     };
                 }
@@ -1194,15 +1267,24 @@ function createWorkflows(sdk) {
                 targetUrl: exports.HUNYUAN_GLOBAL_TARGET_URL,
                 outputKinds: ["model", "download", "json"],
                 uiCapabilities: ["extension.tabRouting"],
+                calibrationPresets: [
+                    {
+                        id: `${exports.HUNYUAN_GLOBAL_WORKFLOW_ID}.selectors`,
+                        label: "Hunyuan Global selectors",
+                        targetField: "selectors",
+                        defaultValue: exports.DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG,
+                        assignments: HUNYUAN_SELECTOR_ASSIGNMENTS
+                    }
+                ],
                 inputFields: [
-                    { name: "frontImage", label: "Front image", type: "fileList", required: true },
-                    { name: "backImage", label: "Back image", type: "fileList" },
-                    { name: "leftImage", label: "Left image", type: "fileList" },
-                    { name: "rightImage", label: "Right image", type: "fileList" },
-                    { name: "topImage", label: "Top image", type: "fileList" },
-                    { name: "bottomImage", label: "Bottom image", type: "fileList" },
-                    { name: "left45Image", label: "Left 45 image", type: "fileList" },
-                    { name: "right45Image", label: "Right 45 image", type: "fileList" },
+                    { name: "frontImage", label: "Front image", type: "fileList", required: true, fileValue: "single", maxFiles: 1 },
+                    { name: "backImage", label: "Back image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "leftImage", label: "Left image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "rightImage", label: "Right image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "topImage", label: "Top image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "bottomImage", label: "Bottom image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "left45Image", label: "Left 45 image", type: "fileList", fileValue: "single", maxFiles: 1 },
+                    { name: "right45Image", label: "Right 45 image", type: "fileList", fileValue: "single", maxFiles: 1 },
                     { name: "prompt", label: "Prompt", type: "textarea" },
                     {
                         name: "modelFaceCount",
@@ -1237,6 +1319,7 @@ function createWorkflows(sdk) {
                         name: "selectors",
                         label: "Selector config",
                         type: "json",
+                        defaultValue: exports.DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG,
                         help: "Workflow Lab can override the built-in Hunyuan Global selector preset if the page changes."
                     }
                 ]
@@ -1626,7 +1709,36 @@ function createWorkflows(sdk) {
             artifactIds,
             modelArtifactId: modelArtifact.id,
             manifestArtifactId: manifestArtifact.id,
+            presentation: buildModelPresentation(uploadPlan, modelArtifact.id, manifestArtifact.id),
             summary: "Hunyuan Global Image to 3D Model completed."
+        };
+    }
+    function buildModelPresentation(uploadPlan, modelArtifactId, manifestArtifactId) {
+        return {
+            title: "Model output",
+            groups: [
+                {
+                    id: "inputs",
+                    title: "Input views",
+                    items: uploadPlan.map((upload) => ({
+                        kind: "inputFile",
+                        label: upload.label,
+                        field: upload.field,
+                        index: 0,
+                        path: upload.imagePath
+                    }))
+                },
+                {
+                    id: "model",
+                    title: "Generated model",
+                    items: [{ kind: "artifact", label: "Model", artifactId: modelArtifactId, preview: "model" }]
+                },
+                {
+                    id: "support",
+                    title: "Supporting artifacts",
+                    items: [{ kind: "artifact", label: "Manifest", artifactId: manifestArtifactId }]
+                }
+            ]
         };
     }
     async function checkHunyuanGlobalLoginState(target, selectors, timeoutMs, signal) {

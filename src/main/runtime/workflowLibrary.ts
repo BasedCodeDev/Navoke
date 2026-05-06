@@ -6,21 +6,6 @@ import { copyFileToDir } from "../utils/files";
 import { getLibraryEntryDir, getLibraryEntryInputDir } from "./paths";
 import type { RunRecord, RuntimePaths, WorkflowLibraryEntry, WorkflowRegistration, WorkflowRegistry } from "./types";
 
-const FALLBACK_FILE_INPUT_FIELDS = [
-  "images",
-  "referenceImages",
-  "subjectImages",
-  "sourceImages",
-  "frontImage",
-  "backImage",
-  "leftImage",
-  "rightImage",
-  "topImage",
-  "bottomImage",
-  "left45Image",
-  "right45Image"
-];
-
 export function createWorkflowLibraryEntryFromRun(input: {
   store: SqliteStore;
   paths: RuntimePaths;
@@ -114,7 +99,7 @@ function workflowFileInputFields(registration: WorkflowRegistration | undefined,
     registration?.definition.manifest.inputFields
       .filter((field) => field.type === "fileList")
       .map((field) => field.name) ?? [];
-  return [...new Set([...manifestFields, ...FALLBACK_FILE_INPUT_FIELDS].filter((field) => field in input))];
+  return [...new Set(manifestFields.filter((field) => field in input))];
 }
 
 function copyOneLibraryFile(filePath: string, targetInputDir: string, field: string, index: number): string {

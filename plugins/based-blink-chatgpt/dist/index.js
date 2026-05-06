@@ -96,7 +96,9 @@ function createWorkflows(sdk) {
     const outputSchema = z.object({
         artifactIds: z.array(z.string()),
         summary: z.string(),
+        browserPage: chatGptPageSchema.optional(),
         chatGptPage: chatGptPageSchema.optional(),
+        presentation: z.unknown().optional(),
         checkpoint: checkpointSchema.optional()
     });
     const sequenceOutputMappingSchema = z.object({
@@ -137,7 +139,9 @@ function createWorkflows(sdk) {
     const sequenceOutputSchema = z.object({
         artifactIds: z.array(z.string()),
         summary: z.string(),
+        browserPage: chatGptPageSchema.optional(),
         chatGptPage: chatGptPageSchema.optional(),
+        presentation: z.unknown().optional(),
         checkpoint: sequenceCheckpointSchema.optional()
     });
     const promptImageOutputMappingSchema = z.object({
@@ -165,7 +169,9 @@ function createWorkflows(sdk) {
     const promptImageOutputSchema = z.object({
         artifactIds: z.array(z.string()),
         summary: z.string(),
+        browserPage: chatGptPageSchema.optional(),
         chatGptPage: chatGptPageSchema.optional(),
+        presentation: z.unknown().optional(),
         checkpoint: promptImageCheckpointSchema.optional()
     });
     const chatGptExtensionImageTransformWorkflow = {
@@ -183,12 +189,6 @@ function createWorkflows(sdk) {
             inputFields: [
                 { name: "referenceImages", label: "Reference images", type: "fileList" },
                 { name: "subjectImages", label: "Subject images", type: "fileList", required: true },
-                {
-                    name: "extensionTab",
-                    label: "ChatGPT tab",
-                    type: "select",
-                    help: "Target a compatible open ChatGPT tab, or open a new extension-owned window for this run."
-                },
                 { name: "masterPrompt", label: "Master prompt", type: "textarea", required: true },
                 { name: "subjectInstruction", label: "Per-subject instruction", type: "textarea" },
                 {
@@ -229,7 +229,7 @@ function createWorkflows(sdk) {
             const checkpointOutput = (summary) => ({
                 artifactIds: [...artifactIds],
                 summary,
-                ...(latestChatGptPage ? { chatGptPage: latestChatGptPage } : {}),
+                ...(latestChatGptPage ? { browserPage: latestChatGptPage, chatGptPage: latestChatGptPage } : {}),
                 checkpoint: {
                     setupCompleted,
                     completedSubjectIndexes: [...outputKeysBySubject.keys()].sort((a, b) => a - b),
@@ -536,7 +536,8 @@ function createWorkflows(sdk) {
             artifactIds.push(manifest.id);
             return {
                 artifactIds,
-                ...(latestChatGptPage ? { chatGptPage: latestChatGptPage } : {}),
+                ...(latestChatGptPage ? { browserPage: latestChatGptPage, chatGptPage: latestChatGptPage } : {}),
+                presentation: buildSubjectPresentation(input, outputMappings, manifest.id),
                 checkpoint: {
                     setupCompleted,
                     completedSubjectIndexes: [...outputKeysBySubject.keys()].sort((a, b) => a - b),
@@ -562,12 +563,6 @@ function createWorkflows(sdk) {
             inputFields: [
                 { name: "sourceImages", label: "Source image", type: "fileList", required: true },
                 {
-                    name: "extensionTab",
-                    label: "ChatGPT tab",
-                    type: "select",
-                    help: "Target a compatible open ChatGPT tab, or open a new extension-owned window for this run."
-                },
-                {
                     name: "masterPrompt",
                     label: "Setup prompt",
                     type: "textarea",
@@ -582,7 +577,7 @@ function createWorkflows(sdk) {
                 {
                     name: "prompts",
                     label: "Prompt sequence",
-                    type: "json",
+                    type: "stringList",
                     required: true,
                     help: "Ordered prompts. Each prompt receives the previous generated result as its input."
                 },
@@ -629,7 +624,7 @@ function createWorkflows(sdk) {
             const checkpointOutput = (summary) => ({
                 artifactIds: [...artifactIds],
                 summary,
-                ...(latestChatGptPage ? { chatGptPage: latestChatGptPage } : {}),
+                ...(latestChatGptPage ? { browserPage: latestChatGptPage, chatGptPage: latestChatGptPage } : {}),
                 checkpoint: {
                     setupCompleted,
                     completedPromptIndexes: [...outputKeysByPrompt.keys()].sort((a, b) => a - b),
@@ -966,7 +961,8 @@ function createWorkflows(sdk) {
             artifactIds.push(manifest.id);
             return {
                 artifactIds,
-                ...(latestChatGptPage ? { chatGptPage: latestChatGptPage } : {}),
+                ...(latestChatGptPage ? { browserPage: latestChatGptPage, chatGptPage: latestChatGptPage } : {}),
+                presentation: buildSequencePresentation(input, outputMappings, manifest.id),
                 checkpoint: {
                     setupCompleted,
                     completedPromptIndexes: [...outputKeysByPrompt.keys()].sort((a, b) => a - b),
@@ -990,12 +986,6 @@ function createWorkflows(sdk) {
             outputKinds: ["image", "json"],
             uiCapabilities: ["extension.tabRouting", "extension.focusTarget"],
             inputFields: [
-                {
-                    name: "extensionTab",
-                    label: "ChatGPT tab",
-                    type: "select",
-                    help: "Target a compatible open ChatGPT tab, or open a new extension-owned window for this run."
-                },
                 { name: "prompt", label: "Prompt", type: "textarea", required: true },
                 {
                     name: "selectors",
@@ -1033,7 +1023,7 @@ function createWorkflows(sdk) {
             const checkpointOutput = (summary) => ({
                 artifactIds: [...artifactIds],
                 summary,
-                ...(latestChatGptPage ? { chatGptPage: latestChatGptPage } : {}),
+                ...(latestChatGptPage ? { browserPage: latestChatGptPage, chatGptPage: latestChatGptPage } : {}),
                 checkpoint: {
                     completed: Boolean(outputKey),
                     outputMapping: outputMapping ?? null,
@@ -1289,7 +1279,8 @@ function createWorkflows(sdk) {
             artifactIds.push(manifest.id);
             return {
                 artifactIds,
-                ...(latestChatGptPage ? { chatGptPage: latestChatGptPage } : {}),
+                ...(latestChatGptPage ? { browserPage: latestChatGptPage, chatGptPage: latestChatGptPage } : {}),
+                presentation: buildPromptImagePresentation(input, outputMapping, manifest.id),
                 checkpoint: {
                     completed: Boolean(outputKey),
                     outputMapping: outputMapping ?? null,
@@ -1299,6 +1290,110 @@ function createWorkflows(sdk) {
             };
         }
     };
+    function buildSubjectPresentation(input, outputMappings, manifestArtifactId) {
+        return {
+            title: "Input and output pairs",
+            groups: [
+                {
+                    id: "context",
+                    title: "Setup context",
+                    items: [
+                        { kind: "text", label: "Master prompt", value: input.masterPrompt },
+                        {
+                            kind: "grid",
+                            label: "Reference images",
+                            items: input.referenceImages.map((filePath, index) => ({
+                                kind: "inputFile",
+                                label: `Reference ${index + 1}`,
+                                field: "referenceImages",
+                                index,
+                                path: filePath
+                            }))
+                        }
+                    ]
+                },
+                {
+                    id: "results",
+                    title: "Subject results",
+                    items: input.subjectImages.map((filePath, index) => {
+                        const mapping = outputMappings.find((candidate) => candidate.subjectIndex === index);
+                        return {
+                            kind: "pair",
+                            label: `Subject ${index + 1}`,
+                            left: {
+                                kind: "grid",
+                                items: [
+                                    { kind: "inputFile", label: "Input", field: "subjectImages", index, path: filePath },
+                                    {
+                                        kind: "text",
+                                        label: "Instruction",
+                                        value: input.subjectInstruction.trim() || "No per-subject text."
+                                    }
+                                ]
+                            },
+                            right: mapping
+                                ? { kind: "artifact", label: "Output", artifactId: mapping.artifactId, preview: "image" }
+                                : { kind: "text", label: "Output", value: "No output artifact is available yet." }
+                        };
+                    })
+                },
+                { id: "support", title: "Supporting artifacts", items: [{ kind: "artifact", label: "Manifest", artifactId: manifestArtifactId }] }
+            ]
+        };
+    }
+    function buildSequencePresentation(input, outputMappings, manifestArtifactId) {
+        return {
+            title: "Prompt sequence results",
+            groups: [
+                {
+                    id: "context",
+                    title: "Sequence context",
+                    items: [
+                        { kind: "inputFile", label: "Source image", field: "sourceImages", index: 0, path: input.sourceImages[0] ?? "" },
+                        { kind: "text", label: "Setup prompt", value: sequenceSetupPrompt(input) || "No setup prompt was sent." }
+                    ]
+                },
+                {
+                    id: "results",
+                    title: "Generated sequence",
+                    items: input.prompts.map((prompt, index) => {
+                        const mapping = outputMappings.find((candidate) => candidate.promptIndex === index);
+                        return {
+                            kind: "pair",
+                            label: `Prompt ${index + 1}`,
+                            left: { kind: "text", label: "Prompt", value: prompt },
+                            right: mapping
+                                ? { kind: "artifact", label: "Output", artifactId: mapping.artifactId, preview: "image" }
+                                : { kind: "text", label: "Output", value: "No output artifact is available yet." }
+                        };
+                    })
+                },
+                { id: "support", title: "Supporting artifacts", items: [{ kind: "artifact", label: "Manifest", artifactId: manifestArtifactId }] }
+            ]
+        };
+    }
+    function buildPromptImagePresentation(input, outputMapping, manifestArtifactId) {
+        return {
+            title: "Prompt result",
+            groups: [
+                {
+                    id: "result",
+                    title: "Generated image",
+                    items: [
+                        {
+                            kind: "pair",
+                            label: "Prompt",
+                            left: { kind: "text", label: "Prompt", value: input.prompt },
+                            right: outputMapping
+                                ? { kind: "artifact", label: "Output", artifactId: outputMapping.artifactId, preview: "image" }
+                                : { kind: "text", label: "Output", value: "No output artifact is available yet." }
+                        }
+                    ]
+                },
+                { id: "support", title: "Supporting artifacts", items: [{ kind: "artifact", label: "Manifest", artifactId: manifestArtifactId }] }
+            ]
+        };
+    }
     function canResumeFailedChatGptRun(run) {
         if (run.status !== "failed" || run.workflowId !== "based-blink.chatgpt.extension-image-transform")
             return false;

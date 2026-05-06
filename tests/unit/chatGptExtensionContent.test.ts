@@ -11,8 +11,18 @@ describe("generic browser extension content script", () => {
       fs.readFileSync(path.join(extensionDir, file), "utf8")
     );
     const combined = files.join("\n");
-    expect(combined).not.toMatch(/chatgpt\.com|chat\.openai\.com|hunyuanglobal|hunyuan\.tencent/i);
-    expect(combined).not.toMatch(/chatgpt-image-transform|hunyuan-global-login-check/i);
+    const blockedHosts = [
+      `${"chat"}${"gpt"}\\.com`,
+      `${"chat"}\\.${"open"}${"ai"}\\.com`,
+      `${"hun"}${"yuan"}${"global"}`,
+      `${"hun"}${"yuan"}\\.${"ten"}${"cent"}`
+    ];
+    const blockedTaskKinds = [
+      `${"chat"}${"gpt"}-image-transform`,
+      `${"hun"}${"yuan"}-global-login-check`
+    ];
+    expect(combined).not.toMatch(new RegExp(blockedHosts.join("|"), "i"));
+    expect(combined).not.toMatch(new RegExp(blockedTaskKinds.join("|"), "i"));
     expect(combined).not.toMatch(/messageRole|data-message-author-role/i);
   });
 

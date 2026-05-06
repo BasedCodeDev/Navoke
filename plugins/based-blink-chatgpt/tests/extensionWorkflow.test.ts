@@ -7,8 +7,8 @@ import {
   normalizeChatGptExtensionOutputs,
   normalizeChatGptExtensionPromptImageOutputs,
   normalizeChatGptExtensionSequenceOutputs
-} from "../../plugins/based-blink-chatgpt/src";
-import { createWorkflowSdk } from "../../src/main/workflowSdk";
+} from "../src";
+import { createWorkflowSdk } from "../../../src/main/workflowSdk";
 
 type FakeFindCompatibleClientForTarget = ReturnType<typeof createWorkflowSdk>["extension"]["browser"]["findCompatibleClientForTarget"];
 
@@ -22,7 +22,7 @@ describe("ChatGPT plugin browser-extension workflows", () => {
   it("uses generic extension tab routing instead of site-specific extension capabilities", () => {
     const workflow = workflows.find((candidate) => candidate.manifest.id === "based-blink.chatgpt.extension-image-transform");
     expect(workflow?.manifest.uiCapabilities).toEqual(["extension.tabRouting", "extension.focusTarget"]);
-    expect(workflow?.manifest.inputFields.map((field) => field.name)).toContain("extensionTab");
+    expect(workflow?.manifest.inputFields.map((field) => field.name)).not.toContain("extensionTab");
   });
 
   it("defaults the extension tab target to a routed new window", () => {

@@ -29,14 +29,21 @@ export interface WorkflowDefinition<TInput = unknown, TOutput = unknown> {
     targetUrl?: string;
     outputKinds: Array<"model" | "download" | "trace" | "screenshot" | "json">;
     uiCapabilities?: Array<"browser.profile" | "extension.tabRouting">;
+    calibrationPresets?: WorkflowCalibrationPreset[];
     inputFields: Array<{
       name: string;
       label: string;
-      type: "text" | "textarea" | "fileList" | "json" | "number" | "checkbox" | "select";
+      type: "text" | "textarea" | "fileList" | "json" | "number" | "checkbox" | "select" | "stringList";
       required?: boolean;
       defaultValue?: unknown;
+      placeholder?: string;
       help?: string;
       options?: Array<{ label: string; value: string }>;
+      fileValue?: "array" | "single";
+      maxFiles?: number;
+      filePickerTitle?: string;
+      fileFilters?: Array<{ name: string; extensions: string[] }>;
+      group?: string;
     }>;
   };
   inputSchema: zod.ZodType<TInput, zod.ZodTypeDef, unknown>;
@@ -114,6 +121,15 @@ export interface WorkflowSdk {
     writeJson(filePath: string, value: unknown): void;
     extractZip(zipPath: string, targetDir: string): Promise<void>;
   };
+}
+
+export interface WorkflowCalibrationPreset {
+  id: string;
+  label: string;
+  description?: string;
+  targetField: string;
+  defaultValue?: unknown;
+  assignments: Array<{ key: string; label: string; path: string[] }>;
 }
 
 export type ExtensionBrowserTarget =

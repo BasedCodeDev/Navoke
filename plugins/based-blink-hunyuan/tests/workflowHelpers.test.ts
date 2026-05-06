@@ -16,8 +16,8 @@ import {
   missingHunyuanSelectorKeys,
   resolveHunyuanExportFormat,
   createWorkflows
-} from "../../plugins/based-blink-hunyuan/src";
-import { createWorkflowSdk } from "../../src/main/workflowSdk";
+} from "../src";
+import { createWorkflowSdk } from "../../../src/main/workflowSdk";
 
 describe("Hunyuan workflow helpers", () => {
   it("orders front, back, side, top, bottom, and 45-degree upload slots", () => {

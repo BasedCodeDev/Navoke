@@ -50,14 +50,14 @@ describe("generic browser extension background controller", () => {
     const injected: unknown[] = [];
     const harness = loadBackgroundHarness({
       tabsCreate: async () => ({ id: 1 }),
-      tabsGet: async (tabId) => ({ id: tabId, windowId: 7, url: "https://3d.hunyuanglobal.com/", status: "complete" }),
+      tabsGet: async (tabId) => ({ id: tabId, windowId: 7, url: "https://example.test/", status: "complete" }),
       scriptingExecuteScript: async (input: unknown) => {
         injected.push(input);
         return [];
       }
     });
 
-    await harness.sendTabUpdated(42, { status: "complete" }, { url: "https://3d.hunyuanglobal.com/" });
+    await harness.sendTabUpdated(42, { status: "complete" }, { url: "https://example.test/" });
 
     expect(injected).toEqual([{ target: { tabId: 42 }, files: ["content.js"] }]);
   });

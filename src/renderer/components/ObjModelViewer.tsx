@@ -4,7 +4,6 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { MTLLoader, type MaterialCreator } from "three/addons/loaders/MTLLoader.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { artifactAssetUrl, artifactUrl, type ArtifactRecord } from "@/lib/api";
-import { getHunyuanModelArtifactMetadata } from "@/lib/hunyuanWorkflow";
 
 export function ObjModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -105,7 +104,7 @@ export function ObjModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.
 }
 
 async function loadObjArtifact(artifact: ArtifactRecord): Promise<THREE.Group> {
-  const metadata = getHunyuanModelArtifactMetadata(artifact.metadata);
+  const metadata = getModelArtifactMetadata(artifact.metadata);
   const objUrl = metadata.objFileName ? await artifactAssetUrl(artifact.id, metadata.objFileName) : await artifactUrl(artifact.id);
   const objLoader = new OBJLoader();
 
@@ -121,6 +120,15 @@ async function loadObjArtifact(artifact: ArtifactRecord): Promise<THREE.Group> {
   return new Promise((resolve, reject) => {
     objLoader.load(objUrl, resolve, undefined, reject);
   });
+}
+
+function getModelArtifactMetadata(metadata: unknown): { objFileName?: string; mtlFileName?: string } {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
+  const record = metadata as Record<string, unknown>;
+  return {
+    ...(typeof record.objFileName === "string" ? { objFileName: record.objFileName } : {}),
+    ...(typeof record.mtlFileName === "string" ? { mtlFileName: record.mtlFileName } : {})
+  };
 }
 
 function normalizeObject(object: THREE.Object3D): void {

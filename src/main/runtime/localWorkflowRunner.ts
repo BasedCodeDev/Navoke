@@ -87,10 +87,10 @@ export class LocalWorkflowRunner {
     const runDir = getRunDir(this.paths, runName, runId, runNumber);
     const { inputDir, artifactDir } = ensureRunDataDirs(runDir);
     const preparedInput = copyWorkflowInputFiles(workflow, parsed.data, inputDir);
-    const promptsPath = path.join(runDir, "prompts.json");
+    const runInputsPath = path.join(runDir, "run-inputs.json");
     writeJson(
-      promptsPath,
-      buildPromptsDocument({
+      runInputsPath,
+      buildRunInputsDocument({
         workflow,
         runId,
         runNumber,
@@ -119,16 +119,16 @@ export class LocalWorkflowRunner {
       status: "queued",
       input: preparedInput.input
     });
-    const promptsArtifact = this.store.addArtifact({
+    const runInputsArtifact = this.store.addArtifact({
       id: createId(),
       runId: run.id,
       kind: "json",
-      name: "prompts.json",
-      path: promptsPath,
+      name: "run-inputs.json",
+      path: runInputsPath,
       mimeType: "application/json",
       metadata: { source: "run-inputs", artifactDir }
     });
-    this.eventBus.publish({ kind: "artifact-added", runId: run.id, artifactId: promptsArtifact.id });
+    this.eventBus.publish({ kind: "artifact-added", runId: run.id, artifactId: runInputsArtifact.id });
     this.queue.push({ runId: run.id, workflowId: workflow.manifest.id, input: preparedInput.input });
     this.eventBus.publish({ kind: "run-updated", runId: run.id });
     void this.drain();
@@ -374,7 +374,7 @@ export class LocalWorkflowRunner {
       }
     }
 
-    rewritePromptsJson(finalRunDir, runName, oldRunDir, finalRunDir, run.runNumber);
+    rewriteRunInputsJson(finalRunDir, runName, oldRunDir, finalRunDir, run.runNumber);
     return { runDir: finalRunDir, input, output };
   }
 
@@ -391,7 +391,7 @@ export class LocalWorkflowRunner {
 
       const newRunDir = path.resolve(getRunDir(this.paths, run.name, run.id, run.runNumber));
       if (samePath(oldRunDir, newRunDir)) {
-        rewritePromptsJson(oldRunDir, run.name, oldRunDir, oldRunDir, run.runNumber);
+        rewriteRunInputsJson(oldRunDir, run.name, oldRunDir, oldRunDir, run.runNumber);
         continue;
       }
       if (fs.existsSync(newRunDir)) continue;
@@ -628,7 +628,7 @@ function copyWorkflowInputFiles(
   return { input: copiedInput, fileMappings };
 }
 
-function buildPromptsDocument(input: {
+function buildRunInputsDocument(input: {
   workflow: WorkflowDefinition;
   plugin: WorkflowPluginMetadata;
   origin: RunOrigin;
@@ -660,33 +660,14 @@ function buildPromptsDocument(input: {
     runDir: input.runDir,
     createdAt: new Date().toISOString(),
     origin: input.origin,
-    prompts: {
-      masterPrompt: original.masterPrompt ?? null,
-      masterPromptSuffix: original.masterPromptSuffix ?? null,
-      prompt: original.prompt ?? null,
-      subjectInstruction: original.subjectInstruction ?? null,
-      perSubjectInstruction: original.subjectInstruction ?? null,
-      sequencePrompts: original.prompts ?? null
-    },
-    imagePaths: {
-      images: mappedPathsForField(input.fileMappings, "images"),
-      referenceImages: mappedPathsForField(input.fileMappings, "referenceImages"),
-      subjectImages: mappedPathsForField(input.fileMappings, "subjectImages"),
-      sourceImages: mappedPathsForField(input.fileMappings, "sourceImages"),
-      frontImage: mappedPathsForField(input.fileMappings, "frontImage"),
-      backImage: mappedPathsForField(input.fileMappings, "backImage"),
-      leftImage: mappedPathsForField(input.fileMappings, "leftImage"),
-      rightImage: mappedPathsForField(input.fileMappings, "rightImage"),
-      topImage: mappedPathsForField(input.fileMappings, "topImage"),
-      bottomImage: mappedPathsForField(input.fileMappings, "bottomImage"),
-      left45Image: mappedPathsForField(input.fileMappings, "left45Image"),
-      right45Image: mappedPathsForField(input.fileMappings, "right45Image")
-    },
-    extensionTab: original.extensionTab ?? copied.extensionTab ?? null,
-    selectors: original.selectors ?? copied.selectors ?? null,
-    modelName: original.modelName ?? copied.modelName ?? null,
-    profileName: original.profileName ?? copied.profileName ?? null,
-    pauseForManualLogin: original.pauseForManualLogin ?? copied.pauseForManualLogin ?? null,
+    fields: input.workflow.manifest.inputFields.map((field) => ({
+      name: field.name,
+      label: field.label,
+      type: field.type,
+      value: original[field.name] ?? null,
+      copiedValue: copied[field.name] ?? null,
+      files: mappedPathsForField(input.fileMappings, field.name)
+    })),
     input: {
       original: input.originalInput,
       copied: input.copiedInput,
@@ -729,26 +710,26 @@ function isWorkflowRegistration(value: WorkflowDefinition | WorkflowRegistration
   return Boolean(isRecord(value) && isRecord(value.definition) && isRecord(value.plugin));
 }
 
-function rewritePromptsJson(
+function rewriteRunInputsJson(
   runDir: string,
   runName: string,
   oldRunDir: string,
   newRunDir: string,
   runNumber: number | null
 ): void {
-  const promptsPath = path.join(runDir, "prompts.json");
-  if (!fs.existsSync(promptsPath)) return;
+  const runInputsPath = path.join(runDir, "run-inputs.json");
+  if (!fs.existsSync(runInputsPath)) return;
 
   try {
-    const prompts = replacePathReferences(JSON.parse(fs.readFileSync(promptsPath, "utf8")) as unknown, oldRunDir, newRunDir);
-    if (isRecord(prompts)) {
-      prompts.runName = runName;
-      prompts.runNumber = runNumber;
-      prompts.runDir = newRunDir;
+    const runInputs = replacePathReferences(JSON.parse(fs.readFileSync(runInputsPath, "utf8")) as unknown, oldRunDir, newRunDir);
+    if (isRecord(runInputs)) {
+      runInputs.runName = runName;
+      runInputs.runNumber = runNumber;
+      runInputs.runDir = newRunDir;
     }
-    writeJson(promptsPath, prompts);
+    writeJson(runInputsPath, runInputs);
   } catch {
-    // Malformed historical prompts should not block renaming the run.
+    // Malformed historical run input summaries should not block renaming the run.
   }
 }
 

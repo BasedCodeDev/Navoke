@@ -72,6 +72,8 @@ import {
   type WorkflowLabProfileWorkflowId,
   type WorkflowLabInspectionResult,
   type WorkflowLibraryEntry,
+  type WorkflowPresentationItem,
+  type WorkflowRunPresentation,
   type WorkflowSummary
 } from "@/lib/api";
 import { cn, formatDate, isMotionActiveStatus, statusTone } from "@/lib/utils";
@@ -96,39 +98,14 @@ import {
   type FontDefinition,
   type FontId
 } from "@/lib/fonts";
+import { buildDuplicateRunConfiguration, collectRunInputFilePaths } from "@/lib/duplicateRunConfiguration";
 import {
-  buildChatGptArtifactPairing,
-  fileName,
-  getChatGptRunInput,
-  supportsChatGptArtifactPairing,
-  type ChatGptRunInputModel
-} from "@/lib/chatGptArtifactPairing";
-import {
-  DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX,
-  buildDuplicateRunConfiguration,
-  collectRunInputFilePaths
-} from "@/lib/duplicateRunConfiguration";
-import {
-  DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON,
-  DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG_JSON,
-  HUNYUAN_GLOBAL_WORKFLOW_ID,
-  HUNYUAN_EXPORT_FORMATS,
-  HUNYUAN_FACE_COUNTS,
-  HUNYUAN_SELECTOR_ASSIGNMENTS,
-  HUNYUAN_VIEW_FIELDS,
-  assignHunyuanSelectorJson,
-  buildHunyuanArtifactViewModel,
-  buildHunyuanRunInput,
-  defaultHunyuanSelectorConfigJsonForWorkflow,
-  emptyHunyuanViewFiles,
-  isHunyuanObjModelArtifact,
-  isHunyuanWorkflowId,
-  type HunyuanExportFormat,
-  type HunyuanFaceCount,
-  type HunyuanRetopologyType,
-  type HunyuanViewField,
-  type HunyuanViewFiles
-} from "@/lib/hunyuanWorkflow";
+  buildWorkflowInputFromValues,
+  createInitialWorkflowValues,
+  normalizeWorkflowValues,
+  stringifyJsonFieldValue,
+  type WorkflowFormValues
+} from "@/lib/workflowForm";
 import { isRecoverableFailedExtensionRun, resolveExtensionFocusTarget } from "@/lib/extensionTabFocus";
 import { resolveExtensionTabSelection } from "@/lib/extensionTabRouting";
 import { activeCliAgentRuns, isCliRun, runOriginCommand, runOriginLabel } from "@/lib/runOrigin";
@@ -156,10 +133,6 @@ type WorkflowUiCapability = NonNullable<WorkflowSummary["manifest"]["uiCapabilit
 
 function workflowHasCapability(workflow: WorkflowSummary | undefined, capability: WorkflowUiCapability): boolean {
   return Boolean(workflow?.manifest.uiCapabilities?.includes(capability));
-}
-
-function workflowHasField(workflow: WorkflowSummary | undefined, fieldName: string): boolean {
-  return Boolean(workflow?.manifest.inputFields.some((field) => field.name === fieldName));
 }
 
 const NEW_EXTENSION_TAB_VALUE = "__new_extension_tab__";
@@ -278,26 +251,8 @@ export default function App(): JSX.Element {
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
   const [workspaceView, setWorkspaceView] = useState<"runs" | "lab" | "plugins">("runs");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [referenceFiles, setReferenceFiles] = useState<string[]>([]);
-  const [subjectFiles, setSubjectFiles] = useState<string[]>([]);
-  const [sourceFiles, setSourceFiles] = useState<string[]>([]);
   const [name, setName] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [masterPrompt, setMasterPrompt] = useState("");
-  const [masterPromptSuffix, setMasterPromptSuffix] = useState(DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX);
-  const [subjectInstruction, setSubjectInstruction] = useState("");
-  const [sequencePrompts, setSequencePrompts] = useState<string[]>([]);
-  const [modelName, setModelName] = useState("Demo model");
-  const [profileName, setProfileName] = useState("default");
-  const [pauseForManualLogin, setPauseForManualLogin] = useState(true);
-  const [hunyuanViewFiles, setHunyuanViewFiles] = useState<HunyuanViewFiles>(() => emptyHunyuanViewFiles());
-  const [hunyuanModelFaceCount, setHunyuanModelFaceCount] = useState<HunyuanFaceCount>("50k");
-  const [hunyuanRetopologyType, setHunyuanRetopologyType] = useState<HunyuanRetopologyType>("quad");
-  const [hunyuanGenerateTexture, setHunyuanGenerateTexture] = useState(true);
-  const [hunyuanAutoRig, setHunyuanAutoRig] = useState(false);
-  const [hunyuanExportFormat, setHunyuanExportFormat] = useState<HunyuanExportFormat>("obj");
-  const [hunyuanSelectorsJson, setHunyuanSelectorsJson] = useState(DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON);
+  const [workflowValues, setWorkflowValues] = useState<WorkflowFormValues>({});
   const [extensionTabSelection, setExtensionTabSelection] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
@@ -384,18 +339,6 @@ export default function App(): JSX.Element {
   const plugins = pluginsQuery.data?.plugins ?? [];
   const selectedWorkflow = workflows.find((workflow) => workflow.manifest.id === selectedWorkflowId);
   const isExtensionWorkflow = workflowHasCapability(selectedWorkflow, "extension.tabRouting");
-  const isChatGptPromptWorkflow = selectedWorkflow?.manifest.id === "based-blink.chatgpt.extension-image-prompt";
-  const isChatGptSequenceWorkflow = selectedWorkflow?.manifest.id === "based-blink.chatgpt.extension-image-sequence";
-  const isHunyuanWorkflow = isHunyuanWorkflowId(selectedWorkflow?.manifest.id);
-  const usesBrowserProfile = workflowHasCapability(selectedWorkflow, "browser.profile");
-
-  useEffect(() => {
-    if (!isHunyuanWorkflow) return;
-    const nextDefault = defaultHunyuanSelectorConfigJsonForWorkflow(selectedWorkflow?.manifest.id);
-    setHunyuanSelectorsJson((current) =>
-      current === DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON || current === DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG_JSON ? nextDefault : current
-    );
-  }, [isHunyuanWorkflow, selectedWorkflow?.manifest.id]);
 
   useEffect(() => {
     if (workflows.length === 0) {
@@ -406,6 +349,10 @@ export default function App(): JSX.Element {
       setSelectedWorkflowId(workflows[0].manifest.id);
     }
   }, [selectedWorkflowId, workflows]);
+
+  useEffect(() => {
+    setWorkflowValues((current) => normalizeWorkflowValues(selectedWorkflow, current));
+  }, [selectedWorkflow]);
   const createRunMutation = useMutation({
     mutationFn: async () => {
       setFormError(null);
@@ -422,30 +369,8 @@ export default function App(): JSX.Element {
         workflowHasCapability(selectedWorkflow, "extension.tabRouting")
           ? buildExtensionTabInput(extensionTabSelection, compatibleExtensionClients, selectedWorkflow.manifest.targetUrl)
           : null;
-      const workflowInput =
-        isHunyuanWorkflow
-          ? buildHunyuanRunInput({
-                viewFiles: hunyuanViewFiles,
-                prompt,
-                profileName,
-                pauseForManualLogin,
-                modelFaceCount: hunyuanModelFaceCount,
-                retopologyType: hunyuanRetopologyType,
-                generateTexture: hunyuanGenerateTexture,
-                autoRig: hunyuanAutoRig,
-                exportFormat: hunyuanExportFormat,
-                selectorsJson: hunyuanSelectorsJson,
-                ...(extensionTab ? { extensionTab } : {})
-              })
-          : workflowHasCapability(selectedWorkflow, "browser.profile")
-            ? { images: selectedFiles, prompt, profileName, pauseForManualLogin }
-          : workflowHasCapability(selectedWorkflow, "extension.tabRouting")
-              ? isChatGptSequenceWorkflow
-                ? { sourceImages: sourceFiles, prompts: sequencePrompts, masterPrompt, masterPromptSuffix, extensionTab }
-                : isChatGptPromptWorkflow
-                  ? { prompt, extensionTab }
-                : { referenceImages: referenceFiles, subjectImages: subjectFiles, masterPrompt, subjectInstruction, extensionTab }
-              : { images: selectedFiles, prompt, modelName, delayMs: 1_200 };
+      const workflowInput = buildWorkflowInputFromValues(selectedWorkflow, workflowValues);
+      if (extensionTab) workflowInput.extensionTab = extensionTab;
 
       return createRun({ workflowId: selectedWorkflowId, name, input: workflowInput });
     },
@@ -598,7 +523,7 @@ export default function App(): JSX.Element {
     });
   }, [compatibleExtensionClients, isExtensionWorkflow]);
 
-  async function chooseImages(setFiles: (files: string[]) => void, title: string): Promise<void> {
+  async function chooseFilesForField(fieldName: string, title: string, maxFiles?: number): Promise<void> {
     const files = await window.basedBlink.selectFiles({
       title,
       filters: [
@@ -606,11 +531,10 @@ export default function App(): JSX.Element {
         { name: "All files", extensions: ["*"] }
       ]
     });
-    if (files.length > 0) setFiles(files);
-  }
-
-  function setHunyuanViewField(field: HunyuanViewField, files: string[]): void {
-    setHunyuanViewFiles((current) => ({ ...current, [field]: files.slice(0, 1) }));
+    if (files.length > 0) {
+      setWorkflowValues((current) => ({ ...current, [fieldName]: files.slice(0, maxFiles) }));
+      markResubmitFileInputsChanged();
+    }
   }
 
   async function openProjectAndRefresh(projectPath?: string): Promise<BasedBlinkConfig> {
@@ -640,27 +564,10 @@ export default function App(): JSX.Element {
   }
 
   function resetNewRunForm(): void {
-    setSelectedWorkflowId(workflows[0]?.manifest.id ?? "");
+    const workflow = workflows[0];
+    setSelectedWorkflowId(workflow?.manifest.id ?? "");
     setName("");
-    setSelectedFiles([]);
-    setReferenceFiles([]);
-    setSubjectFiles([]);
-    setSourceFiles([]);
-    setPrompt("");
-    setMasterPrompt("");
-    setMasterPromptSuffix(DEFAULT_CHATGPT_SEQUENCE_SETUP_SUFFIX);
-    setSubjectInstruction("");
-    setSequencePrompts([]);
-    setModelName("Demo model");
-    setProfileName("default");
-    setPauseForManualLogin(true);
-    setHunyuanViewFiles(emptyHunyuanViewFiles());
-    setHunyuanModelFaceCount("50k");
-    setHunyuanRetopologyType("quad");
-    setHunyuanGenerateTexture(true);
-    setHunyuanAutoRig(false);
-    setHunyuanExportFormat("obj");
-    setHunyuanSelectorsJson(defaultHunyuanSelectorConfigJsonForWorkflow(workflows[0]?.manifest.id));
+    setWorkflowValues(createInitialWorkflowValues(workflow));
     setExtensionTabSelection("");
     setFormError(null);
     setNewRunFocusError(null);
@@ -682,15 +589,8 @@ export default function App(): JSX.Element {
     setResubmitValidation({ status: "ready", files: [] });
   }
 
-  async function chooseNewRunImages(setFiles: (files: string[]) => void, title: string): Promise<void> {
-    await chooseImages((files) => {
-      setFiles(files);
-      markResubmitFileInputsChanged();
-    }, title);
-  }
-
-  function clearNewRunFiles(clearFiles: () => void): void {
-    clearFiles();
+  function clearWorkflowFiles(fieldName: string): void {
+    setWorkflowValues((current) => ({ ...current, [fieldName]: [] }));
     markResubmitFileInputsChanged();
   }
 
@@ -700,25 +600,7 @@ export default function App(): JSX.Element {
   ): void {
     setSelectedWorkflowId(duplicate.workflowId);
     setName(nameOverride);
-    setSelectedFiles(duplicate.selectedFiles);
-    setReferenceFiles(duplicate.referenceFiles);
-    setSubjectFiles(duplicate.subjectFiles);
-    setSourceFiles(duplicate.sourceFiles);
-    setPrompt(duplicate.prompt);
-    setMasterPrompt(duplicate.masterPrompt);
-    setMasterPromptSuffix(duplicate.masterPromptSuffix);
-    setSubjectInstruction(duplicate.subjectInstruction);
-    setSequencePrompts(duplicate.sequencePrompts);
-    setModelName(duplicate.modelName);
-    setProfileName(duplicate.profileName);
-    setPauseForManualLogin(duplicate.pauseForManualLogin);
-    setHunyuanViewFiles(duplicate.hunyuanViewFiles);
-    setHunyuanModelFaceCount(duplicate.hunyuanModelFaceCount);
-    setHunyuanRetopologyType(duplicate.hunyuanRetopologyType);
-    setHunyuanGenerateTexture(duplicate.hunyuanGenerateTexture);
-    setHunyuanAutoRig(duplicate.hunyuanAutoRig);
-    setHunyuanExportFormat(duplicate.hunyuanExportFormat);
-    setHunyuanSelectorsJson(duplicate.hunyuanSelectorsJson);
+    setWorkflowValues(duplicate.values);
     setExtensionTabSelection(duplicate.extensionTabSelection);
     setFormError(null);
     setNewRunFocusError(null);
@@ -769,7 +651,8 @@ export default function App(): JSX.Element {
   }
 
   function openResubmitNewModal(run: RunRecord): void {
-    const filePaths = collectRunInputFilePaths(run.input);
+    const availability = resolveRunWorkflowAvailability(run, workflows);
+    const filePaths = collectRunInputFilePaths(run.input, availability.workflow ?? undefined);
     setResubmitError(null);
     setResubmitSourceRun(run);
     setLibrarySourceEntry(null);
@@ -798,7 +681,8 @@ export default function App(): JSX.Element {
   }
 
   function openLibraryEntryModal(entry: WorkflowLibraryEntry): void {
-    const filePaths = collectRunInputFilePaths(entry.input);
+    const availability = resolveRunWorkflowAvailability(libraryEntryToRunRecord(entry), workflows);
+    const filePaths = collectRunInputFilePaths(entry.input, availability.workflow ?? undefined);
     setResubmitError(null);
     setResubmitSourceRun(null);
     setLibrarySourceEntry(entry);
@@ -830,7 +714,12 @@ export default function App(): JSX.Element {
   const currentProjectDir = configQuery.data?.projectDir ?? "";
   const projectName = configQuery.data?.projectName ?? "Based BLINK";
   const reusedSourceInput = resubmitSourceRun?.input ?? librarySourceEntry?.input ?? null;
-  const reusedFileCount = reusedSourceInput ? collectRunInputFilePaths(reusedSourceInput).length : 0;
+  const reusedWorkflow = resubmitSourceRun
+    ? resolveRunWorkflowAvailability(resubmitSourceRun, workflows).workflow ?? undefined
+    : librarySourceEntry
+      ? resolveRunWorkflowAvailability(libraryEntryToRunRecord(librarySourceEntry), workflows).workflow ?? undefined
+      : undefined;
+  const reusedFileCount = reusedSourceInput ? collectRunInputFilePaths(reusedSourceInput, reusedWorkflow).length : 0;
   const hasReusedInputValidation = newRunModalMode === "resubmit" || newRunModalMode === "library";
   const canStartNewRun =
     Boolean(selectedWorkflow) &&
@@ -892,151 +781,16 @@ export default function App(): JSX.Element {
         />
       ) : null}
 
-      {isExtensionWorkflow ? (
-        isChatGptPromptWorkflow ? (
-          <div className="space-y-1.5">
-            <Label>Prompt</Label>
-            <Textarea
-              className="min-h-28 py-1.5"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Describe the image ChatGPT should generate."
-            />
-          </div>
-        ) : isChatGptSequenceWorkflow ? (
-          <>
-            <ImagePicker
-              label="Source image"
-              chooseLabel="Choose source"
-              files={sourceFiles}
-              emptyText="No source file selected"
-              onChoose={() => void chooseNewRunImages((files) => setSourceFiles(files.slice(0, 1)), "Choose one source image")}
-              onClear={() => clearNewRunFiles(() => setSourceFiles([]))}
-            />
-            <div className="space-y-1.5">
-              <Label>Setup prompt</Label>
-              <Textarea
-                className="min-h-12 py-1.5"
-                value={masterPrompt}
-                onChange={(event) => setMasterPrompt(event.target.value)}
-                placeholder="Optional global setup sent with the source image before the sequence."
-              />
-            </div>
-            {masterPrompt.trim() ? (
-              <div className="space-y-1.5">
-                <Label>Append to setup prompt</Label>
-                <Textarea
-                  className="min-h-12 py-1.5"
-                  value={masterPromptSuffix}
-                  onChange={(event) => setMasterPromptSuffix(event.target.value)}
-                  placeholder="Optional text appended to the setup prompt before submission."
-                />
-              </div>
-            ) : null}
-            <PromptSequenceEditor prompts={sequencePrompts} onChange={setSequencePrompts} />
-          </>
-        ) : (
-          <>
-            <ImagePicker
-              label="Reference images"
-              chooseLabel="Choose references"
-              files={referenceFiles}
-              emptyText="No reference files selected"
-              onChoose={() => void chooseNewRunImages(setReferenceFiles, "Choose optional reference images")}
-              onClear={() => clearNewRunFiles(() => setReferenceFiles([]))}
-            />
-            <div className="space-y-1.5">
-              <Label>Master prompt</Label>
-              <Textarea
-                className="min-h-12 py-1.5"
-                value={masterPrompt}
-                onChange={(event) => setMasterPrompt(event.target.value)}
-                placeholder='Initial instruction. Example: "After the first response, respond with images only. When ready, respond READY."'
-              />
-            </div>
-            <ImagePicker
-              label="Subject images"
-              chooseLabel="Choose subjects"
-              files={subjectFiles}
-              emptyText="No subject files selected"
-              onChoose={() => void chooseNewRunImages(setSubjectFiles, "Choose subject images")}
-              onClear={() => clearNewRunFiles(() => setSubjectFiles([]))}
-            />
-            <div className="space-y-1.5">
-              <Label>Per-subject instruction</Label>
-              <Textarea
-                className="min-h-12 py-1.5"
-                value={subjectInstruction}
-                onChange={(event) => setSubjectInstruction(event.target.value)}
-                placeholder="Optional. Leave blank to send each subject image without text."
-              />
-            </div>
-          </>
-        )
-      ) : isHunyuanWorkflow ? (
-        <HunyuanWorkflowFields
-          viewFiles={hunyuanViewFiles}
-          prompt={prompt}
-          modelFaceCount={hunyuanModelFaceCount}
-          retopologyType={hunyuanRetopologyType}
-          generateTexture={hunyuanGenerateTexture}
-          autoRig={hunyuanAutoRig}
-          exportFormat={hunyuanExportFormat}
-          selectorsJson={hunyuanSelectorsJson}
-          onChooseView={(field, title) =>
-            void chooseNewRunImages((files) => {
-              setHunyuanViewField(field, files);
-            }, title)
-          }
-          onClearView={(field) => clearNewRunFiles(() => setHunyuanViewField(field, []))}
-          onPromptChange={setPrompt}
-          onModelFaceCountChange={setHunyuanModelFaceCount}
-          onRetopologyTypeChange={setHunyuanRetopologyType}
-          onGenerateTextureChange={setHunyuanGenerateTexture}
-          onAutoRigChange={setHunyuanAutoRig}
-          onExportFormatChange={setHunyuanExportFormat}
-          onSelectorsJsonChange={setHunyuanSelectorsJson}
+      {selectedWorkflow?.manifest.inputFields.map((field) => (
+        <WorkflowInputFieldControl
+          key={field.name}
+          field={field}
+          value={workflowValues[field.name]}
+          onChange={(value) => setWorkflowValues((current) => ({ ...current, [field.name]: value }))}
+          onChooseFiles={() => void chooseFilesForField(field.name, field.filePickerTitle ?? `Choose ${field.label}`, field.maxFiles)}
+          onClearFiles={() => clearWorkflowFiles(field.name)}
         />
-      ) : (
-        <ImagePicker
-          label="Images"
-          chooseLabel="Choose images"
-          files={selectedFiles}
-          emptyText="No files selected"
-          onChoose={() => void chooseNewRunImages(setSelectedFiles, "Choose workflow input images")}
-          onClear={() => clearNewRunFiles(() => setSelectedFiles([]))}
-        />
-      )}
-
-      {!workflowHasField(selectedWorkflow, "masterPrompt") && !isHunyuanWorkflow ? (
-        <>
-          <div className="space-y-1.5">
-            <Label>Prompt</Label>
-            <Textarea className="min-h-12 py-1.5" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Optional model prompt" />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Model name</Label>
-            <Input className="h-9" value={modelName} onChange={(event) => setModelName(event.target.value)} />
-          </div>
-        </>
-      ) : null}
-
-      {usesBrowserProfile ? (
-        <div className="grid grid-cols-[1fr_auto] items-end gap-3">
-          <div className="space-y-1.5">
-            <Label>Browser profile</Label>
-            <Input className="h-9" value={profileName} onChange={(event) => setProfileName(event.target.value)} />
-          </div>
-          <label className="flex h-9 items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={pauseForManualLogin}
-              onChange={(event) => setPauseForManualLogin(event.target.checked)}
-            />
-            Login pause
-          </label>
-        </div>
-      ) : null}
+      ))}
 
       {!hasProject ? (
         <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.info)}>
@@ -1197,10 +951,11 @@ export default function App(): JSX.Element {
               extensionClients={extensionClients}
               hasProject={hasProject}
               apiBaseUrl={apiBaseUrl}
-              onApplyHunyuanSelectorConfig={(selectorsJson) => {
+              workflows={workflows}
+              onUseCalibrationPreset={(workflowId, fieldName, value) => {
                 resetNewRunForm();
-                setHunyuanSelectorsJson(selectorsJson);
-                setSelectedWorkflowId(workflows.find((workflow) => isHunyuanWorkflowId(workflow.manifest.id))?.manifest.id ?? selectedWorkflowId);
+                setSelectedWorkflowId(workflowId);
+                setWorkflowValues((current) => ({ ...current, [fieldName]: stringifyJsonFieldValue(value) }));
                 setWorkspaceView("runs");
                 setNewRunModalMode("fresh");
               }}
@@ -1903,8 +1658,7 @@ function RunDetailModal({
   const workflowUsable = canUseRunWorkflow(workflowAvailability);
   const runWorkflow = workflowAvailability?.workflow ?? undefined;
   const hasExtensionFocus = workflowHasCapability(runWorkflow, "extension.focusTarget");
-  const chatGptRunInput = run ? getChatGptRunInput(run.input) : null;
-  const hasChatGptArtifactPairs = Boolean(run && chatGptRunInput && supportsChatGptArtifactPairing(run.workflowId, run.input));
+  const runPresentation = getRunPresentation(run?.output);
   const canResumeRun = workflowUsable && (run?.status === "waiting_manual" || isRecoverableFailedExtensionRun(run, runWorkflow));
   const canRenameRun = Boolean(run && !["queued", "running", "pausing", "waiting_manual"].includes(run.status));
 
@@ -2166,15 +1920,8 @@ function RunDetailModal({
                   <h3 className="text-sm font-semibold">Artifacts</h3>
                   {artifacts.length === 0 ? (
                     <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No artifacts yet.</div>
-                  ) : hasChatGptArtifactPairs && run && chatGptRunInput ? (
-                    <ChatGptArtifactPairs
-                      run={run}
-                      artifacts={artifacts}
-                      input={chatGptRunInput}
-                      onOpenDataFolder={onOpenDataFolder}
-                    />
-                  ) : run && isHunyuanWorkflowId(run.workflowId) ? (
-                    <HunyuanArtifactResult run={run} artifacts={artifacts} onOpenDataFolder={onOpenDataFolder} />
+                  ) : runPresentation && run ? (
+                    <WorkflowPresentationView run={run} artifacts={artifacts} presentation={runPresentation} />
                   ) : (
                     <div className="grid gap-3 lg:grid-cols-2">
                       {artifacts.map((artifact) => (
@@ -2249,6 +1996,101 @@ function NewRunModal({
         </div>
         <div className="min-h-0 overflow-y-auto p-5">{children}</div>
       </div>
+    </div>
+  );
+}
+
+function WorkflowInputFieldControl({
+  field,
+  value,
+  onChange,
+  onChooseFiles,
+  onClearFiles
+}: {
+  field: WorkflowSummary["manifest"]["inputFields"][number];
+  value: unknown;
+  onChange(value: unknown): void;
+  onChooseFiles(): void;
+  onClearFiles(): void;
+}): JSX.Element {
+  const label = `${field.label}${field.required ? " *" : ""}`;
+  if (field.type === "fileList") {
+    const files = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    return (
+      <ImagePicker
+        label={label}
+        chooseLabel={field.fileValue === "single" || field.maxFiles === 1 ? "Choose file" : "Choose files"}
+        files={files}
+        emptyText="No files selected"
+        onChoose={onChooseFiles}
+        onClear={onClearFiles}
+      />
+    );
+  }
+  if (field.type === "textarea" || field.type === "json") {
+    return (
+      <div className="space-y-1.5">
+        <Label>{label}</Label>
+        <Textarea
+          className={cn("min-h-24 py-1.5", field.type === "json" && "font-mono text-xs")}
+          value={typeof value === "string" ? value : stringifyJsonFieldValue(value)}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={field.placeholder}
+          spellCheck={field.type === "json" ? false : undefined}
+        />
+        {field.help ? <div className="text-xs text-muted-foreground">{field.help}</div> : null}
+      </div>
+    );
+  }
+  if (field.type === "stringList") {
+    return (
+      <StringListEditor
+        label={label}
+        values={Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []}
+        placeholder={field.placeholder}
+        help={field.help}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.type === "select") {
+    return (
+      <div className="space-y-1.5">
+        <Label>{label}</Label>
+        <select
+          value={typeof value === "string" ? value : ""}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+        >
+          {(field.options ?? []).map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        {field.help ? <div className="text-xs text-muted-foreground">{field.help}</div> : null}
+      </div>
+    );
+  }
+  if (field.type === "checkbox") {
+    return (
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+        {label}
+      </label>
+    );
+  }
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <Input
+        className="h-9"
+        type={field.type === "number" ? "number" : "text"}
+        value={typeof value === "string" || typeof value === "number" ? value : ""}
+        onChange={(event) => onChange(field.type === "number" ? event.target.value : event.target.value)}
+        placeholder={field.placeholder}
+      />
+      {field.help ? <div className="text-xs text-muted-foreground">{field.help}</div> : null}
     </div>
   );
 }
@@ -2356,342 +2198,150 @@ function canUseReusedInputFiles(validation: ReusedInputValidationState): boolean
   return validation.status === "ready" && invalidReusedInputFiles(validation).length === 0;
 }
 
-function chatGptSequenceSetupPrompt(masterPrompt: string, masterPromptSuffix: string): string {
-  const prompt = masterPrompt.trim();
-  const suffix = masterPromptSuffix.trim();
-  if (!prompt || !suffix) return prompt;
-  return `${prompt}\n\n${suffix}`;
-}
-
-function HunyuanArtifactResult({
+function WorkflowPresentationView({
   run,
   artifacts,
-  onOpenDataFolder
+  presentation
 }: {
   run: RunRecord;
   artifacts: ArtifactRecord[];
-  onOpenDataFolder(): void | Promise<unknown>;
+  presentation: WorkflowRunPresentation;
 }): JSX.Element {
-  const viewModel = buildHunyuanArtifactViewModel(run.input, run.output, artifacts);
-
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-        <section className="rounded-md border border-border bg-background p-4">
-          <h4 className="text-sm font-semibold">Input images</h4>
-          <div className="mt-3 space-y-3">
-            {viewModel.inputImages.length === 0 ? (
-              <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">No Hunyuan input images were recorded.</div>
-            ) : (
-              viewModel.inputImages.map((inputImage) => (
-                <div key={`${inputImage.field}-${inputImage.filePath}`} className="space-y-2">
-                  <div className="text-xs font-medium text-muted-foreground">{inputImage.label}</div>
-                  <InputImagePreview
-                    runId={run.id}
-                    field={inputImage.field}
-                    index={inputImage.index}
-                    filePath={inputImage.filePath}
-                  />
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="rounded-md border border-border bg-background p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <h4 className="text-sm font-semibold">3D model</h4>
-            <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run.runDir}>
-              <FolderOpen className="h-4 w-4" />
-              Data folder
-            </Button>
-          </div>
-          {viewModel.modelArtifact ? (
-            isHunyuanObjModelArtifact(viewModel.modelArtifact) ? (
-              <ObjModelViewer artifact={viewModel.modelArtifact} />
-            ) : (
-              <ArtifactPreview artifact={viewModel.modelArtifact} />
-            )
-          ) : (
-            <div className="flex min-h-96 items-center justify-center rounded-md border border-dashed p-5 text-sm text-muted-foreground">
-              No extracted model artifact is available for this run.
-            </div>
-          )}
-        </section>
-      </div>
-
-      {viewModel.supportingArtifacts.length > 0 ? (
-        <section className="space-y-3">
-          <h4 className="text-sm font-semibold">Supporting artifacts</h4>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {viewModel.supportingArtifacts.map((artifact) => (
-              <ArtifactPreview key={artifact.id} artifact={artifact} />
-            ))}
-          </div>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
-function ChatGptArtifactPairs({
-  run,
-  artifacts,
-  input,
-  onOpenDataFolder
-}: {
-  run: RunRecord;
-  artifacts: ArtifactRecord[];
-  input: ChatGptRunInputModel;
-  onOpenDataFolder(): void | Promise<unknown>;
-}): JSX.Element {
-  const pairing = buildChatGptArtifactPairing(input, artifacts);
-  if (input.kind === "prompt") {
-    const pair = pairing.pairs[0];
-    return (
-      <div className="space-y-4">
-        <article className="rounded-md border border-border bg-background p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div className="text-sm font-medium">Prompt</div>
-              <div className="text-xs text-muted-foreground">Single generated image</div>
-            </div>
-            <Badge className={cn("border", toneClassNames.neutral)}>
-              {pair?.primaryOutput ? "1 result" : "Missing result"}
-            </Badge>
-          </div>
+      {presentation.title ? <h4 className="text-sm font-semibold">{presentation.title}</h4> : null}
+      {presentation.groups.map((group, groupIndex) => (
+        <section key={group.id ?? groupIndex} className="space-y-3 rounded-md border border-border bg-background p-4">
+          {group.title ? <h4 className="text-sm font-semibold">{group.title}</h4> : null}
+          {group.description ? <p className="text-sm text-muted-foreground">{group.description}</p> : null}
           <div className="grid gap-4 lg:grid-cols-2">
-            <div className="space-y-3">
-              <div className="text-xs font-medium text-muted-foreground">Prompt sent to GPT</div>
-              <div className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">{input.prompt}</div>
-            </div>
-            <div className="space-y-3">
-              <div className="text-xs font-medium text-muted-foreground">GPT result</div>
-              {pair?.primaryOutput ? (
-                <OutputImagePreview artifact={pair.primaryOutput} />
-              ) : (
-                <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
-                  No output artifact is paired with this prompt yet.
-                </div>
-              )}
-            </div>
-          </div>
-        </article>
-
-        {pairing.otherArtifacts.length > 0 ? (
-          <div className="space-y-3">
-            <div className="flex justify-end">
-              <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run.runDir}>
-                <FolderOpen className="h-4 w-4" />
-                Data folder
-              </Button>
-            </div>
-            <h4 className="text-sm font-semibold">Other artifacts</h4>
-            <div className="grid gap-3 lg:grid-cols-2">
-              {pairing.otherArtifacts.map((artifact) => (
-                <ArtifactPreview key={artifact.id} artifact={artifact} />
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (input.kind === "sequence") {
-    const sourceImage = input.sourceImages[0] ?? "";
-    const setupPrompt = chatGptSequenceSetupPrompt(input.masterPrompt, input.masterPromptSuffix);
-    return (
-      <div className="space-y-4">
-        <div className="rounded-md border border-border bg-background p-4">
-          <h4 className="text-sm font-semibold">GPT sequence context</h4>
-          <div className="mt-3 space-y-3">
-            <div>
-              <div className="mb-1 text-xs font-medium text-muted-foreground">Setup prompt sent first</div>
-              <div className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">
-                {setupPrompt || "No setup prompt was sent."}
-              </div>
-            </div>
-            <div>
-              <div className="mb-2 text-xs font-medium text-muted-foreground">Source image</div>
-              {sourceImage ? (
-                <InputImagePreview runId={run.id} field="sourceImages" index={0} filePath={sourceImage} />
-              ) : (
-                <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No source image was recorded.</div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          <h4 className="text-sm font-semibold">Prompt sequence and generated results</h4>
-          {pairing.pairs.map((pair) => {
-            const previousOutput = pair.index > 0 ? pairing.pairs[pair.index - 1]?.primaryOutput ?? null : null;
-            return (
-              <article key={`${pair.prompt}-${pair.index}`} className="rounded-md border border-border bg-background p-4">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-medium">Prompt {pair.index + 1}</div>
-                    <div className="text-xs text-muted-foreground">{pair.index === 0 ? fileName(sourceImage) : "Previous generated result"}</div>
-                  </div>
-                  <Badge className={cn("border", toneClassNames.neutral)}>
-                    {pair.primaryOutput ? "1 result" : "Missing result"}
-                  </Badge>
-                </div>
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="space-y-3">
-                    <div className="text-xs font-medium text-muted-foreground">Input to GPT</div>
-                    {pair.index === 0 ? (
-                      <InputImagePreview runId={run.id} field="sourceImages" index={0} filePath={sourceImage} />
-                    ) : previousOutput ? (
-                      <OutputImagePreview artifact={previousOutput} />
-                    ) : (
-                      <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
-                        Previous output is not available yet.
-                      </div>
-                    )}
-                    <div>
-                      <div className="mb-1 text-xs font-medium text-muted-foreground">Prompt paired with this input</div>
-                      <div className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">{pair.prompt}</div>
-                    </div>
-                  </div>
-                  <div className="space-y-3">
-                    <div className="text-xs font-medium text-muted-foreground">GPT result</div>
-                    {pair.primaryOutput ? (
-                      <OutputImagePreview artifact={pair.primaryOutput} />
-                    ) : (
-                      <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
-                        No output artifact is paired with this prompt yet.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-
-        {pairing.otherArtifacts.length > 0 ? (
-          <div className="space-y-3">
-            <div className="flex justify-end">
-              <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run.runDir}>
-                <FolderOpen className="h-4 w-4" />
-                Data folder
-              </Button>
-            </div>
-            <h4 className="text-sm font-semibold">Other artifacts</h4>
-            <div className="grid gap-3 lg:grid-cols-2">
-              {pairing.otherArtifacts.map((artifact) => (
-                <ArtifactPreview key={artifact.id} artifact={artifact} />
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-md border border-border bg-background p-4">
-        <h4 className="text-sm font-semibold">GPT setup context</h4>
-        <div className="mt-3 space-y-3">
-          <div>
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Master prompt sent first</div>
-            <div className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">
-              {input.masterPrompt || "No master prompt recorded."}
-            </div>
-          </div>
-          <div>
-            <div className="mb-2 text-xs font-medium text-muted-foreground">Reference images sent with setup</div>
-            {input.referenceImages.length === 0 ? (
-              <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No reference images were sent.</div>
-            ) : (
-              <div className="grid gap-3 md:grid-cols-2">
-                {input.referenceImages.map((referenceImage, index) => (
-                  <InputImagePreview
-                    key={`${referenceImage}-${index}`}
-                    runId={run.id}
-                    field="referenceImages"
-                    index={index}
-                    filePath={referenceImage}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        <h4 className="text-sm font-semibold">Subject input and generated result pairs</h4>
-        {pairing.pairs.map((pair) => (
-          <article key={`${pair.subjectImage}-${pair.index}`} className="rounded-md border border-border bg-background p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="text-sm font-medium">Subject {pair.index + 1}</div>
-                <div className="text-xs text-muted-foreground">{fileName(pair.subjectImage ?? "")}</div>
-              </div>
-              <Badge className={cn("border", toneClassNames.neutral)}>
-                {pair.primaryOutput ? "1 result" : "Missing result"}
-              </Badge>
-            </div>
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="space-y-3">
-                <div className="text-xs font-medium text-muted-foreground">Input to GPT</div>
-                <InputImagePreview runId={run.id} field="subjectImages" index={pair.index} filePath={pair.subjectImage ?? ""} />
-                <div>
-                  <div className="mb-1 text-xs font-medium text-muted-foreground">Prompt paired with this input</div>
-                  <div className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">
-                    {input.subjectInstruction.trim() || "No per-subject text; this step sent the subject image after the setup prompt."}
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-3">
-                <div className="text-xs font-medium text-muted-foreground">GPT result</div>
-                {pair.primaryOutput ? (
-                  <OutputImagePreview artifact={pair.primaryOutput} />
-                ) : (
-                  <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">
-                    No output artifact is paired with this input yet.
-                  </div>
-                )}
-              </div>
-            </div>
-          </article>
-        ))}
-      </div>
-
-      {pairing.otherArtifacts.length > 0 ? (
-        <div className="space-y-3">
-          <div className="flex justify-end">
-            <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run.runDir}>
-              <FolderOpen className="h-4 w-4" />
-              Data folder
-            </Button>
-          </div>
-          <h4 className="text-sm font-semibold">Other artifacts</h4>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {pairing.otherArtifacts.map((artifact) => (
-              <ArtifactPreview key={artifact.id} artifact={artifact} />
+            {group.items.map((item, itemIndex) => (
+              <PresentationItemView key={itemIndex} run={run} artifacts={artifacts} item={item} />
             ))}
           </div>
-        </div>
-      ) : null}
+        </section>
+      ))}
     </div>
   );
+}
+
+function PresentationItemView({
+  run,
+  artifacts,
+  item
+}: {
+  run: RunRecord;
+  artifacts: ArtifactRecord[];
+  item: WorkflowPresentationItem;
+}): JSX.Element {
+  if (item.kind === "text") {
+    return (
+      <div className="space-y-2">
+        {item.label ? <div className="text-xs font-medium text-muted-foreground">{item.label}</div> : null}
+        <div className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">{item.value}</div>
+      </div>
+    );
+  }
+  if (item.kind === "inputFile") {
+    return <InputImagePreview runId={run.id} field={item.field} index={item.index ?? 0} filePath={item.path} label={item.label} />;
+  }
+  if (item.kind === "artifact") {
+    const artifact = artifacts.find((candidate) => candidate.id === item.artifactId);
+    if (!artifact) {
+      return <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">{item.label ?? "Artifact"} is not available.</div>;
+    }
+    if (item.preview === "model" && artifact.name.toLowerCase().endsWith(".obj")) {
+      return (
+        <div className="space-y-2">
+          {item.label ? <div className="text-xs font-medium text-muted-foreground">{item.label}</div> : null}
+          <ObjModelViewer artifact={artifact} />
+        </div>
+      );
+    }
+    if (item.preview === "image" || artifact.kind === "image") {
+      return (
+        <div className="space-y-2">
+          {item.label ? <div className="text-xs font-medium text-muted-foreground">{item.label}</div> : null}
+          <OutputImagePreview artifact={artifact} />
+        </div>
+      );
+    }
+    return <ArtifactPreview artifact={artifact} />;
+  }
+  if (item.kind === "pair") {
+    return (
+      <article className="space-y-3 rounded-md border border-border p-3 lg:col-span-2">
+        {item.label ? <div className="text-sm font-medium">{item.label}</div> : null}
+        <div className="grid gap-4 lg:grid-cols-2">
+          {item.left ? <PresentationItemView run={run} artifacts={artifacts} item={item.left} /> : null}
+          {item.right ? <PresentationItemView run={run} artifacts={artifacts} item={item.right} /> : null}
+        </div>
+      </article>
+    );
+  }
+  return (
+    <div className="grid gap-3 lg:col-span-2 lg:grid-cols-2">
+      {item.label ? <div className="text-sm font-medium lg:col-span-2">{item.label}</div> : null}
+      {item.items.map((child, index) => (
+        <PresentationItemView key={index} run={run} artifacts={artifacts} item={child} />
+      ))}
+    </div>
+  );
+}
+
+function getRunPresentation(output: unknown): WorkflowRunPresentation | null {
+  if (!output || typeof output !== "object") return null;
+  const presentation = (output as Record<string, unknown>).presentation;
+  if (!presentation || typeof presentation !== "object" || Array.isArray(presentation)) return null;
+  const groups = (presentation as Record<string, unknown>).groups;
+  if (!Array.isArray(groups)) return null;
+  return presentation as WorkflowRunPresentation;
+}
+
+function fileName(filePath: string): string {
+  return filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
+}
+
+function assignSelectorJson(currentJson: string, path: string[], selector: string): string {
+  const config = parseCalibrationJson(currentJson);
+  assignNestedValue(config, path, selector);
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
+
+function parseCalibrationJson(value: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) return {};
+  const parsed = JSON.parse(trimmed) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Calibration JSON must be an object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function assignNestedValue(target: Record<string, unknown>, path: string[], value: string): void {
+  let cursor = target;
+  for (const segment of path.slice(0, -1)) {
+    const existing = cursor[segment];
+    if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
+      cursor[segment] = {};
+    }
+    cursor = cursor[segment] as Record<string, unknown>;
+  }
+  cursor[path[path.length - 1]] = value;
 }
 
 function InputImagePreview({
   runId,
   field,
   index,
-  filePath
+  filePath,
+  label
 }: {
   runId: string;
-  field: "images" | "referenceImages" | "subjectImages" | "sourceImages" | HunyuanViewField;
+  field: string;
   index: number;
   filePath: string;
+  label?: string;
 }): JSX.Element {
   const [fileUrl, setFileUrl] = useState("");
   const [failed, setFailed] = useState(false);
@@ -2704,6 +2354,7 @@ function InputImagePreview({
   return (
     <div className="rounded-md border border-border bg-card p-3">
       <div className="mb-2 min-w-0">
+        {label ? <div className="mb-1 text-xs font-medium text-muted-foreground">{label}</div> : null}
         <div className="truncate text-xs font-medium">{fileName(filePath)}</div>
         <div className="truncate text-xs text-muted-foreground" title={filePath}>
           {filePath}
@@ -2763,143 +2414,18 @@ function OutputImagePreview({ artifact }: { artifact: ArtifactRecord }): JSX.Ele
   );
 }
 
-function HunyuanWorkflowFields({
-  viewFiles,
-  prompt,
-  modelFaceCount,
-  retopologyType,
-  generateTexture,
-  autoRig,
-  exportFormat,
-  selectorsJson,
-  onChooseView,
-  onClearView,
-  onPromptChange,
-  onModelFaceCountChange,
-  onRetopologyTypeChange,
-  onGenerateTextureChange,
-  onAutoRigChange,
-  onExportFormatChange,
-  onSelectorsJsonChange
-}: {
-  viewFiles: HunyuanViewFiles;
-  prompt: string;
-  modelFaceCount: HunyuanFaceCount;
-  retopologyType: HunyuanRetopologyType;
-  generateTexture: boolean;
-  autoRig: boolean;
-  exportFormat: HunyuanExportFormat;
-  selectorsJson: string;
-  onChooseView(field: HunyuanViewField, title: string): void;
-  onClearView(field: HunyuanViewField): void;
-  onPromptChange(value: string): void;
-  onModelFaceCountChange(value: HunyuanFaceCount): void;
-  onRetopologyTypeChange(value: HunyuanRetopologyType): void;
-  onGenerateTextureChange(value: boolean): void;
-  onAutoRigChange(value: boolean): void;
-  onExportFormatChange(value: HunyuanExportFormat): void;
-  onSelectorsJsonChange(value: string): void;
-}): JSX.Element {
-  return (
-    <>
-      <div className="space-y-2">
-        <div className="grid gap-3 sm:grid-cols-2">
-          {HUNYUAN_VIEW_FIELDS.map((field) => (
-            <ImagePicker
-              key={field.field}
-              label={`${field.label}${field.required ? " *" : ""}`}
-              chooseLabel={field.chooseLabel}
-              files={viewFiles[field.field]}
-              emptyText={field.required ? "Required front view" : "No image selected"}
-              onChoose={() => onChooseView(field.field, `${field.chooseLabel} image`)}
-              onClear={() => onClearView(field.field)}
-            />
-          ))}
-        </div>
-      </div>
-      <div className="space-y-1.5">
-        <Label>Prompt</Label>
-        <Textarea
-          className="min-h-12 py-1.5"
-          value={prompt}
-          onChange={(event) => onPromptChange(event.target.value)}
-          placeholder="Optional model prompt"
-        />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="space-y-1.5">
-          <Label>Model faces</Label>
-          <select
-            value={modelFaceCount}
-            onChange={(event) => onModelFaceCountChange(event.target.value as HunyuanFaceCount)}
-            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-          >
-            {HUNYUAN_FACE_COUNTS.map((count) => (
-              <option key={count} value={count}>
-                {count}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="space-y-1.5">
-          <Label>Retopology</Label>
-          <select
-            value={retopologyType}
-            onChange={(event) => onRetopologyTypeChange(event.target.value as HunyuanRetopologyType)}
-            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-          >
-            <option value="quad">Quad</option>
-            <option value="triangle">Triangle</option>
-          </select>
-        </div>
-        <div className="space-y-1.5">
-          <Label>Export</Label>
-          <select
-            value={exportFormat}
-            onChange={(event) => onExportFormatChange(event.target.value as HunyuanExportFormat)}
-            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-          >
-            {HUNYUAN_EXPORT_FORMATS.map((format) => (
-              <option key={format} value={format}>
-                {format.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-4 text-sm">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={generateTexture} onChange={(event) => onGenerateTextureChange(event.target.checked)} />
-          Generate texture
-        </label>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={autoRig} onChange={(event) => onAutoRigChange(event.target.checked)} />
-          Auto-rig
-        </label>
-      </div>
-      <div className="space-y-1.5">
-        <Label>Hunyuan selector config</Label>
-        <Textarea
-          className="min-h-40 font-mono text-xs"
-          value={selectorsJson}
-          onChange={(event) => onSelectorsJsonChange(event.target.value)}
-          spellCheck={false}
-        />
-      </div>
-    </>
-  );
-}
-
 function WorkflowLabPanel({
   extensionClients,
   hasProject,
   apiBaseUrl,
-  onApplyHunyuanSelectorConfig
+  workflows,
+  onUseCalibrationPreset
 }: {
   extensionClients: SystemInfo["extension"]["connectedClients"];
   hasProject: boolean;
   apiBaseUrl: string;
-  onApplyHunyuanSelectorConfig(selectorsJson: string): void;
+  workflows: WorkflowSummary[];
+  onUseCalibrationPreset(workflowId: string, fieldName: string, value: unknown): void;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<"playwright" | "extension">("extension");
@@ -2919,8 +2445,23 @@ function WorkflowLabPanel({
   const [waitMinImages, setWaitMinImages] = useState(1);
   const [labError, setLabError] = useState<string | null>(null);
   const [waitMessage, setWaitMessage] = useState<string | null>(null);
-  const [hunyuanSelectorTarget, setHunyuanSelectorTarget] = useState(HUNYUAN_SELECTOR_ASSIGNMENTS[0].key);
-  const [hunyuanSelectorJson, setHunyuanSelectorJson] = useState(DEFAULT_HUNYUAN_SELECTOR_CONFIG_JSON);
+  const workflowsWithCalibration = useMemo(
+    () => workflows.filter((workflow) => (workflow.manifest.calibrationPresets?.length ?? 0) > 0),
+    [workflows]
+  );
+  const [calibrationWorkflowId, setCalibrationWorkflowId] = useState("");
+  const [calibrationPresetId, setCalibrationPresetId] = useState("");
+  const [calibrationAssignmentKey, setCalibrationAssignmentKey] = useState("");
+  const [calibrationJson, setCalibrationJson] = useState("");
+  const calibrationWorkflow = workflowsWithCalibration.find((workflow) => workflow.manifest.id === calibrationWorkflowId) ?? workflowsWithCalibration[0] ?? null;
+  const calibrationPreset =
+    calibrationWorkflow?.manifest.calibrationPresets?.find((preset) => preset.id === calibrationPresetId) ??
+    calibrationWorkflow?.manifest.calibrationPresets?.[0] ??
+    null;
+  const calibrationAssignment =
+    calibrationPreset?.assignments.find((assignment) => assignment.key === calibrationAssignmentKey) ??
+    calibrationPreset?.assignments[0] ??
+    null;
 
   const compatibleClients = extensionClients.filter((client) => client.compatible);
   const sessionsQuery = useQuery({
@@ -2946,6 +2487,23 @@ function WorkflowLabPanel({
     if (mode !== "playwright") return;
     if (!profileName.trim()) setProfileName(profileWorkflowId === "workflow-lab" ? "lab" : "default");
   }, [mode, profileName, profileWorkflowId]);
+
+  useEffect(() => {
+    if (!calibrationWorkflow) return;
+    setCalibrationWorkflowId((current) => (current && workflowsWithCalibration.some((workflow) => workflow.manifest.id === current) ? current : calibrationWorkflow.manifest.id));
+  }, [calibrationWorkflow, workflowsWithCalibration]);
+
+  useEffect(() => {
+    if (!calibrationPreset) {
+      setCalibrationPresetId("");
+      setCalibrationAssignmentKey("");
+      setCalibrationJson("");
+      return;
+    }
+    setCalibrationPresetId((current) => (current && calibrationWorkflow?.manifest.calibrationPresets?.some((preset) => preset.id === current) ? current : calibrationPreset.id));
+    setCalibrationAssignmentKey((current) => (current && calibrationPreset.assignments.some((assignment) => assignment.key === current) ? current : calibrationPreset.assignments[0]?.key ?? ""));
+    setCalibrationJson((current) => current || stringifyJsonFieldValue(calibrationPreset.defaultValue ?? {}));
+  }, [calibrationPreset, calibrationWorkflow]);
 
   const createSessionMutation = useMutation({
     mutationFn: () =>
@@ -3078,20 +2636,21 @@ function WorkflowLabPanel({
     if (files.length > 0) setActionFiles(files);
   }
 
-  function assignCurrentSelectorToHunyuanPreset(): void {
+  function assignCurrentSelectorToCalibrationPreset(): void {
     try {
       const trimmedSelector = selector.trim();
       if (!trimmedSelector) throw new Error("Choose a probe selector before assigning it.");
-      setHunyuanSelectorJson((current) => assignHunyuanSelectorJson(current, hunyuanSelectorTarget, trimmedSelector));
+      if (!calibrationAssignment) throw new Error("Choose a calibration target before assigning a selector.");
+      setCalibrationJson((current) => assignSelectorJson(current, calibrationAssignment.path, trimmedSelector));
       setLabError(null);
     } catch (error) {
       setLabError(error instanceof Error ? error.message : String(error));
     }
   }
 
-  async function copyHunyuanSelectorPreset(): Promise<void> {
+  async function copyCalibrationPreset(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(hunyuanSelectorJson);
+      await navigator.clipboard.writeText(calibrationJson);
       setLabError(null);
     } catch (error) {
       setLabError(error instanceof Error ? error.message : String(error));
@@ -3319,42 +2878,89 @@ function WorkflowLabPanel({
           <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">Start a lab session to inspect and probe a page.</div>
         )}
 
-        <div className="rounded-md border border-border bg-background p-3">
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="min-w-72 flex-1 space-y-2">
-              <Label>Hunyuan selector target</Label>
-              <select
-                value={hunyuanSelectorTarget}
-                onChange={(event) => setHunyuanSelectorTarget(event.target.value)}
-                className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+        {workflowsWithCalibration.length > 0 ? (
+          <div className="rounded-md border border-border bg-background p-3">
+            <div className="grid gap-2 lg:grid-cols-[1fr_1fr_1.2fr_auto_auto_auto] lg:items-end">
+              <div className="space-y-2">
+                <Label>Workflow</Label>
+                <select
+                  value={calibrationWorkflow?.manifest.id ?? ""}
+                  onChange={(event) => {
+                    setCalibrationWorkflowId(event.target.value);
+                    setCalibrationPresetId("");
+                    setCalibrationJson("");
+                  }}
+                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+                >
+                  {workflowsWithCalibration.map((workflow) => (
+                    <option key={workflow.manifest.id} value={workflow.manifest.id}>
+                      {workflow.manifest.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label>Preset</Label>
+                <select
+                  value={calibrationPreset?.id ?? ""}
+                  onChange={(event) => {
+                    setCalibrationPresetId(event.target.value);
+                    const nextPreset = calibrationWorkflow?.manifest.calibrationPresets?.find((preset) => preset.id === event.target.value);
+                    setCalibrationJson(stringifyJsonFieldValue(nextPreset?.defaultValue ?? {}));
+                  }}
+                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+                >
+                  {(calibrationWorkflow?.manifest.calibrationPresets ?? []).map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label>Selector target</Label>
+                <select
+                  value={calibrationAssignment?.key ?? ""}
+                  onChange={(event) => setCalibrationAssignmentKey(event.target.value)}
+                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+                >
+                  {(calibrationPreset?.assignments ?? []).map((assignment) => (
+                    <option key={assignment.key} value={assignment.key}>
+                      {assignment.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={assignCurrentSelectorToCalibrationPreset}>
+                <Plus className="h-4 w-4" />
+                Assign
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => void copyCalibrationPreset()}>
+                <Copy className="h-4 w-4" />
+                Copy JSON
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!calibrationWorkflow || !calibrationPreset}
+                onClick={() => {
+                  if (!calibrationWorkflow || !calibrationPreset) return;
+                  onUseCalibrationPreset(calibrationWorkflow.manifest.id, calibrationPreset.targetField, parseCalibrationJson(calibrationJson));
+                }}
               >
-                {HUNYUAN_SELECTOR_ASSIGNMENTS.map((assignment) => (
-                  <option key={assignment.key} value={assignment.key}>
-                    {assignment.label}
-                  </option>
-                ))}
-              </select>
+                <CheckCircle2 className="h-4 w-4" />
+                Use in run
+              </Button>
             </div>
-            <Button type="button" variant="outline" size="sm" onClick={assignCurrentSelectorToHunyuanPreset}>
-              <Plus className="h-4 w-4" />
-              Assign
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => void copyHunyuanSelectorPreset()}>
-              <Copy className="h-4 w-4" />
-              Copy JSON
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => onApplyHunyuanSelectorConfig(hunyuanSelectorJson)}>
-              <CheckCircle2 className="h-4 w-4" />
-              Use in run
-            </Button>
+            <Textarea
+              className="mt-3 min-h-32 font-mono text-xs"
+              value={calibrationJson}
+              onChange={(event) => setCalibrationJson(event.target.value)}
+              spellCheck={false}
+            />
           </div>
-          <Textarea
-            className="mt-3 min-h-32 font-mono text-xs"
-            value={hunyuanSelectorJson}
-            onChange={(event) => setHunyuanSelectorJson(event.target.value)}
-            spellCheck={false}
-          />
-        </div>
+        ) : null}
 
         {labError ? (
           <div className={cn("flex gap-2 rounded-md border p-3 text-sm", toneClassNames.danger)}>
@@ -3906,23 +3512,29 @@ function RunRow({
   );
 }
 
-function PromptSequenceEditor({
-  prompts,
+function StringListEditor({
+  label,
+  values,
+  placeholder,
+  help,
   onChange
 }: {
-  prompts: string[];
-  onChange(prompts: string[]): void;
+  label: string;
+  values: string[];
+  placeholder?: string;
+  help?: string;
+  onChange(values: string[]): void;
 }): JSX.Element {
-  const updatePrompt = (index: number, value: string): void => {
-    onChange(prompts.map((prompt, promptIndex) => (promptIndex === index ? value : prompt)));
+  const updateValue = (index: number, value: string): void => {
+    onChange(values.map((item, itemIndex) => (itemIndex === index ? value : item)));
   };
-  const removePrompt = (index: number): void => {
-    onChange(prompts.filter((_prompt, promptIndex) => promptIndex !== index));
+  const removeValue = (index: number): void => {
+    onChange(values.filter((_item, itemIndex) => itemIndex !== index));
   };
-  const movePrompt = (index: number, direction: -1 | 1): void => {
+  const moveValue = (index: number, direction: -1 | 1): void => {
     const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= prompts.length) return;
-    const next = [...prompts];
+    if (nextIndex < 0 || nextIndex >= values.length) return;
+    const next = [...values];
     [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
     onChange(next);
   };
@@ -3930,28 +3542,29 @@ function PromptSequenceEditor({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-3">
-        <Label>Prompt sequence</Label>
-        <Button type="button" variant="outline" size="sm" onClick={() => onChange([...prompts, ""])}>
+        <Label>{label}</Label>
+        <Button type="button" variant="outline" size="sm" onClick={() => onChange([...values, ""])}>
           <Plus className="h-4 w-4" />
-          Add prompt
+          Add item
         </Button>
       </div>
-      {prompts.length === 0 ? (
-        <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No prompts added.</div>
+      {help ? <div className="text-xs text-muted-foreground">{help}</div> : null}
+      {values.length === 0 ? (
+        <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No items added.</div>
       ) : (
         <div className="space-y-2">
-          {prompts.map((prompt, index) => (
+          {values.map((value, index) => (
             <div key={index} className="rounded-md border border-border bg-background p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-xs font-medium text-muted-foreground">Prompt {index + 1}</div>
+                <div className="text-xs font-medium text-muted-foreground">Item {index + 1}</div>
                 <div className="flex shrink-0 gap-1">
                   <Button
                     type="button"
                     variant="outline"
                     size="icon"
-                    onClick={() => movePrompt(index, -1)}
+                    onClick={() => moveValue(index, -1)}
                     disabled={index === 0}
-                    title="Move prompt up"
+                    title="Move item up"
                   >
                     <ArrowUp className="h-4 w-4" />
                   </Button>
@@ -3959,22 +3572,22 @@ function PromptSequenceEditor({
                     type="button"
                     variant="outline"
                     size="icon"
-                    onClick={() => movePrompt(index, 1)}
-                    disabled={index === prompts.length - 1}
-                    title="Move prompt down"
+                    onClick={() => moveValue(index, 1)}
+                    disabled={index === values.length - 1}
+                    title="Move item down"
                   >
                     <ArrowDown className="h-4 w-4" />
                   </Button>
-                  <Button type="button" variant="outline" size="icon" onClick={() => removePrompt(index)} title="Remove prompt">
+                  <Button type="button" variant="outline" size="icon" onClick={() => removeValue(index)} title="Remove item">
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
               <Textarea
                 className="min-h-16 py-1.5"
-                value={prompt}
-                onChange={(event) => updatePrompt(index, event.target.value)}
-                placeholder="Describe the next edit in the chain."
+                value={value}
+                onChange={(event) => updateValue(index, event.target.value)}
+                placeholder={placeholder}
               />
             </div>
           ))}
