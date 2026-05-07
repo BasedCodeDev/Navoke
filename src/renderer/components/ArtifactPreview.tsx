@@ -3,8 +3,8 @@ import { Box, Download, FileJson, ImageIcon } from "lucide-react";
 import { artifactDownloadUrl, artifactUrl, type ArtifactRecord } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ObjModelViewer } from "@/components/ObjModelViewer";
-import { isObjModelArtifact } from "@/lib/modelPreview";
+import { ModelViewer } from "@/components/ModelViewer";
+import { isPreviewableModelArtifact } from "@/lib/modelPreview";
 
 export function ArtifactPreview({ artifact }: { artifact: ArtifactRecord }): JSX.Element {
   const [fileUrl, setFileUrl] = useState("");
@@ -36,8 +36,8 @@ export function ArtifactPreview({ artifact }: { artifact: ArtifactRecord }): JSX
           <img src={fileUrl} alt={artifact.name} className="max-h-80 w-full rounded-md object-contain bg-muted" />
         ) : null}
         {artifact.kind === "model" ? (
-          isObjModelArtifact(artifact) ? (
-            <ObjModelViewer artifact={artifact} />
+          isPreviewableModelArtifact(artifact) ? (
+            <ModelViewer artifact={artifact} />
           ) : (
             <div className="rounded-md bg-muted p-4 text-sm text-muted-foreground">
               MODEL artifact - {Math.round(artifact.size / 1024)} KB

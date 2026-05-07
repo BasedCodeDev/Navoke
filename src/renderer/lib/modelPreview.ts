@@ -8,6 +8,8 @@ interface PreviewMaterial extends THREE.Material {
   roughness?: number;
 }
 
+export type PreviewableModelFormat = "obj" | "fbx";
+
 export function waitForPreviewAssets(manager: THREE.LoadingManager, timeoutMs = 20_000): Promise<void> {
   return new Promise((resolve, reject) => {
     let sawLoadingWork = false;
@@ -60,16 +62,37 @@ export async function waitForPreviewTextures(object: THREE.Object3D, timeoutMs =
   await waitForPreviewFrame();
 }
 
-export function isObjModelArtifact(artifact: { name: string; metadata?: unknown }): boolean {
-  const metadata = getModelArtifactMetadata(artifact.metadata);
-  return artifact.name.toLowerCase().endsWith(".obj") || metadata.modelFormat === "obj" || Boolean(metadata.objFileName);
+export function isPreviewableModelArtifact(artifact: { name: string; metadata?: unknown }): boolean {
+  return modelArtifactFormat(artifact) !== null;
 }
 
-export function getModelArtifactMetadata(metadata: unknown): { modelFormat?: string; objFileName?: string; mtlFileName?: string } {
+export function isObjModelArtifact(artifact: { name: string; metadata?: unknown }): boolean {
+  return modelArtifactFormat(artifact) === "obj";
+}
+
+export function modelArtifactFormat(artifact: { name: string; metadata?: unknown }): PreviewableModelFormat | null {
+  const metadata = getModelArtifactMetadata(artifact.metadata);
+  const modelFormat = metadata.modelFormat?.toLowerCase();
+  if (modelFormat === "obj" || metadata.objFileName) return "obj";
+  if (modelFormat === "fbx") return "fbx";
+
+  const fileName = (metadata.modelFileName ?? artifact.name).toLowerCase();
+  if (fileName.endsWith(".obj")) return "obj";
+  if (fileName.endsWith(".fbx")) return "fbx";
+  return null;
+}
+
+export function getModelArtifactMetadata(metadata: unknown): {
+  modelFormat?: string;
+  modelFileName?: string;
+  objFileName?: string;
+  mtlFileName?: string;
+} {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
   const record = metadata as Record<string, unknown>;
   return {
     ...(typeof record.modelFormat === "string" ? { modelFormat: record.modelFormat } : {}),
+    ...(typeof record.modelFileName === "string" ? { modelFileName: record.modelFileName } : {}),
     ...(typeof record.objFileName === "string" ? { objFileName: record.objFileName } : {}),
     ...(typeof record.mtlFileName === "string" ? { mtlFileName: record.mtlFileName } : {})
   };

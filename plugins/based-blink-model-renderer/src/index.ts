@@ -952,7 +952,7 @@ function renderPresentation(input: {
             kind: "artifact",
             label: "Prepared model",
             artifactId: input.modelArtifactId,
-            preview: input.modelFormat === "obj" ? "model" : "default"
+            preview: "model"
           },
           { kind: "text", label: "Bounds", value: boundsText(input.bounds) },
           { kind: "artifact", label: "Render metadata", artifactId: input.metadataArtifactId }
@@ -981,7 +981,7 @@ function boundsPresentation(input: {
             kind: "artifact",
             label: "Prepared model",
             artifactId: input.modelArtifactId,
-            preview: input.modelFormat === "obj" ? "model" : "default"
+            preview: "model"
           }
         ]
       }

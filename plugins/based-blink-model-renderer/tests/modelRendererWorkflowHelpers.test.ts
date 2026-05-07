@@ -5,6 +5,7 @@ import zlib from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createRuntimePaths } from "../../../src/main/runtime/paths";
+import type { ArtifactRecord, WorkflowContext } from "../../../src/main/runtime/types";
 import { createWorkflowSdk } from "../../../src/main/workflowSdk";
 import {
   MODEL_GEOMETRY_BOUNDS_WORKFLOW_ID,
@@ -215,7 +216,109 @@ describe("model renderer output images", () => {
     expect(color.maxChroma).toBeGreaterThan(80);
     expect(color.coloredForegroundRatio).toBeGreaterThan(0.2);
   }, 60_000);
+
+  it("renders FBX assets with visible color, reads bounds, and accepts single-FBX ZIPs", async () => {
+    const tempDir = tempDirPath();
+    const fbxPath = path.join(tempDir, "color-plane.fbx");
+    const fbxZipPath = path.join(tempDir, "color-plane.zip");
+    const sdk = createWorkflowSdk();
+    const workflows = createWorkflows(sdk);
+    const renderWorkflow = workflows.find((candidate) => candidate.manifest.id === MODEL_RENDER_IMAGE_WORKFLOW_ID);
+    const boundsWorkflow = workflows.find((candidate) => candidate.manifest.id === MODEL_GEOMETRY_BOUNDS_WORKFLOW_ID);
+    if (!renderWorkflow) throw new Error("Model render workflow not found.");
+    if (!boundsWorkflow) throw new Error("Model geometry bounds workflow not found.");
+
+    fs.writeFileSync(fbxPath, createColorPlaneFbx());
+    writeZip(fbxZipPath, { "color-plane.fbx": createColorPlaneFbx() });
+
+    const boundsRun = createTestWorkflowContext(tempDir, "fbx-bounds");
+    const boundsOutput = (await boundsWorkflow.run(boundsWorkflow.inputSchema.parse({ modelFile: fbxPath }), boundsRun.context)) as {
+      bounds: ModelBounds;
+    };
+
+    expect(boundsOutput.bounds.modelFormat).toBe("fbx");
+    expect(boundsOutput.bounds.meshCount).toBe(1);
+    expect(boundsOutput.bounds.vertexCount).toBe(6);
+    expect(boundsOutput.bounds.size.x).toBeCloseTo(1);
+    expect(boundsOutput.bounds.size.y).toBeCloseTo(1);
+    expect(boundsOutput.bounds.boundingSphere.radius).toBeGreaterThan(0);
+
+    const zipBoundsRun = createTestWorkflowContext(tempDir, "fbx-zip-bounds");
+    const zipBoundsOutput = (await boundsWorkflow.run(boundsWorkflow.inputSchema.parse({ modelFile: fbxZipPath }), zipBoundsRun.context)) as {
+      bounds: ModelBounds;
+    };
+    expect(zipBoundsOutput.bounds.modelFormat).toBe("fbx");
+    expect(zipBoundsOutput.bounds.meshCount).toBe(1);
+    expect(zipBoundsOutput.bounds.vertexCount).toBe(6);
+
+    const renderRun = createTestWorkflowContext(tempDir, "fbx-render");
+    await renderWorkflow.run(
+      renderWorkflow.inputSchema.parse({
+        modelFile: fbxPath,
+        rotationX: 0,
+        rotationY: 0,
+        rotationZ: 0,
+        distance: 3.2,
+        width: 256,
+        height: 256,
+        backgroundColor: "#ffffff"
+      }),
+      renderRun.context
+    );
+
+    const imageArtifact = renderRun.artifacts.find((artifact) => artifact.kind === "image" && artifact.name === "model-render.png");
+    if (!imageArtifact) throw new Error("FBX model render image artifact was not created.");
+    const color = analyzePngColor(fs.readFileSync(imageArtifact.path));
+
+    expect(color.foregroundPixels).toBeGreaterThan(1_000);
+    expect(color.maxChroma).toBeGreaterThan(50);
+    expect(color.coloredForegroundRatio).toBeGreaterThan(0.2);
+  }, 60_000);
 });
+
+function createTestWorkflowContext(tempDir: string, runId: string): { context: WorkflowContext; artifacts: ArtifactRecord[] } {
+  const runDir = path.join(tempDir, runId);
+  const inputDir = path.join(runDir, "inputs");
+  const artifactDir = path.join(runDir, "artifacts");
+  const projectDir = path.join(tempDir, "project");
+  fs.mkdirSync(inputDir, { recursive: true });
+  fs.mkdirSync(artifactDir, { recursive: true });
+  fs.mkdirSync(projectDir, { recursive: true });
+
+  const artifacts: ArtifactRecord[] = [];
+  const context: WorkflowContext = {
+    runId,
+    paths: createRuntimePaths(projectDir),
+    runDir,
+    inputDir,
+    artifactDir,
+    signal: new AbortController().signal,
+    previousOutput: null,
+    step: async () => undefined,
+    event: async () => undefined,
+    updateOutput: async () => undefined,
+    isPauseRequested: () => false,
+    pauseIfRequested: async () => undefined,
+    addArtifact: async (artifact) => {
+      const record: ArtifactRecord = {
+        id: `artifact-${artifacts.length + 1}`,
+        runId,
+        kind: artifact.kind,
+        name: artifact.name,
+        path: artifact.path,
+        mimeType: artifact.mimeType ?? null,
+        size: fs.existsSync(artifact.path) ? fs.statSync(artifact.path).size : 0,
+        metadata: artifact.metadata ?? null,
+        createdAt: new Date(0).toISOString()
+      };
+      artifacts.push(record);
+      return record;
+    },
+    waitForManualAction: async () => undefined
+  };
+
+  return { context, artifacts };
+}
 
 function fakeSdk(): Parameters<typeof createWorkflows>[0] {
   return {
@@ -245,6 +348,11 @@ function tempDirPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "blink-model-renderer-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function createColorPlaneFbx(): string {
+  // The fixture starts with whitespace because FBXLoader samples the opening bytes when distinguishing ASCII from binary FBX.
+  return fs.readFileSync(path.join(__dirname, "fixtures", "color-plane.fbx"), "utf8");
 }
 
 function createPng(width: number, height: number, pixels: Array<[number, number, number]>): Buffer {

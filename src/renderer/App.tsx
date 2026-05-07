@@ -115,9 +115,9 @@ import { isRecoverableFailedExtensionRun, resolveExtensionFocusTarget } from "@/
 import { resolveExtensionTabSelection } from "@/lib/extensionTabRouting";
 import { activeCliAgentRuns, isCliRun, runOriginCommand, runOriginLabel } from "@/lib/runOrigin";
 import { runArtifactCountChips } from "@/lib/runArtifactSummary";
-import { isObjModelArtifact } from "@/lib/modelPreview";
+import { isPreviewableModelArtifact } from "@/lib/modelPreview";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
-import { ObjModelViewer } from "@/components/ObjModelViewer";
+import { ModelViewer } from "@/components/ModelViewer";
 import { RunArtifactThumbnail } from "@/components/RunArtifactThumbnail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -2443,11 +2443,11 @@ function PresentationItemView({
     if (!artifact) {
       return <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">{item.label ?? "Artifact"} is not available.</div>;
     }
-    if (item.preview === "model" && isObjModelArtifact(artifact)) {
+    if (item.preview === "model" && isPreviewableModelArtifact(artifact)) {
       return (
         <div className="space-y-2">
           {item.label ? <div className="text-xs font-medium text-muted-foreground">{item.label}</div> : null}
-          <ObjModelViewer artifact={artifact} />
+          <ModelViewer artifact={artifact} />
         </div>
       );
     }

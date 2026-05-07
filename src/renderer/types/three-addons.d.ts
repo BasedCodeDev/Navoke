@@ -142,6 +142,14 @@ declare module "three/addons/loaders/MTLLoader.js" {
   }
 }
 
+declare module "three/addons/loaders/FBXLoader.js" {
+  import type { Group, Loader, LoadingManager } from "three";
+
+  export class FBXLoader extends Loader<Group> {
+    constructor(manager?: LoadingManager);
+  }
+}
+
 declare module "three/addons/loaders/OBJLoader.js" {
   import type { Group, Loader, LoadingManager } from "three";
   import type { MaterialCreator } from "three/addons/loaders/MTLLoader.js";

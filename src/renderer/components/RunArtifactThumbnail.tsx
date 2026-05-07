@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Box, ImageIcon } from "lucide-react";
 import * as THREE from "three";
+import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
 import { MTLLoader, type MaterialCreator } from "three/addons/loaders/MTLLoader.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { artifactAssetUrl, artifactUrl, type RunArtifactPreview } from "@/lib/api";
@@ -9,7 +10,8 @@ import {
   disposeMaterial,
   ensurePreviewGeometryNormals,
   getModelArtifactMetadata,
-  isObjModelArtifact,
+  isPreviewableModelArtifact,
+  modelArtifactFormat,
   normalizePreviewObject,
   preparePreviewMaterials,
   waitForPreviewAssets,
@@ -18,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 
 export function RunArtifactThumbnail({ artifact, className }: { artifact: RunArtifactPreview; className?: string }): JSX.Element {
-  if (artifact.kind === "model" && isObjModelArtifact(artifact)) return <StaticModelThumbnail artifact={artifact} className={className} />;
+  if (artifact.kind === "model" && isPreviewableModelArtifact(artifact)) return <StaticModelThumbnail artifact={artifact} className={className} />;
   if (artifact.kind === "model") return <ModelArtifactThumbnail artifact={artifact} className={className} />;
   return <ImageArtifactThumbnail artifact={artifact} className={className} />;
 }
@@ -109,7 +111,7 @@ function StaticModelThumbnail({ artifact, className }: { artifact: RunArtifactPr
     addPreviewLighting(scene, camera);
 
     setStatus("loading");
-    void loadObjArtifact(artifact).then(
+    void loadModelArtifact(artifact).then(
       (object) => {
         if (disposed) return;
         ensurePreviewGeometryNormals(object);
@@ -156,6 +158,13 @@ function StaticModelThumbnail({ artifact, className }: { artifact: RunArtifactPr
   );
 }
 
+async function loadModelArtifact(artifact: RunArtifactPreview): Promise<THREE.Group> {
+  const format = modelArtifactFormat(artifact);
+  if (format === "obj") return loadObjArtifact(artifact);
+  if (format === "fbx") return loadFbxArtifact(artifact);
+  throw new Error(`Unsupported model artifact: ${artifact.name}`);
+}
+
 async function loadObjArtifact(artifact: RunArtifactPreview): Promise<THREE.Group> {
   const metadata = getModelArtifactMetadata(artifact.metadata);
   const objUrl = metadata.objFileName ? await artifactAssetUrl(artifact.id, metadata.objFileName) : await artifactUrl(artifact.id);
@@ -175,6 +184,18 @@ async function loadObjArtifact(artifact: RunArtifactPreview): Promise<THREE.Grou
 
   const object = await new Promise<THREE.Group>((resolve, reject) => {
     objLoader.load(objUrl, resolve, undefined, reject);
+  });
+  await assetsLoaded;
+  await waitForPreviewTextures(object);
+  return object;
+}
+
+async function loadFbxArtifact(artifact: RunArtifactPreview): Promise<THREE.Group> {
+  const fbxUrl = await artifactUrl(artifact.id);
+  const manager = new THREE.LoadingManager();
+  const assetsLoaded = waitForPreviewAssets(manager);
+  const object = await new Promise<THREE.Group>((resolve, reject) => {
+    new FBXLoader(manager).load(fbxUrl, resolve, undefined, reject);
   });
   await assetsLoaded;
   await waitForPreviewTextures(object);

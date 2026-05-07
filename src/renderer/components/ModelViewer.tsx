@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
 import { MTLLoader, type MaterialCreator } from "three/addons/loaders/MTLLoader.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { artifactAssetUrl, artifactUrl, type ArtifactRecord } from "@/lib/api";
@@ -9,13 +10,14 @@ import {
   disposeMaterial,
   ensurePreviewGeometryNormals,
   getModelArtifactMetadata,
+  modelArtifactFormat,
   normalizePreviewObject,
   preparePreviewMaterials,
   waitForPreviewAssets,
   waitForPreviewTextures
 } from "@/lib/modelPreview";
 
-export function ObjModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.Element {
+export function ModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
@@ -62,7 +64,7 @@ export function ObjModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.
     };
     animate();
 
-    void loadObjArtifact(artifact).then(
+    void loadModelArtifact(artifact).then(
       (object) => {
         if (disposed) return;
         ensurePreviewGeometryNormals(object);
@@ -109,6 +111,13 @@ export function ObjModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.
   );
 }
 
+async function loadModelArtifact(artifact: ArtifactRecord): Promise<THREE.Group> {
+  const format = modelArtifactFormat(artifact);
+  if (format === "obj") return loadObjArtifact(artifact);
+  if (format === "fbx") return loadFbxArtifact(artifact);
+  throw new Error(`Unsupported model artifact: ${artifact.name}`);
+}
+
 async function loadObjArtifact(artifact: ArtifactRecord): Promise<THREE.Group> {
   const metadata = getModelArtifactMetadata(artifact.metadata);
   const objUrl = metadata.objFileName ? await artifactAssetUrl(artifact.id, metadata.objFileName) : await artifactUrl(artifact.id);
@@ -128,6 +137,18 @@ async function loadObjArtifact(artifact: ArtifactRecord): Promise<THREE.Group> {
 
   const object = await new Promise<THREE.Group>((resolve, reject) => {
     objLoader.load(objUrl, resolve, undefined, reject);
+  });
+  await assetsLoaded;
+  await waitForPreviewTextures(object);
+  return object;
+}
+
+async function loadFbxArtifact(artifact: ArtifactRecord): Promise<THREE.Group> {
+  const fbxUrl = await artifactUrl(artifact.id);
+  const manager = new THREE.LoadingManager();
+  const assetsLoaded = waitForPreviewAssets(manager);
+  const object = await new Promise<THREE.Group>((resolve, reject) => {
+    new FBXLoader(manager).load(fbxUrl, resolve, undefined, reject);
   });
   await assetsLoaded;
   await waitForPreviewTextures(object);
