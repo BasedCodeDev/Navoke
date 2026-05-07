@@ -1,0 +1,9 @@
+{
+  "id": "based-blink.model-renderer",
+  "name": "Based BLINK Model Renderer",
+  "version": "0.1.0",
+  "pluginApiVersion": "1",
+  "entrypoint": "dist/index.js",
+  "workflows": ["based-blink.model-renderer.render-image", "based-blink.model-renderer.geometry-bounds"],
+  "capabilities": ["filesystem.artifacts", "browser"]
+}

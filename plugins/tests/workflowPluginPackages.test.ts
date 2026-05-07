@@ -115,6 +115,58 @@ describe("workflow plugin packages", () => {
     ).toBe(true);
   });
 
+  it("loads the Model Renderer workflow package with render and bounds workflows", async () => {
+    const manager = new PluginManager(tempDir());
+    await manager.installFromPath(path.join(repoRoot, "plugins", "based-blink-model-renderer"));
+
+    expect(manager.listPlugins()[0]).toMatchObject({
+      pluginId: "based-blink.model-renderer",
+      version: "0.1.0",
+      status: "loaded",
+      capabilities: ["filesystem.artifacts", "browser"]
+    });
+    expect(manager.listWorkflowRegistrations().map((registration) => registration.definition.manifest.id)).toEqual([
+      "based-blink.model-renderer.render-image",
+      "based-blink.model-renderer.geometry-bounds"
+    ]);
+
+    const renderWorkflow = manager
+      .listWorkflowRegistrations()
+      .find((registration) => registration.definition.manifest.id === "based-blink.model-renderer.render-image")!.definition;
+    const boundsWorkflow = manager
+      .listWorkflowRegistrations()
+      .find((registration) => registration.definition.manifest.id === "based-blink.model-renderer.geometry-bounds")!.definition;
+
+    expect(renderWorkflow.manifest).toMatchObject({
+      title: "Model Render Image",
+      requiresBrowser: true,
+      outputKinds: ["image", "model", "json"]
+    });
+    expect(renderWorkflow.manifest.inputFields[0]).toMatchObject({
+      name: "modelFile",
+      type: "fileList",
+      fileValue: "single",
+      maxFiles: 1,
+      fileFilters: [
+        { name: "Models", extensions: ["obj", "fbx", "zip"] },
+        { name: "All files", extensions: ["*"] }
+      ]
+    });
+    const parsedRender = renderWorkflow.inputSchema.safeParse({ modelFile: "C:\\tmp\\model.zip" });
+    expect(parsedRender.success).toBe(true);
+    if (!parsedRender.success) throw new Error("Expected model render input defaults to parse.");
+    expect(parsedRender.data).toMatchObject({
+      rotationX: 0,
+      rotationY: 0,
+      rotationZ: 0,
+      distance: 3.2,
+      width: 1024,
+      height: 1024
+    });
+    expect(boundsWorkflow.inputSchema.safeParse({ modelFile: "C:\\tmp\\model.fbx" }).success).toBe(true);
+    expect(boundsWorkflow.inputSchema.safeParse({ modelFile: "C:\\tmp\\model.png" }).success).toBe(false);
+  });
+
   it("snapshots renamed plugin workflow metadata on new runs", async () => {
     const userDataDir = tempDir();
     const projectDir = tempDir();

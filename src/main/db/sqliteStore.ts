@@ -6,6 +6,8 @@ import { normalizeRunOrigin } from "../runtime/runOrigin";
 import type {
   ArtifactRecord,
   ArtifactKind,
+  RunArtifactSummary,
+  RunListRecord,
   RunOrigin,
   RunRecord,
   RunStatus,
@@ -18,6 +20,12 @@ function nowIso(): string {
 }
 
 const RUN_NUMBER_COUNTER_KEY = "runNumberCounter";
+const RUN_ARTIFACT_PREVIEW_LIMIT = 4;
+const VISUAL_ARTIFACT_KIND_PRIORITY: Partial<Record<ArtifactKind, number>> = {
+  image: 0,
+  model: 1,
+  screenshot: 2
+};
 
 function parseJson(value: unknown): unknown {
   if (typeof value !== "string" || value.length === 0) return null;
@@ -70,6 +78,39 @@ function rowToArtifact(row: Record<string, unknown>): ArtifactRecord {
     size: Number(row.size ?? 0),
     metadata: parseJson(row.metadata_json),
     createdAt: String(row.created_at)
+  };
+}
+
+function buildRunArtifactSummary(artifacts: ArtifactRecord[]): RunArtifactSummary {
+  const counts: Partial<Record<ArtifactKind, number>> = {};
+  for (const artifact of artifacts) {
+    counts[artifact.kind] = (counts[artifact.kind] ?? 0) + 1;
+  }
+
+  const visualArtifacts = artifacts
+    .filter((artifact) => VISUAL_ARTIFACT_KIND_PRIORITY[artifact.kind] !== undefined)
+    .sort((left, right) => {
+      const kindPriority = VISUAL_ARTIFACT_KIND_PRIORITY[left.kind]! - VISUAL_ARTIFACT_KIND_PRIORITY[right.kind]!;
+      if (kindPriority !== 0) return kindPriority;
+      return left.createdAt.localeCompare(right.createdAt);
+    });
+  const previews = visualArtifacts.slice(0, RUN_ARTIFACT_PREVIEW_LIMIT).map((artifact) => ({
+    id: artifact.id,
+    runId: artifact.runId,
+    kind: artifact.kind,
+    name: artifact.name,
+    mimeType: artifact.mimeType,
+    size: artifact.size,
+    metadata: artifact.metadata,
+    createdAt: artifact.createdAt
+  }));
+
+  return {
+    previews,
+    visualTotal: visualArtifacts.length,
+    hiddenVisualCount: Math.max(0, visualArtifacts.length - previews.length),
+    counts,
+    total: artifacts.length
   };
 }
 
@@ -162,6 +203,20 @@ export class SqliteStore {
 
   listRuns(): RunRecord[] {
     return this.all<Record<string, unknown>>("select * from runs order by run_number desc, created_at desc").map(rowToRun);
+  }
+
+  listRunsWithArtifactSummaries(): RunListRecord[] {
+    const runs = this.listRuns();
+    const artifactsByRunId = new Map<string, ArtifactRecord[]>();
+    for (const artifact of this.all<Record<string, unknown>>("select * from artifacts order by created_at asc").map(rowToArtifact)) {
+      const artifacts = artifactsByRunId.get(artifact.runId) ?? [];
+      artifacts.push(artifact);
+      artifactsByRunId.set(artifact.runId, artifacts);
+    }
+    return runs.map((run) => ({
+      ...run,
+      artifactSummary: buildRunArtifactSummary(artifactsByRunId.get(run.id) ?? [])
+    }));
   }
 
   nextRunNumber(): number {

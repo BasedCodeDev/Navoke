@@ -40,6 +40,7 @@ export function inferMimeType(filePath: string): string | null {
   if ([".glb"].includes(ext)) return "model/gltf-binary";
   if ([".gltf"].includes(ext)) return "model/gltf+json";
   if ([".obj"].includes(ext)) return "model/obj";
+  if ([".fbx"].includes(ext)) return "model/fbx";
   if ([".mtl"].includes(ext)) return "text/plain";
   if ([".json"].includes(ext)) return "application/json";
   if ([".zip"].includes(ext)) return "application/zip";

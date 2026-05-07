@@ -219,7 +219,7 @@ export class ApiServer {
     });
 
     app.get("/api/runs", (_req, res) => {
-      res.json(this.options.store.listRuns());
+      res.json(this.options.store.listRunsWithArtifactSummaries());
     });
 
     app.post("/api/runs", (req, res, next) => {

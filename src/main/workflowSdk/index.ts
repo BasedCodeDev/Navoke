@@ -5,6 +5,9 @@ import {
   stopTrace,
   timeoutMinutes
 } from "../automation/browserHarness";
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
 import {
   BLINK_EXTENSION_PROTOCOL_VERSION,
   extensionBridge,
@@ -25,6 +28,8 @@ import {
 } from "../runtime/paths";
 import { copyFileToDir, extractZip, fileSize, inferMimeType, safeBaseName, writeJson } from "../utils/files";
 import { sleep } from "../utils/sleep";
+
+const workflowSdkRequire = createRequire(__filename);
 
 export type {
   ArtifactKind,
@@ -79,6 +84,9 @@ export interface WorkflowSdk {
     startTrace: typeof startTrace;
     stopTrace: typeof stopTrace;
     timeoutMinutes: typeof timeoutMinutes;
+  };
+  packages: {
+    resolvePackageRoot(packageName: string): string;
   };
   extension: {
     browser: {
@@ -165,6 +173,9 @@ export function createWorkflowSdk(): WorkflowSdk {
       startTrace,
       stopTrace,
       timeoutMinutes
+    },
+    packages: {
+      resolvePackageRoot
     },
     extension: {
       browser: {
@@ -254,4 +265,19 @@ export function createWorkflowSdk(): WorkflowSdk {
     },
     sleep
   };
+}
+
+function resolvePackageRoot(packageName: string): string {
+  if (!/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+$/i.test(packageName)) {
+    throw new Error(`Invalid package name: ${packageName}`);
+  }
+
+  const entrypoint = workflowSdkRequire.resolve(packageName);
+  let current = path.dirname(entrypoint);
+  for (;;) {
+    if (fs.existsSync(path.join(current, "package.json"))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return path.dirname(entrypoint);
+    current = parent;
+  }
 }

@@ -95,6 +95,23 @@ export interface ArtifactRecord {
   createdAt: string;
 }
 
+export type RunArtifactPreview = Pick<
+  ArtifactRecord,
+  "id" | "runId" | "kind" | "name" | "mimeType" | "size" | "metadata" | "createdAt"
+>;
+
+export interface RunArtifactSummary {
+  previews: RunArtifactPreview[];
+  visualTotal: number;
+  hiddenVisualCount: number;
+  counts: Partial<Record<ArtifactKind, number>>;
+  total: number;
+}
+
+export interface RunListRecord extends RunRecord {
+  artifactSummary: RunArtifactSummary;
+}
+
 export interface WorkflowInputField {
   name: string;
   label: string;

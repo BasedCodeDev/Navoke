@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeImage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from "electron";
 import { ApiServer } from "./api/server";
 import { SqliteStore } from "./db/sqliteStore";
 import { extensionBridge } from "./extension/extensionBridge";
@@ -265,13 +265,6 @@ function resolveAppIconPath(): string | undefined {
   return resolveAssetPath(relativePath) ?? resolveAssetPath(APP_ICON_PNG_RELATIVE_PATH);
 }
 
-function resolveAppIcon(): Electron.NativeImage | undefined {
-  const appIconPath = resolveAppIconPath();
-  if (!appIconPath) return undefined;
-  const image = nativeImage.createFromPath(appIconPath);
-  return image.isEmpty() ? undefined : image;
-}
-
 function resolveAssetPath(relativePath: string): string | undefined {
   const candidates = [
     path.join(__dirname, "../renderer", relativePath),
@@ -283,7 +276,7 @@ function resolveAssetPath(relativePath: string): string | undefined {
 function createWindow(): BrowserWindow {
   if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
 
-  const appIcon = resolveAppIcon();
+  const appIconPath = resolveAppIconPath();
   const window = new BrowserWindow({
     title: "Based BLINK",
     width: 1440,
@@ -293,7 +286,7 @@ function createWindow(): BrowserWindow {
     frame: false,
     autoHideMenuBar: true,
     backgroundColor: "#f8fafc",
-    ...(appIcon ? { icon: appIcon } : {}),
+    ...(appIconPath ? { icon: appIconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -301,9 +294,6 @@ function createWindow(): BrowserWindow {
       sandbox: false
     }
   });
-  if (appIcon) {
-    window.setIcon(appIcon);
-  }
   mainWindow = window;
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;

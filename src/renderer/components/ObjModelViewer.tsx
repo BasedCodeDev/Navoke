@@ -4,6 +4,16 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { MTLLoader, type MaterialCreator } from "three/addons/loaders/MTLLoader.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { artifactAssetUrl, artifactUrl, type ArtifactRecord } from "@/lib/api";
+import {
+  addPreviewLighting,
+  disposeMaterial,
+  ensurePreviewGeometryNormals,
+  getModelArtifactMetadata,
+  normalizePreviewObject,
+  preparePreviewMaterials,
+  waitForPreviewAssets,
+  waitForPreviewTextures
+} from "@/lib/modelPreview";
 
 export function ObjModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -31,13 +41,7 @@ export function ObjModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.
     controls.enableDamping = true;
     controls.target.set(0, 0, 0);
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x606070, 2.2));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2.8);
-    keyLight.position.set(3, 4, 5);
-    scene.add(keyLight);
-    const fillLight = new THREE.DirectionalLight(0xffffff, 1.1);
-    fillLight.position.set(-4, 2, -3);
-    scene.add(fillLight);
+    addPreviewLighting(scene, camera);
 
     const resize = () => {
       const { width, height } = container.getBoundingClientRect();
@@ -61,7 +65,9 @@ export function ObjModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.
     void loadObjArtifact(artifact).then(
       (object) => {
         if (disposed) return;
-        normalizeObject(object);
+        ensurePreviewGeometryNormals(object);
+        normalizePreviewObject(object);
+        preparePreviewMaterials(object);
         scene.add(object);
         setStatus("ready");
       },
@@ -106,48 +112,24 @@ export function ObjModelViewer({ artifact }: { artifact: ArtifactRecord }): JSX.
 async function loadObjArtifact(artifact: ArtifactRecord): Promise<THREE.Group> {
   const metadata = getModelArtifactMetadata(artifact.metadata);
   const objUrl = metadata.objFileName ? await artifactAssetUrl(artifact.id, metadata.objFileName) : await artifactUrl(artifact.id);
-  const objLoader = new OBJLoader();
+  const mtlUrl = metadata.mtlFileName ? await artifactAssetUrl(artifact.id, metadata.mtlFileName) : null;
+  const manager = new THREE.LoadingManager();
+  const objLoader = new OBJLoader(manager);
+  let assetsLoaded = waitForPreviewAssets(manager);
 
-  if (metadata.mtlFileName) {
-    const mtlUrl = await artifactAssetUrl(artifact.id, metadata.mtlFileName);
+  if (mtlUrl) {
     const materials = await new Promise<MaterialCreator>((resolve, reject) => {
-      new MTLLoader().load(mtlUrl, resolve, undefined, reject);
+      new MTLLoader(manager).load(mtlUrl, resolve, undefined, reject);
     });
+    assetsLoaded = waitForPreviewAssets(manager);
     materials.preload();
     objLoader.setMaterials(materials);
   }
 
-  return new Promise((resolve, reject) => {
+  const object = await new Promise<THREE.Group>((resolve, reject) => {
     objLoader.load(objUrl, resolve, undefined, reject);
   });
-}
-
-function getModelArtifactMetadata(metadata: unknown): { objFileName?: string; mtlFileName?: string } {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
-  const record = metadata as Record<string, unknown>;
-  return {
-    ...(typeof record.objFileName === "string" ? { objFileName: record.objFileName } : {}),
-    ...(typeof record.mtlFileName === "string" ? { mtlFileName: record.mtlFileName } : {})
-  };
-}
-
-function normalizeObject(object: THREE.Object3D): void {
-  const box = new THREE.Box3().setFromObject(object);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  object.position.sub(center);
-  const maxDimension = Math.max(size.x, size.y, size.z);
-  if (maxDimension > 0) {
-    object.scale.setScalar(2.2 / maxDimension);
-  }
-}
-
-function disposeMaterial(material: THREE.Material | THREE.Material[]): void {
-  const materials = Array.isArray(material) ? material : [material];
-  for (const item of materials) {
-    for (const value of Object.values(item as Record<string, unknown>)) {
-      if (value instanceof THREE.Texture) value.dispose();
-    }
-    item.dispose();
-  }
+  await assetsLoaded;
+  await waitForPreviewTextures(object);
+  return object;
 }

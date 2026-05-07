@@ -163,6 +163,23 @@ export interface ArtifactRecord {
   createdAt: string;
 }
 
+export type RunArtifactPreview = Pick<
+  ArtifactRecord,
+  "id" | "runId" | "kind" | "name" | "mimeType" | "size" | "metadata" | "createdAt"
+>;
+
+export interface RunArtifactSummary {
+  previews: RunArtifactPreview[];
+  visualTotal: number;
+  hiddenVisualCount: number;
+  counts: Partial<Record<ArtifactRecord["kind"], number>>;
+  total: number;
+}
+
+export interface RunListRecord extends RunRecord {
+  artifactSummary: RunArtifactSummary;
+}
+
 export interface RuntimeEvent {
   id: number;
   runId: string;
@@ -434,7 +451,7 @@ export async function uninstallPlugin(pluginId: string, version?: string): Promi
   return apiFetch(`/api/plugins/${encodeURIComponent(pluginId)}${query}`, { method: "DELETE" });
 }
 
-export async function listRuns(): Promise<RunRecord[]> {
+export async function listRuns(): Promise<RunListRecord[]> {
   return apiFetch("/api/runs");
 }
 

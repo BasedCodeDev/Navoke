@@ -69,6 +69,8 @@ import {
   type FileValidationResult,
   type InstalledPluginRecord,
   type LabWaitCondition,
+  type RunArtifactSummary,
+  type RunListRecord,
   type RunRecord,
   type RuntimeEvent,
   type SystemInfo,
@@ -112,8 +114,11 @@ import {
 import { isRecoverableFailedExtensionRun, resolveExtensionFocusTarget } from "@/lib/extensionTabFocus";
 import { resolveExtensionTabSelection } from "@/lib/extensionTabRouting";
 import { activeCliAgentRuns, isCliRun, runOriginCommand, runOriginLabel } from "@/lib/runOrigin";
+import { runArtifactCountChips } from "@/lib/runArtifactSummary";
+import { isObjModelArtifact } from "@/lib/modelPreview";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
 import { ObjModelViewer } from "@/components/ObjModelViewer";
+import { RunArtifactThumbnail } from "@/components/RunArtifactThumbnail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -185,6 +190,8 @@ type RunWorkflowAvailability =
   | { status: "legacy"; message: string; workflow: WorkflowSummary }
   | { status: "missing"; message: string; workflow: null }
   | { status: "version-mismatch"; message: string; workflow: WorkflowSummary };
+
+type DeleteRunCandidate = Pick<RunRecord, "id" | "name" | "runDir" | "runNumber">;
 
 function resolveRunWorkflowAvailability(run: RunRecord, workflows: WorkflowSummary[]): RunWorkflowAvailability {
   const exact = workflows.find(
@@ -266,6 +273,7 @@ export default function App(): JSX.Element {
   const [librarySourceEntry, setLibrarySourceEntry] = useState<WorkflowLibraryEntry | null>(null);
   const [libraryDrawerOpen, setLibraryDrawerOpen] = useState(false);
   const [libraryToast, setLibraryToast] = useState<{ id: number; message: string } | null>(null);
+  const [deleteRunCandidate, setDeleteRunCandidate] = useState<DeleteRunCandidate | null>(null);
   const [resubmitValidation, setResubmitValidation] = useState<ReusedInputValidationState>({ status: "idle", files: [] });
   const [resubmitError, setResubmitError] = useState<string | null>(null);
 
@@ -397,6 +405,7 @@ export default function App(): JSX.Element {
   const deleteRunMutation = useMutation({
     mutationFn: deleteRun,
     onSuccess: (_result, deletedRunId) => {
+      setDeleteRunCandidate(null);
       if (selectedRunId === deletedRunId) {
         setSelectedRunId(null);
       }
@@ -424,6 +433,11 @@ export default function App(): JSX.Element {
         message: error instanceof Error ? error.message : String(error)
       })
   });
+
+  function requestDeleteRun(run: DeleteRunCandidate): void {
+    setActionError(null);
+    setDeleteRunCandidate(run);
+  }
 
   const saveRunToLibraryMutation = useMutation({
     mutationFn: (runId: string) => saveRunToWorkflowLibrary({ runId }),
@@ -526,10 +540,15 @@ export default function App(): JSX.Element {
     });
   }, [compatibleExtensionClients, isExtensionWorkflow]);
 
-  async function chooseFilesForField(fieldName: string, title: string, maxFiles?: number): Promise<void> {
+  async function chooseFilesForField(
+    fieldName: string,
+    title: string,
+    maxFiles?: number,
+    filters?: Array<{ name: string; extensions: string[] }>
+  ): Promise<void> {
     const files = await window.basedBlink.selectFiles({
       title,
-      filters: [
+      filters: filters ?? [
         { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
         { name: "All files", extensions: ["*"] }
       ]
@@ -790,7 +809,7 @@ export default function App(): JSX.Element {
           field={field}
           value={workflowValues[field.name]}
           onChange={(value) => setWorkflowValues((current) => ({ ...current, [field.name]: value }))}
-          onChooseFiles={() => void chooseFilesForField(field.name, field.filePickerTitle ?? `Choose ${field.label}`, field.maxFiles)}
+          onChooseFiles={() => void chooseFilesForField(field.name, field.filePickerTitle ?? `Choose ${field.label}`, field.maxFiles, field.fileFilters)}
           onClearFiles={() => clearWorkflowFiles(field.name)}
         />
       ))}
@@ -921,16 +940,6 @@ export default function App(): JSX.Element {
               </button>
               <button
                 type="button"
-                onClick={() => setWorkspaceView("lab")}
-                className={cn(
-                  "rounded px-3 py-1.5 text-sm font-medium transition",
-                  workspaceView === "lab" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                Workflow Lab
-              </button>
-              <button
-                type="button"
                 onClick={() => setWorkspaceView("plugins")}
                 className={cn(
                   "rounded px-3 py-1.5 text-sm font-medium transition",
@@ -938,6 +947,16 @@ export default function App(): JSX.Element {
                 )}
               >
                 Plugins
+              </button>
+              <button
+                type="button"
+                onClick={() => setWorkspaceView("lab")}
+                className={cn(
+                  "rounded px-3 py-1.5 text-sm font-medium transition",
+                  workspaceView === "lab" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Workflow Lab
               </button>
             </div>
             <div className="flex items-center gap-2">
@@ -1012,6 +1031,8 @@ export default function App(): JSX.Element {
                     onSaveToLibrary={() => saveRunToLibraryMutation.mutate(run.id)}
                     isSavedToLibrary={savedRunIds.has(run.id)}
                     isSavingToLibrary={saveRunToLibraryMutation.variables === run.id && saveRunToLibraryMutation.isPending}
+                    onDelete={() => requestDeleteRun(run)}
+                    isDeleting={deleteRunMutation.variables === run.id && deleteRunMutation.isPending}
                   />
                 ))}
                 {hasProject && runsQuery.data?.length === 0 ? (
@@ -1062,6 +1083,8 @@ export default function App(): JSX.Element {
           isLoading={selectedRunQuery.isLoading}
           detailError={selectedRunDetailError}
           isDeleting={deleteRunMutation.isPending}
+          isSavedToLibrary={savedRunIds.has(selectedRunId)}
+          isSavingToLibrary={saveRunToLibraryMutation.variables === selectedRunId && saveRunToLibraryMutation.isPending}
           onClose={() => setSelectedRunId(null)}
           onPause={(runId) => void pauseRun(runId).then(() => queryClient.invalidateQueries())}
           onResume={(runId) => void resumeRun(runId).then(() => queryClient.invalidateQueries())}
@@ -1069,7 +1092,26 @@ export default function App(): JSX.Element {
           onOpenDataFolder={() => window.basedBlink.openPath(activeRun?.runDir ?? "")}
           onFocusClient={(clientId) => focusExtensionClient(clientId)}
           onRename={(runId, nextName) => renameRunMutation.mutateAsync({ runId, nextName }).then(() => undefined)}
-          onDelete={(runId) => void deleteRunMutation.mutate(runId)}
+          onSaveToLibrary={(runId) => saveRunToLibraryMutation.mutate(runId)}
+          onDelete={(runId) => {
+            const candidate = activeRun ?? (runsQuery.data ?? []).find((run) => run.id === runId);
+            if (candidate) {
+              requestDeleteRun(candidate);
+              return;
+            }
+            setActionError({
+              title: "Could not delete run",
+              message: "Run metadata is unavailable, so the data folder path cannot be confirmed."
+            });
+          }}
+        />
+      ) : null}
+      {deleteRunCandidate ? (
+        <DeleteRunConfirmDialog
+          run={deleteRunCandidate}
+          isDeleting={deleteRunMutation.isPending}
+          onCancel={() => setDeleteRunCandidate(null)}
+          onConfirm={() => deleteRunMutation.mutate(deleteRunCandidate.id)}
         />
       ) : null}
       {actionError ? (
@@ -1685,6 +1727,8 @@ function RunDetailModal({
   isLoading,
   detailError,
   isDeleting,
+  isSavedToLibrary,
+  isSavingToLibrary,
   onClose,
   onPause,
   onResume,
@@ -1692,6 +1736,7 @@ function RunDetailModal({
   onOpenDataFolder,
   onFocusClient,
   onRename,
+  onSaveToLibrary,
   onDelete
 }: {
   runId: string;
@@ -1704,6 +1749,8 @@ function RunDetailModal({
   isLoading: boolean;
   detailError: string | null;
   isDeleting: boolean;
+  isSavedToLibrary: boolean;
+  isSavingToLibrary: boolean;
   onClose(): void;
   onPause(runId: string): void;
   onResume(runId: string): void;
@@ -1711,6 +1758,7 @@ function RunDetailModal({
   onOpenDataFolder(): void | Promise<unknown>;
   onFocusClient(clientId: string): Promise<unknown>;
   onRename(runId: string, nextName: string): Promise<void>;
+  onSaveToLibrary(runId: string): void;
   onDelete(runId: string): void;
 }): JSX.Element {
   const [focusError, setFocusError] = useState<string | null>(null);
@@ -1729,6 +1777,11 @@ function RunDetailModal({
   const runPresentation = getRunPresentation(run?.output);
   const canResumeRun = workflowUsable && (run?.status === "waiting_manual" || isRecoverableFailedExtensionRun(run, runWorkflow));
   const canRenameRun = Boolean(run && !["queued", "running", "pausing", "waiting_manual"].includes(run.status));
+  const saveTitle = isSavedToLibrary
+    ? "Already saved to library"
+    : isSavingToLibrary
+      ? "Saving to library..."
+      : "Save this run configuration to the library";
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -1902,78 +1955,92 @@ function RunDetailModal({
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-2">
-                {run && hasExtensionFocus && run.status === "running" ? (
-                  <Button size="sm" variant="outline" onClick={() => onPause(run.id)}>
-                    <PauseCircle className="h-4 w-4" />
-                    Pause
+              <div className="flex flex-wrap items-end justify-between gap-2">
+                <div className="flex flex-wrap gap-2">
+                  {run && hasExtensionFocus && run.status === "running" ? (
+                    <Button size="sm" variant="outline" onClick={() => onPause(run.id)}>
+                      <PauseCircle className="h-4 w-4" />
+                      Pause
+                    </Button>
+                  ) : null}
+                  {run?.status === "pausing" ? (
+                    <Button size="sm" variant="outline" disabled title="Pause is being applied.">
+                      <PauseCircle className="h-4 w-4" />
+                      Pause pending
+                    </Button>
+                  ) : null}
+                  {run && canResumeRun ? (
+                    <Button
+                      size="sm"
+                      onClick={() => onResume(run.id)}
+                      title={
+                        run.status === "failed"
+                          ? "Resume will inspect the current browser page before resubmitting unfinished work."
+                          : undefined
+                      }
+                    >
+                      <PauseCircle className="h-4 w-4" />
+                      Resume
+                    </Button>
+                  ) : null}
+                  {run && ["queued", "running", "pausing", "waiting_manual"].includes(run.status) ? (
+                    <Button variant="destructive" size="sm" onClick={() => onCancel(run.id)}>
+                      <Square className="h-4 w-4" />
+                      Cancel
+                    </Button>
+                  ) : null}
+                  <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run?.runDir}>
+                    <FolderOpen className="h-4 w-4" />
+                    Data folder
                   </Button>
-                ) : null}
-                {run?.status === "pausing" ? (
-                  <Button size="sm" variant="outline" disabled title="Pause is being applied.">
-                    <PauseCircle className="h-4 w-4" />
-                    Pause pending
-                  </Button>
-                ) : null}
-                {run && canResumeRun ? (
-                  <Button
-                    size="sm"
-                    onClick={() => onResume(run.id)}
-                    title={
-                      run.status === "failed"
-                        ? "Resume will inspect the current browser page before resubmitting unfinished work."
-                        : undefined
-                    }
-                  >
-                    <PauseCircle className="h-4 w-4" />
-                    Resume
-                  </Button>
-                ) : null}
-                {run && ["queued", "running", "pausing", "waiting_manual"].includes(run.status) ? (
-                  <Button variant="destructive" size="sm" onClick={() => onCancel(run.id)}>
-                    <Square className="h-4 w-4" />
-                    Cancel
-                  </Button>
-                ) : null}
-                <Button variant="outline" size="sm" onClick={() => void onOpenDataFolder()} disabled={!run?.runDir}>
-                  <FolderOpen className="h-4 w-4" />
-                  Data folder
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setEditingName(run?.name ?? "");
-                    setRenameError(null);
-                    setIsEditingName(true);
-                  }}
-                  disabled={!run || !canRenameRun}
-                  title={canRenameRun ? "Rename run and data folder" : "Runs can be renamed after they are inactive."}
-                >
-                  <Pencil className="h-4 w-4" />
-                  Rename
-                </Button>
-                {hasExtensionFocus && extensionFocusTarget ? (
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => void focusExtensionTab()}
-                    disabled={extensionFocusTarget.action === "disabled" || isFocusing}
-                    title={
-                      extensionFocusTarget.disabledReason ??
-                      (extensionFocusTarget.action === "open"
-                        ? "Open the tracked URL through the BLINK browser controller."
-                        : `Go to ${extensionFocusTarget.client?.title || "the selected browser tab"}`)
-                    }
+                    onClick={() => {
+                      setEditingName(run?.name ?? "");
+                      setRenameError(null);
+                      setIsEditingName(true);
+                    }}
+                    disabled={!run || !canRenameRun}
+                    title={canRenameRun ? "Rename run and data folder" : "Runs can be renamed after they are inactive."}
                   >
-                    <ExternalLink className="h-4 w-4" />
-                    {extensionFocusTarget.buttonLabel}
+                    <Pencil className="h-4 w-4" />
+                    Rename
                   </Button>
-                ) : null}
-                <Button variant="destructive" size="sm" onClick={() => onDelete(runId)} disabled={isDeleting}>
-                  <Trash2 className="h-4 w-4" />
-                  Delete
-                </Button>
+                  {hasExtensionFocus && extensionFocusTarget ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void focusExtensionTab()}
+                      disabled={extensionFocusTarget.action === "disabled" || isFocusing}
+                      title={
+                        extensionFocusTarget.disabledReason ??
+                        (extensionFocusTarget.action === "open"
+                          ? "Open the tracked URL through the BLINK browser controller."
+                          : `Go to ${extensionFocusTarget.client?.title || "the selected browser tab"}`)
+                      }
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      {extensionFocusTarget.buttonLabel}
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="ml-auto flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => run && onSaveToLibrary(run.id)}
+                    disabled={!run || isSavedToLibrary || isSavingToLibrary}
+                    title={saveTitle}
+                  >
+                    <Save className="h-4 w-4" />
+                    Save
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={() => onDelete(runId)} disabled={isDeleting}>
+                    <Trash2 className="h-4 w-4" />
+                    Delete run
+                  </Button>
+                </div>
               </div>
               {focusError ? (
                 <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>
@@ -2258,6 +2325,64 @@ function ActionErrorDialog({
   );
 }
 
+function DeleteRunConfirmDialog({
+  run,
+  isDeleting,
+  onCancel,
+  onConfirm
+}: {
+  run: DeleteRunCandidate;
+  isDeleting: boolean;
+  onCancel(): void;
+  onConfirm(): void;
+}): JSX.Element {
+  const runLabel = `${run.runNumber === null ? "" : `#${run.runNumber} `}${run.name}`;
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 px-4" onMouseDown={onCancel}>
+      <div
+        className="w-full max-w-2xl rounded-lg border border-border bg-background shadow-xl"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-run-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3 border-b border-border px-5 py-4">
+          <AlertTriangle className={cn("mt-0.5 h-5 w-5 shrink-0", toneTextClassNames.danger)} />
+          <div className="min-w-0">
+            <h3 id="delete-run-title" className="text-base font-semibold">
+              Delete run?
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              This will delete {runLabel} and its run data folder.
+            </p>
+          </div>
+        </div>
+        <div className="space-y-3 px-5 py-4">
+          <div className="text-sm font-medium">Folder to delete</div>
+          {run.runDir ? (
+            <div className="select-all break-all rounded-md border border-border bg-muted/40 p-3 font-mono text-xs">
+              {run.runDir}
+            </div>
+          ) : (
+            <div className={cn("rounded-md border p-3 text-sm", toneClassNames.warning)}>
+              No run data folder is recorded for this run. Deletion will remove the run record and any legacy artifacts tracked by the app.
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-border px-5 py-4">
+          <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={isDeleting}>
+            Cancel
+          </Button>
+          <Button type="button" variant="destructive" size="sm" onClick={onConfirm} disabled={isDeleting}>
+            <Trash2 className="h-4 w-4" />
+            {isDeleting ? "Deleting..." : "Delete run"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function invalidReusedInputFiles(validation: ReusedInputValidationState): FileValidationResult["files"] {
   return validation.files.filter((file) => !file.exists || !file.isFile);
 }
@@ -2318,7 +2443,7 @@ function PresentationItemView({
     if (!artifact) {
       return <div className="rounded-md border border-dashed p-5 text-sm text-muted-foreground">{item.label ?? "Artifact"} is not available.</div>;
     }
-    if (item.preview === "model" && artifact.name.toLowerCase().endsWith(".obj")) {
+    if (item.preview === "model" && isObjModelArtifact(artifact)) {
       return (
         <div className="space-y-2">
           {item.label ? <div className="text-xs font-medium text-muted-foreground">{item.label}</div> : null}
@@ -3492,6 +3617,48 @@ function WorkflowLibraryEntryCard({
   );
 }
 
+function RunInfoTooltip({
+  run,
+  workflowAvailability
+}: {
+  run: RunListRecord;
+  workflowAvailability: RunWorkflowAvailability;
+}): JSX.Element {
+  const details = [
+    { label: "Workflow", value: run.workflowId },
+    ...(run.workflowVersion ? [{ label: "Workflow version", value: run.workflowVersion }] : []),
+    { label: "Plugin", value: run.pluginId ? `${run.pluginId}@${run.pluginVersion ?? "unknown"}` : "Bundled workflow" },
+    ...(run.pluginApiVersion ? [{ label: "Plugin API", value: run.pluginApiVersion }] : []),
+    { label: "Created", value: formatDate(run.createdAt) },
+    { label: "Updated", value: formatDate(run.updatedAt) },
+    { label: "Origin", value: runOriginLabel(run) },
+    { label: "Availability", value: workflowAvailability.message }
+  ];
+
+  return (
+    <div className="group/info relative inline-flex shrink-0" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        aria-label={`Details for ${run.name}`}
+        className="flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground outline-none ring-offset-2 transition hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary"
+      >
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      <div className="invisible absolute left-0 top-6 z-50 w-80 max-w-[calc(100vw-3rem)] select-text rounded-md border border-border bg-card p-3 text-xs text-foreground opacity-0 shadow-lg transition group-hover/info:visible group-hover/info:opacity-100 group-focus-within/info:visible group-focus-within:opacity-100">
+        <div className="mb-2 font-medium">Run details</div>
+        <dl className="space-y-1.5">
+          {details.map((detail) => (
+            <div key={detail.label} className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-2">
+              <dt className="text-muted-foreground">{detail.label}</dt>
+              <dd className="min-w-0 break-words">{detail.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
 function RunRow({
   run,
   selected,
@@ -3500,9 +3667,11 @@ function RunRow({
   onResubmit,
   onSaveToLibrary,
   isSavedToLibrary,
-  isSavingToLibrary
+  isSavingToLibrary,
+  onDelete,
+  isDeleting
 }: {
-  run: RunRecord;
+  run: RunListRecord;
   selected: boolean;
   workflowAvailability: RunWorkflowAvailability;
   onSelect: () => void;
@@ -3510,6 +3679,8 @@ function RunRow({
   onSaveToLibrary: () => void;
   isSavedToLibrary: boolean;
   isSavingToLibrary: boolean;
+  onDelete: () => void;
+  isDeleting: boolean;
 }): JSX.Element {
   const workflowUnavailable = workflowAvailability.status === "missing" || workflowAvailability.status === "version-mismatch";
   const motionActive = isMotionActiveStatus(run.status);
@@ -3519,48 +3690,81 @@ function RunRow({
       ? "Saving to library..."
       : "Save this run configuration to the library";
   const saveAriaLabel = isSavedToLibrary ? `${run.name} is already saved to library` : `Save ${run.name} to library`;
+  const primaryArtifact = run.artifactSummary.previews[0] ?? null;
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card p-4 shadow-sm transition hover:border-primary",
+        "h-[7.5rem] overflow-hidden rounded-lg border bg-card p-4 shadow-sm transition hover:border-primary",
         run.status === "running" && "run-row-active",
         selected ? "border-primary ring-1 ring-primary" : "border-border"
       )}
     >
-      <div className="flex items-start justify-between gap-4">
-        <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-          <div className="min-w-0 space-y-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <RunNumberBadge runNumber={run.runNumber} />
-              <div className="truncate font-medium">{run.name}</div>
-            </div>
-            {workflowUnavailable ? (
-              <div className={cn("truncate text-xs", toneTextClassNames.danger)}>{workflowAvailability.message}</div>
-            ) : run.pluginId ? (
-              <div className="truncate text-xs text-muted-foreground">
-                {run.pluginId}@{run.pluginVersion ?? "unknown"}
+      <div className="flex h-full min-h-0 items-stretch justify-between gap-4">
+        {primaryArtifact ? (
+          <button
+            type="button"
+            onClick={onSelect}
+            className="flex w-28 shrink-0 self-stretch rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={`Open run ${run.name}`}
+          >
+            <RunArtifactThumbnail artifact={primaryArtifact} className="h-full max-h-full w-full" />
+          </button>
+        ) : null}
+        <div className="flex min-w-0 flex-1 flex-col justify-between">
+          <div className="flex min-w-0 items-start gap-4">
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onSelect}
+                  className="flex min-w-0 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <RunNumberBadge runNumber={run.runNumber} />
+                  <div className="truncate font-medium">{run.name}</div>
+                </button>
+                <RunInfoTooltip run={run} workflowAvailability={workflowAvailability} />
               </div>
-            ) : null}
-            <div className="text-xs text-muted-foreground">{run.workflowId} | {formatDate(run.createdAt)}</div>
-            <div className="truncate text-sm text-muted-foreground">{run.currentStep ?? "Queued"}</div>
+              <button
+                type="button"
+                onClick={onSelect}
+                className="block w-full rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className="truncate text-sm text-muted-foreground">{run.currentStep ?? "Queued"}</div>
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={onSelect}
+              className="ml-auto min-w-0 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <RunArtifactStrip summary={run.artifactSummary} skipPrimary={Boolean(primaryArtifact)} />
+            </button>
           </div>
-          <Progress value={run.progress} active={motionActive} className="mt-3" />
-        </button>
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          {isCliRun(run) ? <Badge className={cn("border", toneClassNames.neutral)}>{runOriginLabel(run)}</Badge> : null}
-          <RunStatusBadge status={run.status} />
-          {workflowUnavailable ? <Badge className={cn("border", toneClassNames.danger)}>plugin missing</Badge> : null}
+          <button
+            type="button"
+            onClick={onSelect}
+            className="block w-full rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Progress value={run.progress} active={motionActive} />
+          </button>
+        </div>
+        <div className="flex shrink-0 flex-col items-end justify-between gap-2">
+          <div className="flex flex-col items-end gap-2">
+            {isCliRun(run) ? <Badge className={cn("border", toneClassNames.neutral)}>{runOriginLabel(run)}</Badge> : null}
+            <RunStatusBadge status={run.status} />
+            {workflowUnavailable ? <Badge className={cn("border", toneClassNames.danger)}>plugin missing</Badge> : null}
+          </div>
           <div className="flex items-center gap-1.5">
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="icon"
               onClick={onResubmit}
               disabled={workflowUnavailable}
               title={workflowUnavailable ? workflowAvailability.message : "Resubmit New"}
+              aria-label={workflowUnavailable ? workflowAvailability.message : `Resubmit ${run.name} as a new run`}
             >
               <Copy className="h-4 w-4" />
-              Resubmit New
             </Button>
             <Button
               type="button"
@@ -3573,9 +3777,55 @@ function RunRow({
             >
               <Save className="h-4 w-4" />
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={onDelete}
+              disabled={isDeleting}
+              title="Delete run"
+              aria-label={`Delete ${run.name}`}
+              className="hover:border-destructive hover:bg-destructive hover:text-destructive-foreground"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function RunArtifactStrip({ summary, skipPrimary = false }: { summary: RunArtifactSummary; skipPrimary?: boolean }): JSX.Element | null {
+  if (summary.total === 0) return null;
+
+  const countChips = runArtifactCountChips(summary);
+  const previews = skipPrimary ? summary.previews.slice(1) : summary.previews;
+
+  if (previews.length === 0 && summary.hiddenVisualCount === 0 && countChips.length === 0) return null;
+
+  return (
+    <div className="flex h-12 min-w-0 max-w-[24rem] items-center justify-end gap-1.5 overflow-hidden" aria-label="Run artifacts">
+      {previews.map((artifact) => (
+        <RunArtifactThumbnail key={artifact.id} artifact={artifact} />
+      ))}
+      {summary.hiddenVisualCount > 0 ? (
+        <div
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-xs font-medium text-muted-foreground"
+          title={`${summary.hiddenVisualCount} more visual artifacts`}
+        >
+          +{summary.hiddenVisualCount}
+        </div>
+      ) : null}
+      {countChips.map(({ kind, count, label }) => (
+        <span
+          key={kind}
+          className="shrink-0 rounded border border-border bg-muted px-2 py-1 text-[10px] font-medium uppercase leading-none text-muted-foreground"
+          title={`${count} ${kind} artifact${count === 1 ? "" : "s"}`}
+        >
+          {label}
+        </span>
+      ))}
     </div>
   );
 }

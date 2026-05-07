@@ -108,6 +108,45 @@ Current extension-backed workflows use `extensionTab`, not the older `chatGptTab
 
 If `masterPrompt` is blank, omit `masterPromptSuffix` or set it to an empty string because it has no effect. Prompt 1 uses the source image; each later prompt uses the previous prompt's saved output artifact as its input image.
 
+## Model Renderer Inputs
+
+Install the repo-local model renderer plugin when it is not already listed:
+
+```powershell
+blink --project <project-dir> plugin-install C:\Work\Based.WorkflowAutomation\plugins\based-blink-model-renderer
+```
+
+For `based-blink.model-renderer.render-image`, use a single `modelFile` path to `.obj`, `.fbx`, or `.zip`. Prefer a Hunyuan-style ZIP for textured OBJ assets because the ZIP preserves OBJ, MTL, and texture sidecar names.
+
+```json
+{
+  "modelFile": "C:\\path\\to\\hunyuan-model.zip",
+  "rotationX": 20,
+  "rotationY": 35,
+  "rotationZ": 0,
+  "distance": 3.2,
+  "width": 1024,
+  "height": 1024,
+  "backgroundColor": ""
+}
+```
+
+Run it with:
+
+```powershell
+blink --project <project-dir> run based-blink.model-renderer.render-image --input render-model.json --agent codex --wait
+```
+
+For `based-blink.model-renderer.geometry-bounds`, use:
+
+```json
+{
+  "modelFile": "C:\\path\\to\\model.fbx"
+}
+```
+
+The bounds output reports original model-coordinate `min`, `max`, `size`, `center`, `boundingSphere.radius`, `meshCount`, and `vertexCount`. The render workflow normalizes the model only for camera framing; its `distance` input is in normalized render-scene units.
+
 ## Plugin Calibration Loop
 
 Use this loop with Workflow Lab when a browser plugin workflow is being built, calibrated, or fixed:

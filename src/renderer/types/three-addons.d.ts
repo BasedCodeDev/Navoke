@@ -9,10 +9,21 @@ declare module "three" {
     sub(value: Vector3): this;
   }
 
+  export class Color {
+    constructor(color?: number | string);
+    r: number;
+    g: number;
+    b: number;
+    setRGB(r: number, g: number, b: number): this;
+    lerp(color: Color, alpha: number): this;
+  }
+
   export class Object3D {
     position: Vector3;
     scale: Vector3;
+    add(object: Object3D): this;
     traverse(callback: (object: Object3D) => void): void;
+    updateMatrixWorld(force?: boolean): void;
   }
 
   export class Group extends Object3D {}
@@ -36,24 +47,35 @@ declare module "three" {
   }
 
   export class Texture {
+    image?: unknown;
     dispose(): void;
   }
 
   export class Material {
+    needsUpdate: boolean;
+    side: number;
     dispose(): void;
     [key: string]: unknown;
   }
 
   export class BufferGeometry {
+    getAttribute(name: string): { count: number } | undefined;
+    computeVertexNormals(): void;
     dispose(): void;
   }
 
   export class Mesh extends Object3D {
+    castShadow: boolean;
     geometry: BufferGeometry;
     material: Material | Material[];
+    receiveShadow: boolean;
   }
 
-  export class LoadingManager {}
+  export class LoadingManager {
+    onStart?: (url: string, itemsLoaded: number, itemsTotal: number) => void;
+    onLoad?: () => void;
+    onError?: (url: string) => void;
+  }
 
   export class Loader<T = unknown> {
     constructor(manager?: LoadingManager);
@@ -69,6 +91,8 @@ declare module "three" {
     constructor(parameters?: { antialias?: boolean; alpha?: boolean });
     domElement: HTMLCanvasElement;
     outputColorSpace: string;
+    toneMapping: number;
+    toneMappingExposure: number;
     setPixelRatio(value: number): void;
     setClearColor(color: number, alpha?: number): void;
     setSize(width: number, height: number, updateStyle?: boolean): void;
@@ -80,10 +104,16 @@ declare module "three" {
     constructor(skyColor?: number, groundColor?: number, intensity?: number);
   }
 
+  export class AmbientLight extends Object3D {
+    constructor(color?: number, intensity?: number);
+  }
+
   export class DirectionalLight extends Object3D {
     constructor(color?: number, intensity?: number);
   }
 
+  export const ACESFilmicToneMapping: number;
+  export const DoubleSide: number;
   export const SRGBColorSpace: string;
 }
 

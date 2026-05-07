@@ -83,6 +83,80 @@ describe("SqliteStore", () => {
     store.close();
   });
 
+  it("returns capped visual artifact summaries for run lists", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-store-"));
+    tempDirs.push(dir);
+    const store = await SqliteStore.open(path.join(dir, "workflow.sqlite"));
+    const run = store.createRun({
+      id: "run-artifacts",
+      workflowId: "test.workflow",
+      name: "Artifact summary",
+      status: "completed",
+      input: {}
+    });
+    const artifactPath = path.join(dir, "artifact.bin");
+    fs.writeFileSync(artifactPath, "artifact");
+
+    store.addArtifact({ id: "screenshot-1", runId: run.id, kind: "screenshot", name: "diagnostic.png", path: artifactPath });
+    store.addArtifact({ id: "json-1", runId: run.id, kind: "json", name: "metadata.json", path: artifactPath });
+    store.addArtifact({ id: "image-1", runId: run.id, kind: "image", name: "output-a.png", path: artifactPath });
+    store.addArtifact({ id: "model-1", runId: run.id, kind: "model", name: "model.obj", path: artifactPath });
+    store.addArtifact({ id: "download-1", runId: run.id, kind: "download", name: "package.zip", path: artifactPath });
+    store.addArtifact({ id: "image-2", runId: run.id, kind: "image", name: "output-b.png", path: artifactPath });
+    store.addArtifact({ id: "screenshot-2", runId: run.id, kind: "screenshot", name: "diagnostic-2.png", path: artifactPath });
+
+    const listedRun = store.listRunsWithArtifactSummaries().find((candidate) => candidate.id === run.id);
+
+    expect(listedRun?.artifactSummary).toMatchObject({
+      visualTotal: 5,
+      hiddenVisualCount: 1,
+      total: 7,
+      counts: {
+        image: 2,
+        model: 1,
+        screenshot: 2,
+        json: 1,
+        download: 1
+      }
+    });
+    expect(listedRun?.artifactSummary.previews.map((artifact) => artifact.id)).toEqual([
+      "image-1",
+      "image-2",
+      "model-1",
+      "screenshot-1"
+    ]);
+
+    store.close();
+  });
+
+  it("updates run list artifact summaries as active runs add artifacts", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-store-"));
+    tempDirs.push(dir);
+    const store = await SqliteStore.open(path.join(dir, "workflow.sqlite"));
+    const run = store.createRun({
+      id: "run-active-artifacts",
+      workflowId: "test.workflow",
+      name: "Active artifact summary",
+      status: "running",
+      input: {}
+    });
+    expect(store.listRunsWithArtifactSummaries().find((candidate) => candidate.id === run.id)?.artifactSummary.total).toBe(0);
+
+    const artifactPath = path.join(dir, "output.png");
+    fs.writeFileSync(artifactPath, "image");
+    store.addArtifact({ id: "image-active", runId: run.id, kind: "image", name: "output.png", path: artifactPath });
+
+    const listedRun = store.listRunsWithArtifactSummaries().find((candidate) => candidate.id === run.id);
+    expect(listedRun?.artifactSummary).toMatchObject({
+      visualTotal: 1,
+      hiddenVisualCount: 0,
+      total: 1
+    });
+    expect(listedRun?.artifactSummary.previews[0]).toMatchObject({ id: "image-active", kind: "image" });
+
+    store.close();
+  });
+
   it("persists workflow library entries independently from source runs", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bwa-store-"));
     tempDirs.push(dir);
