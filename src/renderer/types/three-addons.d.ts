@@ -48,7 +48,13 @@ declare module "three" {
 
   export class Texture {
     image?: unknown;
+    colorSpace: string;
+    needsUpdate: boolean;
     dispose(): void;
+  }
+
+  export class TextureLoader extends Loader<Texture> {
+    constructor(manager?: LoadingManager);
   }
 
   export class Material {

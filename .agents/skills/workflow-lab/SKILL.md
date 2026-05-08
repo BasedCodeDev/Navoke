@@ -51,6 +51,8 @@ This loop should continue until a real run produces the intended artifact. A sel
 
 For `based-blink.chatgpt.extension-image-sequence` calibration, keep setup and sequence prompts separate in CLI inputs. `masterPromptSuffix` belongs to the optional setup phase: it is appended to `masterPrompt` only when both are non-empty, and it should not be treated as a `prompts[]` entry. When a non-empty setup prompt is used and the user has not cleared the guardrail, include `masterPromptSuffix` with: `Only generate images, one at a time, no text responses after the first response to this message. Respond "Ready" when you're ready to proceed.`
 
+For single ChatGPT prompt calibration, `based-blink.chatgpt.extension-image-prompt` submits text only through `prompt`; `based-blink.chatgpt.extension-image-prompt-transform` submits one source file through the single-path `image` field plus the `prompt`. Use Lab inspection to confirm the attachment preview is not classified as the generated output before changing capture logic.
+
 ## Trace-Backed Calibration
 
 When a run fails after the browser closes, use the trace as the page-state source of truth:

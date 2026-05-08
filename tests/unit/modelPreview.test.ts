@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isObjModelArtifact, isPreviewableModelArtifact, modelArtifactFormat } from "../../src/renderer/lib/modelPreview";
+import {
+  isObjModelArtifact,
+  isPreviewableModelArtifact,
+  modelArtifactFormat,
+  selectDiffuseTextureFileName
+} from "../../src/renderer/lib/modelPreview";
 
 describe("model preview helpers", () => {
   it("detects OBJ artifacts by extension, model format, or OBJ metadata", () => {
@@ -22,6 +27,18 @@ describe("model preview helpers", () => {
     expect(modelArtifactFormat(artifact("scene.glb"))).toBeNull();
     expect(modelArtifactFormat(artifact("model.bin", { modelFormat: "glb" }))).toBeNull();
     expect(isPreviewableModelArtifact(artifact("scene.glb"))).toBe(false);
+  });
+
+  it("selects likely diffuse textures before PBR sidecar maps", () => {
+    expect(
+      selectDiffuseTextureFileName([
+        "texture_pbr_20250901_metallic.png",
+        "texture_pbr_20250901_roughness.png",
+        "texture_pbr_20250901_normal.png",
+        "texture_pbr_20250901.png"
+      ])
+    ).toBe("texture_pbr_20250901.png");
+    expect(selectDiffuseTextureFileName(["character_normal.png", "character_roughness.png"])).toBeNull();
   });
 });
 

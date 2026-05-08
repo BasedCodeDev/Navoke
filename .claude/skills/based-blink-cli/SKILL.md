@@ -50,6 +50,22 @@ blink --project <project-dir> run <workflowId> --input input.json --agent claude
 
 Use `--name <name>` when a human-readable run name helps identify the output in the UI. Use `--agent <name>` so the UI can show who is driving the run.
 
+## ChatGPT Single Prompt Inputs
+
+For `based-blink.chatgpt.extension-image-prompt`, build CLI JSON with a single non-empty `prompt` string. For `based-blink.chatgpt.extension-image-prompt-transform`, build CLI JSON with one source image path in `image` plus a single non-empty `prompt` string.
+
+Current extension-backed workflows use `extensionTab`, not the older `chatGptTab` field name. Include `extensionTab` when you need an explicit tab mode or stable routing token. Omitted `extensionTab` defaults to a routed new ChatGPT window.
+
+```json
+{
+  "image": "C:\\path\\to\\source.png",
+  "prompt": "Use the attached source image and generate the requested variation.",
+  "extensionTab": { "mode": "new", "routingToken": "replace-with-a-stable-routing-token" }
+}
+```
+
+The image-plus-prompt workflow uses `image` as a single file path string, not `images` or `sourceImages`. It submits the source image and prompt together once, then expects exactly one generated output image.
+
 ## ChatGPT Image Sequence Inputs
 
 For `based-blink.chatgpt.extension-image-sequence`, build CLI JSON with one `sourceImages` entry, an optional `masterPrompt`, an optional `masterPromptSuffix`, and a non-empty `prompts` array.

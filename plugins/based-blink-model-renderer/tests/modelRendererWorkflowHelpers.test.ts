@@ -217,6 +217,178 @@ describe("model renderer output images", () => {
     expect(color.coloredForegroundRatio).toBeGreaterThan(0.2);
   }, 60_000);
 
+  it("copies sibling MTL and texture files for direct OBJ inputs", async () => {
+    const tempDir = tempDirPath();
+    const objPath = path.join(tempDir, "direct-model.obj");
+    fs.writeFileSync(
+      objPath,
+      [
+        "mtllib material.mtl",
+        "usemtl Material",
+        "v -0.5 -0.5 0",
+        "v 0.5 -0.5 0",
+        "v 0.5 0.5 0",
+        "v -0.5 0.5 0",
+        "vt 0 0",
+        "vt 1 0",
+        "vt 1 1",
+        "vt 0 1",
+        "f 1/1 2/2 3/3",
+        "f 1/1 3/3 4/4"
+      ].join("\n")
+    );
+    fs.writeFileSync(path.join(tempDir, "material.mtl"), ["newmtl Material", "Kd 1.0 1.0 1.0", "map_Kd texture.png"].join("\n"));
+    fs.writeFileSync(
+      path.join(tempDir, "texture.png"),
+      createPng(2, 2, [
+        [230, 40, 35],
+        [30, 110, 230],
+        [20, 180, 80],
+        [245, 185, 20]
+      ])
+    );
+
+    const sdk = createWorkflowSdk();
+    const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === MODEL_RENDER_IMAGE_WORKFLOW_ID);
+    if (!workflow) throw new Error("Model render workflow not found.");
+    const renderRun = createTestWorkflowContext(tempDir, "direct-obj-sidecars");
+
+    await workflow.run(
+      workflow.inputSchema.parse({
+        modelFile: objPath,
+        rotationX: 0,
+        rotationY: 0,
+        rotationZ: 0,
+        distance: 3.2,
+        width: 256,
+        height: 256,
+        backgroundColor: "#ffffff"
+      }),
+      renderRun.context
+    );
+
+    const modelArtifact = renderRun.artifacts.find((artifact) => artifact.kind === "model");
+    expect(modelArtifact?.metadata).toMatchObject({
+      mtlFileName: "material.mtl",
+      textureFileNames: ["texture.png"]
+    });
+    const imageArtifact = renderRun.artifacts.find((artifact) => artifact.kind === "image" && artifact.name === "model-render.png");
+    if (!imageArtifact) throw new Error("Direct OBJ render image artifact was not created.");
+    const color = analyzePngColor(fs.readFileSync(imageArtifact.path));
+
+    expect(color.foregroundPixels).toBeGreaterThan(1_000);
+    expect(color.maxChroma).toBeGreaterThan(80);
+    expect(color.coloredForegroundRatio).toBeGreaterThan(0.2);
+  }, 60_000);
+
+  it("rejects direct OBJ inputs that reference a missing MTL file", async () => {
+    const tempDir = tempDirPath();
+    const objPath = path.join(tempDir, "missing-material.obj");
+    fs.writeFileSync(
+      objPath,
+      ["mtllib output.mtl", "v -0.5 -0.5 0", "v 0.5 -0.5 0", "v 0.5 0.5 0", "f 1 2 3"].join("\n")
+    );
+
+    const sdk = createWorkflowSdk();
+    const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === MODEL_RENDER_IMAGE_WORKFLOW_ID);
+    if (!workflow) throw new Error("Model render workflow not found.");
+    const renderRun = createTestWorkflowContext(tempDir, "direct-obj-missing-mtl");
+
+    await expect(
+      workflow.run(
+        workflow.inputSchema.parse({
+          modelFile: objPath,
+          rotationX: 0,
+          rotationY: 0,
+          rotationZ: 0,
+          distance: 3.2,
+          width: 256,
+          height: 256,
+          backgroundColor: "#ffffff"
+        }),
+        renderRun.context
+      )
+    ).rejects.toThrow('OBJ file references missing material library "output.mtl"');
+  });
+
+  it("uses the discovered diffuse texture when an OBJ material is otherwise untextured", async () => {
+    const tempDir = tempDirPath();
+    const modelZip = path.join(tempDir, "hunyuan-pbr-fallback.zip");
+    writeZip(modelZip, {
+      "model.obj": [
+        "mtllib material.mtl",
+        "usemtl Material",
+        "v -0.5 -0.5 0",
+        "v 0.5 -0.5 0",
+        "v 0.5 0.5 0",
+        "v -0.5 0.5 0",
+        "vt 0 0",
+        "vt 1 0",
+        "vt 1 1",
+        "vt 0 1",
+        "f 1/1 2/2 3/3",
+        "f 1/1 3/3 4/4"
+      ].join("\n"),
+      "material.mtl": [
+        "newmtl Material",
+        "Kd 0.0 0.0 0.0",
+        "Ke 0.0 0.0 0.0",
+        "illum 2",
+        "map_Pm texture_pbr_20250901_metallic.png",
+        "map_Pr texture_pbr_20250901_roughness.png",
+        "map_Bump -bm 1.0 texture_pbr_20250901_normal.png"
+      ].join("\n"),
+      "texture_pbr_20250901.png": createPng(4, 4, [
+        [225, 40, 35],
+        [225, 40, 35],
+        [30, 105, 230],
+        [30, 105, 230],
+        [225, 40, 35],
+        [225, 40, 35],
+        [30, 105, 230],
+        [30, 105, 230],
+        [20, 175, 80],
+        [20, 175, 80],
+        [245, 185, 25],
+        [245, 185, 25],
+        [20, 175, 80],
+        [20, 175, 80],
+        [245, 185, 25],
+        [245, 185, 25]
+      ]),
+      "texture_pbr_20250901_metallic.png": createSolidPng(4, 4, [0, 0, 0]),
+      "texture_pbr_20250901_roughness.png": createSolidPng(4, 4, [128, 128, 128]),
+      "texture_pbr_20250901_normal.png": createSolidPng(4, 4, [128, 128, 255])
+    });
+
+    const sdk = createWorkflowSdk();
+    const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === MODEL_RENDER_IMAGE_WORKFLOW_ID);
+    if (!workflow) throw new Error("Model render workflow not found.");
+    const renderRun = createTestWorkflowContext(tempDir, "obj-diffuse-fallback");
+
+    await workflow.run(
+      workflow.inputSchema.parse({
+        modelFile: modelZip,
+        rotationX: 0,
+        rotationY: 0,
+        rotationZ: 0,
+        distance: 3.2,
+        width: 256,
+        height: 256,
+        backgroundColor: "#ffffff"
+      }),
+      renderRun.context
+    );
+
+    const imageArtifact = renderRun.artifacts.find((artifact) => artifact.kind === "image" && artifact.name === "model-render.png");
+    if (!imageArtifact) throw new Error("OBJ fallback render image artifact was not created.");
+    const color = analyzePngColor(fs.readFileSync(imageArtifact.path));
+
+    expect(color.foregroundPixels).toBeGreaterThan(1_000);
+    expect(color.maxChroma).toBeGreaterThan(80);
+    expect(color.coloredForegroundRatio).toBeGreaterThan(0.2);
+  }, 60_000);
+
   it("renders FBX assets with visible color, reads bounds, and accepts single-FBX ZIPs", async () => {
     const tempDir = tempDirPath();
     const fbxPath = path.join(tempDir, "color-plane.fbx");
@@ -378,6 +550,14 @@ function createPng(width: number, height: number, pixels: Array<[number, number,
     pngChunk("IDAT", zlib.deflateSync(Buffer.concat(rawRows))),
     pngChunk("IEND", Buffer.alloc(0))
   ]);
+}
+
+function createSolidPng(width: number, height: number, color: [number, number, number]): Buffer {
+  return createPng(
+    width,
+    height,
+    Array.from({ length: width * height }, () => color)
+  );
 }
 
 function analyzePngColor(png: Buffer): { foregroundPixels: number; coloredForegroundRatio: number; maxChroma: number } {

@@ -90,6 +90,18 @@ For workflow input, create a JSON file that matches the selected workflow's sche
 }
 ```
 
+For one-off ChatGPT image generation, `based-blink.chatgpt.extension-image-prompt` accepts only `prompt`, while `based-blink.chatgpt.extension-image-prompt-transform` accepts one source image path in `image` plus `prompt`:
+
+```json
+{
+  "image": "C:\\path\\to\\source.png",
+  "prompt": "Use the attached source image and generate the requested variation.",
+  "extensionTab": { "mode": "new", "routingToken": "replace-with-a-stable-routing-token" }
+}
+```
+
+The `image` field is a single file path string. Use `sourceImages` only for the sequence workflow.
+
 For `based-blink.chatgpt.extension-image-sequence`, the CLI input should treat `masterPromptSuffix` as part of the optional setup prompt, not as a sequence prompt. The renderer pre-fills this value when a setup prompt is entered, but CLI runs only receive what is present in the JSON input. When `masterPrompt` is non-empty and you want image-only sequence behavior, include the suffix explicitly:
 
 ```json

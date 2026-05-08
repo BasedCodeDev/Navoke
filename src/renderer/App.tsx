@@ -115,6 +115,7 @@ import { isRecoverableFailedExtensionRun, resolveExtensionFocusTarget } from "@/
 import { resolveExtensionTabSelection } from "@/lib/extensionTabRouting";
 import { activeCliAgentRuns, isCliRun, runOriginCommand, runOriginLabel } from "@/lib/runOrigin";
 import { runArtifactCountChips } from "@/lib/runArtifactSummary";
+import { runPromptInputSummary, type RunPromptInputSummaryItem } from "@/lib/runInputSummary";
 import { isPreviewableModelArtifact } from "@/lib/modelPreview";
 import { ArtifactPreview } from "@/components/ArtifactPreview";
 import { ModelViewer } from "@/components/ModelViewer";
@@ -1463,7 +1464,7 @@ function ThemePickerModal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
+    <div className="app-no-drag fixed inset-0 z-50 overflow-hidden bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
       <div className="mx-auto flex min-h-full max-w-5xl items-start justify-center">
         <div
           className="w-full overflow-hidden rounded-lg border border-border bg-background shadow-xl"
@@ -1711,6 +1712,25 @@ function ProjectLanding({
   );
 }
 
+function RunInputPromptSummary({ items }: { items: RunPromptInputSummaryItem[] }): JSX.Element {
+  return (
+    <section className="space-y-3 rounded-md border border-border bg-card p-4">
+      <div>
+        <h3 className="text-sm font-semibold">{items.length === 1 ? "Input prompt" : "Input prompts"}</h3>
+        <p className="text-xs text-muted-foreground">Prompt text saved with this run input.</p>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {items.map((item) => (
+          <div key={item.name} className={cn("space-y-2", item.multiline ? "lg:col-span-2" : undefined)}>
+            <div className="text-xs font-medium text-muted-foreground">{item.label}</div>
+            <div className="whitespace-pre-wrap rounded-md bg-muted p-3 text-xs leading-5">{item.value}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 type ReusedInputValidationState =
   | { status: "idle" | "checking"; files: FileValidationResult["files"] }
   | { status: "ready"; files: FileValidationResult["files"] }
@@ -1775,6 +1795,7 @@ function RunDetailModal({
   const runWorkflow = workflowAvailability?.workflow ?? undefined;
   const hasExtensionFocus = workflowHasCapability(runWorkflow, "extension.focusTarget");
   const runPresentation = getRunPresentation(run?.output);
+  const promptInputItems = useMemo(() => runPromptInputSummary(run?.input, runWorkflow), [run?.input, runWorkflow]);
   const canResumeRun = workflowUsable && (run?.status === "waiting_manual" || isRecoverableFailedExtensionRun(run, runWorkflow));
   const canRenameRun = Boolean(run && !["queued", "running", "pausing", "waiting_manual"].includes(run.status));
   const saveTitle = isSavedToLibrary
@@ -1860,7 +1881,14 @@ function RunDetailModal({
                 {run ? `${run.runNumber === null ? "" : `Run #${run.runNumber} | `}${run.name} | ${run.workflowId}` : `Run ${runId}`}
               </div>
             </div>
-            <Button type="button" variant="ghost" size="icon" aria-label="Close run detail" onClick={onClose}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Close run detail"
+              className="shrink-0"
+              onClick={onClose}
+            >
               <X className="h-4 w-4" />
             </Button>
           </div>
@@ -2049,6 +2077,8 @@ function RunDetailModal({
               ) : null}
             </section>
 
+            {promptInputItems.length > 0 ? <RunInputPromptSummary items={promptInputItems} /> : null}
+
             {hasDetails ? (
               <>
                 <section className="space-y-3">
@@ -2150,7 +2180,11 @@ function WorkflowInputFieldControl({
 }): JSX.Element {
   const label = `${field.label}${field.required ? " *" : ""}`;
   if (field.type === "fileList") {
-    const files = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    const files = Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : typeof value === "string" && value.trim()
+        ? [value]
+        : [];
     return (
       <ImagePicker
         label={label}

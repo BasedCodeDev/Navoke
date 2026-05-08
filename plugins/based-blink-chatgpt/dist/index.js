@@ -8,6 +8,7 @@ exports.buildChatGptPage = buildChatGptPage;
 exports.normalizeChatGptExtensionOutputs = normalizeChatGptExtensionOutputs;
 exports.normalizeChatGptExtensionSequenceOutputs = normalizeChatGptExtensionSequenceOutputs;
 exports.normalizeChatGptExtensionPromptImageOutputs = normalizeChatGptExtensionPromptImageOutputs;
+exports.normalizeChatGptExtensionImagePromptOutputs = normalizeChatGptExtensionImagePromptOutputs;
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const node_crypto_1 = require("node:crypto");
@@ -150,6 +151,13 @@ function createWorkflows(sdk) {
         artifactId: z.string(),
         outputPath: z.string()
     });
+    const imagePromptOutputMappingSchema = z.object({
+        image: z.string(),
+        prompt: z.string(),
+        pairId: z.string(),
+        artifactId: z.string(),
+        outputPath: z.string()
+    });
     const pausedPromptImageSchema = z.object({
         reason: z.string().optional(),
         baseline: z.unknown().optional(),
@@ -160,7 +168,19 @@ function createWorkflows(sdk) {
         outputMapping: promptImageOutputMappingSchema.nullable().optional(),
         pausedPrompt: pausedPromptImageSchema.nullable().optional()
     });
+    const imagePromptCheckpointSchema = z.object({
+        completed: z.boolean(),
+        outputMapping: imagePromptOutputMappingSchema.nullable().optional(),
+        pausedPrompt: pausedPromptImageSchema.nullable().optional()
+    });
     const promptImageInputSchema = z.object({
+        prompt: z.string().trim().min(1, "Prompt is required."),
+        timeoutMinutes: z.number().min(1).max(240).optional().default(60),
+        extensionTab: extensionTabSchema,
+        selectors: selectorsSchema
+    });
+    const imagePromptInputSchema = z.object({
+        image: z.string().trim().min(1, "Source image is required."),
         prompt: z.string().trim().min(1, "Prompt is required."),
         timeoutMinutes: z.number().min(1).max(240).optional().default(60),
         extensionTab: extensionTabSchema,
@@ -173,6 +193,14 @@ function createWorkflows(sdk) {
         chatGptPage: chatGptPageSchema.optional(),
         presentation: z.unknown().optional(),
         checkpoint: promptImageCheckpointSchema.optional()
+    });
+    const imagePromptOutputSchema = z.object({
+        artifactIds: z.array(z.string()),
+        summary: z.string(),
+        browserPage: chatGptPageSchema.optional(),
+        chatGptPage: chatGptPageSchema.optional(),
+        presentation: z.unknown().optional(),
+        checkpoint: imagePromptCheckpointSchema.optional()
     });
     const chatGptExtensionImageTransformWorkflow = {
         manifest: {
@@ -1290,6 +1318,336 @@ function createWorkflows(sdk) {
             };
         }
     };
+    const chatGptExtensionImagePromptWorkflow = {
+        manifest: {
+            id: "based-blink.chatgpt.extension-image-prompt-transform",
+            title: "ChatGPT Extension Image And Prompt To Image",
+            description: "Submits one source image with one text prompt through the companion Chrome extension and captures one generated image.",
+            category: "chatgpt",
+            version: "0.1.0",
+            concurrency: 1,
+            requiresBrowser: false,
+            targetUrl: "https://chatgpt.com/",
+            outputKinds: ["image", "json"],
+            uiCapabilities: ["extension.tabRouting", "extension.focusTarget"],
+            inputFields: [
+                {
+                    name: "image",
+                    label: "Source image",
+                    type: "fileList",
+                    required: true,
+                    fileValue: "single",
+                    maxFiles: 1,
+                    filePickerTitle: "Choose source image",
+                    fileFilters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }]
+                },
+                { name: "prompt", label: "Prompt", type: "textarea", required: true },
+                {
+                    name: "selectors",
+                    label: "Selector config",
+                    type: "json",
+                    help: "Optional CSS selectors for composer, submit button, stop button, and output image."
+                }
+            ]
+        },
+        inputSchema: imagePromptInputSchema,
+        outputSchema: imagePromptOutputSchema,
+        canResumeFailedRun: canResumeFailedChatGptImagePromptRun,
+        async run(input, ctx) {
+            const artifactIds = [];
+            const artifactDir = ctx.artifactDir;
+            const usedOutputNames = new Set();
+            const registeredOutputs = [];
+            let outputKey;
+            let outputMapping;
+            let outputProcessing = Promise.resolve();
+            let outputProcessingError;
+            let latestChatGptPage = buildChatGptPage(input.extensionTab, undefined, undefined);
+            let pausedPrompt;
+            const restored = restoreImagePromptCheckpointState(ctx.previousOutput, input, artifactDir);
+            for (const restoredArtifactId of restored.artifactIds)
+                artifactIds.push(restoredArtifactId);
+            if (restored.outputMapping && restored.output) {
+                outputMapping = restored.outputMapping;
+                outputKey = outputIdentityKey(restored.output);
+                registeredOutputs.push(restored.output);
+                usedOutputNames.add(node_path_1.default.basename(restored.outputMapping.outputPath));
+            }
+            latestChatGptPage = restored.chatGptPage ?? latestChatGptPage;
+            pausedPrompt = restored.pausedPrompt;
+            const checkpointOutput = (summary) => ({
+                artifactIds: [...artifactIds],
+                summary,
+                ...(latestChatGptPage ? { browserPage: latestChatGptPage, chatGptPage: latestChatGptPage } : {}),
+                checkpoint: {
+                    completed: Boolean(outputKey),
+                    outputMapping: outputMapping ?? null,
+                    pausedPrompt: pausedPrompt ?? null
+                }
+            });
+            const persistCheckpointOutput = async (summary) => {
+                await ctx.updateOutput(checkpointOutput(summary));
+            };
+            const manualActionData = (phase) => ({
+                phase,
+                pausedPrompt: pausedPrompt ?? null,
+                chatGptPage: latestChatGptPage ?? null,
+                url: latestChatGptPage?.url ?? targetUrl(input.extensionTab) ?? null,
+                target: buildRecoverableTarget(input.extensionTab, latestChatGptPage)
+            });
+            const registerOutputArtifact = async (output, taskId) => {
+                if (output.subjectIndex !== 0) {
+                    throw new Error(`ChatGPT extension returned output for unexpected image prompt index ${output.subjectIndex}.`);
+                }
+                if (typeof output.base64 !== "string" || output.base64.length === 0) {
+                    throw new Error("ChatGPT extension returned an empty output image for the image prompt.");
+                }
+                const key = outputIdentityKey(output);
+                if (outputKey) {
+                    if (outputKey === key)
+                        return;
+                    throw new Error("ChatGPT extension returned multiple distinct output images. This workflow expects exactly one result.");
+                }
+                outputKey = key;
+                const pairId = "image-prompt";
+                const mimeType = output.mimeType ?? "image/png";
+                const extension = extensionForMimeType(mimeType);
+                const outputPath = node_path_1.default.join(artifactDir, outputFileNameForImagePrompt(input.image, input.prompt, extension, usedOutputNames));
+                node_fs_1.default.writeFileSync(outputPath, Buffer.from(output.base64, "base64"));
+                const artifact = await ctx.addArtifact({
+                    kind: "image",
+                    name: node_path_1.default.basename(outputPath),
+                    path: outputPath,
+                    mimeType: inferMimeType(outputPath) ?? mimeType,
+                    metadata: {
+                        source: "chatgpt-extension",
+                        workflowKind: "image-prompt-transform",
+                        inputImage: input.image,
+                        prompt: input.prompt,
+                        pairId,
+                        taskId,
+                        extensionMetadata: output.metadata ?? null
+                    }
+                });
+                artifactIds.push(artifact.id);
+                outputMapping = { image: input.image, prompt: input.prompt, pairId, artifactId: artifact.id, outputPath };
+                registeredOutputs.push(output);
+                await ctx.step("Registered ChatGPT image prompt result", 95, { artifactId: artifact.id });
+                await persistCheckpointOutput("Processed ChatGPT image prompt.");
+            };
+            const queueOutput = (output, taskId) => {
+                outputProcessing = outputProcessing.then(async () => {
+                    if (outputProcessingError)
+                        return;
+                    try {
+                        await registerOutputArtifact(output, taskId);
+                    }
+                    catch (error) {
+                        outputProcessingError = error instanceof Error ? error : new Error(String(error));
+                    }
+                });
+                void outputProcessing;
+            };
+            const waitForTargetAtCheckpoint = async (phase) => {
+                while (true) {
+                    const target = buildRecoverableTarget(input.extensionTab, latestChatGptPage);
+                    try {
+                        const client = await chatgpt.ensureRoutedTab(target, { signal: ctx.signal, timeoutMs: 45_000 });
+                        const page = buildChatGptPage(target, { url: client.url, title: client.title }, client);
+                        if (page && chatGptPageChanged(page, latestChatGptPage)) {
+                            latestChatGptPage = page;
+                            await persistCheckpointOutput(`Tracking ChatGPT page before ${phase}.`);
+                        }
+                        const recoverableTarget = buildRecoverableTarget(target, page);
+                        try {
+                            await chatgpt.focusTarget(recoverableTarget, { signal: ctx.signal, timeoutMs: 10_000 });
+                        }
+                        catch (focusError) {
+                            if (isOperationCancelled(focusError))
+                                throw focusError;
+                            await ctx.event("extension.focus", "Could not focus ChatGPT browser surface before task.", {
+                                phase,
+                                message: focusError instanceof Error ? focusError.message : String(focusError)
+                            });
+                        }
+                        return { target: recoverableTarget, client };
+                    }
+                    catch (error) {
+                        await persistCheckpointOutput("Waiting for ChatGPT browser controller before image prompt.");
+                        await ctx.waitForManualAction(chatGptControllerManualMessage(error), manualActionData(phase));
+                    }
+                }
+            };
+            const runImagePromptTask = async (phaseLabel, taskInput) => {
+                while (true) {
+                    const { target, client } = await waitForTargetAtCheckpoint(phaseLabel);
+                    await ctx.step(`Queued ChatGPT ${phaseLabel} task`, 20, {
+                        phase: "subject",
+                        targetMode: target.mode,
+                        clientId: client.id,
+                        url: client.url
+                    });
+                    const task = chatgpt.createConversationTask({
+                        runId: ctx.runId,
+                        phase: "subject",
+                        subjectMode: taskInput.subjectMode,
+                        subjectImagePath: input.image,
+                        subjectIndex: 0,
+                        subjectInstruction: input.prompt,
+                        subjectBaseline: taskInput.subjectBaseline,
+                        selectors: input.selectors,
+                        target
+                    });
+                    let submittedBaseline = taskInput.subjectBaseline;
+                    let promptSubmitted = false;
+                    const unsubscribe = chatgpt.subscribeTask(task.id, (event) => {
+                        const eventData = normalizeRecord(event.data);
+                        if (event.type === "browser.task.output_baseline" && eventData.baseline !== undefined) {
+                            submittedBaseline = eventData.baseline;
+                        }
+                        if (event.type === "browser.task.prompt_submitted") {
+                            promptSubmitted = true;
+                        }
+                        void ctx.event("extension.task", event.message, {
+                            taskId: event.taskId,
+                            type: event.type,
+                            data: event.data
+                        });
+                    });
+                    const unsubscribeOutput = chatgpt.subscribeTaskOutput(task.id, (output) => queueOutput(output, task.id));
+                    try {
+                        const result = await waitForTaskWithRecoverableTarget(task.id, target, ctx, input.timeoutMinutes * 60_000, async (client) => {
+                            const page = buildChatGptPage(target, { url: client.url, title: client.title }, client);
+                            if (page && chatGptPageChanged(page, latestChatGptPage)) {
+                                latestChatGptPage = page;
+                                await persistCheckpointOutput(`Tracking ChatGPT page during ${phaseLabel}.`);
+                            }
+                        });
+                        for (const output of result.outputs)
+                            queueOutput(output, task.id);
+                        await outputProcessing;
+                        if (outputProcessingError)
+                            throw outputProcessingError;
+                        latestChatGptPage = buildChatGptPage(target, result.metadata, client) ?? latestChatGptPage;
+                        const pausedMetadata = readPausedTaskMetadata(result.metadata);
+                        if (pausedMetadata) {
+                            pausedPrompt = {
+                                ...(pausedMetadata.reason ? { reason: pausedMetadata.reason } : {}),
+                                ...(pausedMetadata.baseline !== undefined ? { baseline: pausedMetadata.baseline } : {}),
+                                ...(pausedMetadata.captureDiagnostics !== undefined
+                                    ? { captureDiagnostics: pausedMetadata.captureDiagnostics }
+                                    : {})
+                            };
+                            await persistCheckpointOutput(`Paused during ChatGPT ${phaseLabel}.`);
+                            await ctx.waitForManualAction(`Paused during ChatGPT ${phaseLabel}. Resume will try to capture the current page output before resubmitting this image prompt.`, manualActionData(phaseLabel));
+                            return result;
+                        }
+                        await persistCheckpointOutput(`Completed ChatGPT ${phaseLabel} task.`);
+                        return result;
+                    }
+                    catch (error) {
+                        if (error instanceof ImmediateChatGptPauseError) {
+                            pausedPrompt = {
+                                reason: "Paused immediately. Resume will inspect the current ChatGPT page for an output before resubmitting this image prompt.",
+                                ...(taskInput.subjectBaseline !== undefined ? { baseline: taskInput.subjectBaseline } : {})
+                            };
+                            await persistCheckpointOutput(`Paused during ChatGPT ${phaseLabel}.`);
+                            await ctx.waitForManualAction(`Paused during ChatGPT ${phaseLabel}. Refresh the ChatGPT page if needed, then resume. Resume will inspect the current page for an output before resubmitting this image prompt.`, manualActionData(phaseLabel));
+                            return {
+                                outputs: [],
+                                metadata: {
+                                    paused: true,
+                                    pauseReason: pausedPrompt.reason,
+                                    ...(taskInput.subjectBaseline !== undefined ? { subjectBaseline: taskInput.subjectBaseline } : {})
+                                }
+                            };
+                        }
+                        if (error instanceof MissingExtensionTabError) {
+                            if (promptSubmitted || submittedBaseline !== undefined) {
+                                pausedPrompt = {
+                                    reason: "ChatGPT tab disconnected after image prompt submission started. Resume will inspect the current page for an output before resubmitting this image prompt.",
+                                    ...(submittedBaseline !== undefined ? { baseline: submittedBaseline } : {})
+                                };
+                                await persistCheckpointOutput(`ChatGPT tab disconnected after ${phaseLabel} submit; checking for existing output.`);
+                                return {
+                                    outputs: [],
+                                    metadata: {
+                                        paused: true,
+                                        pauseReason: pausedPrompt.reason,
+                                        ...(submittedBaseline !== undefined ? { subjectBaseline: submittedBaseline } : {})
+                                    }
+                                };
+                            }
+                            await persistCheckpointOutput(`ChatGPT tab disconnected during ${phaseLabel}.`);
+                            continue;
+                        }
+                        throw error;
+                    }
+                    finally {
+                        unsubscribeOutput();
+                        unsubscribe();
+                    }
+                }
+            };
+            await persistCheckpointOutput("Preparing ChatGPT image prompt workflow.");
+            await ctx.pauseIfRequested("Paused before ChatGPT image prompt.", manualActionData("image prompt"));
+            while (!outputKey) {
+                if (pausedPrompt) {
+                    const captureBaseline = pausedPrompt.baseline;
+                    pausedPrompt = undefined;
+                    await runImagePromptTask("image prompt capture", {
+                        subjectMode: "capture-existing",
+                        ...(captureBaseline !== undefined ? { subjectBaseline: captureBaseline } : {})
+                    });
+                    await outputProcessing;
+                    if (outputProcessingError)
+                        throw outputProcessingError;
+                    if (outputKey)
+                        break;
+                    if (pausedPrompt)
+                        continue;
+                    await ctx.event("chatgpt.capture_existing.missed", "Could not capture an existing ChatGPT output for image prompt; resubmitting the image prompt.");
+                }
+                await runImagePromptTask("image prompt", { subjectMode: "submit-and-capture" });
+                await outputProcessing;
+                if (outputProcessingError)
+                    throw outputProcessingError;
+                if (pausedPrompt && !outputKey)
+                    continue;
+                if (!outputKey)
+                    throw new Error("ChatGPT extension did not return an output image for the image prompt.");
+            }
+            await ctx.pauseIfRequested("Paused after ChatGPT image prompt.", manualActionData("image prompt"));
+            normalizeChatGptExtensionImagePromptOutputs(registeredOutputs);
+            const manifestPath = node_path_1.default.join(artifactDir, "chatgpt-extension-image-prompt-manifest.json");
+            writeJson(manifestPath, {
+                image: input.image,
+                prompt: input.prompt,
+                extensionTab: redactTargetForManifest(input.extensionTab),
+                chatGptPage: latestChatGptPage ?? null,
+                selectors: input.selectors,
+                outputMapping: outputMapping ?? null
+            });
+            const manifest = await ctx.addArtifact({
+                kind: "json",
+                name: node_path_1.default.basename(manifestPath),
+                path: manifestPath,
+                mimeType: "application/json"
+            });
+            artifactIds.push(manifest.id);
+            return {
+                artifactIds,
+                ...(latestChatGptPage ? { browserPage: latestChatGptPage, chatGptPage: latestChatGptPage } : {}),
+                presentation: buildImagePromptPresentation(input, outputMapping, manifest.id),
+                checkpoint: {
+                    completed: Boolean(outputKey),
+                    outputMapping: outputMapping ?? null,
+                    pausedPrompt: pausedPrompt ?? null
+                },
+                summary: "Processed one image and prompt through the ChatGPT Chrome extension image workflow."
+            };
+        }
+    };
     function buildSubjectPresentation(input, outputMappings, manifestArtifactId) {
         return {
             title: "Input and output pairs",
@@ -1384,6 +1742,34 @@ function createWorkflows(sdk) {
                             kind: "pair",
                             label: "Prompt",
                             left: { kind: "text", label: "Prompt", value: input.prompt },
+                            right: outputMapping
+                                ? { kind: "artifact", label: "Output", artifactId: outputMapping.artifactId, preview: "image" }
+                                : { kind: "text", label: "Output", value: "No output artifact is available yet." }
+                        }
+                    ]
+                },
+                { id: "support", title: "Supporting artifacts", items: [{ kind: "artifact", label: "Manifest", artifactId: manifestArtifactId }] }
+            ]
+        };
+    }
+    function buildImagePromptPresentation(input, outputMapping, manifestArtifactId) {
+        return {
+            title: "Image prompt result",
+            groups: [
+                {
+                    id: "result",
+                    title: "Generated image",
+                    items: [
+                        {
+                            kind: "pair",
+                            label: "Image prompt",
+                            left: {
+                                kind: "grid",
+                                items: [
+                                    { kind: "inputFile", label: "Source image", field: "image", index: 0, path: input.image },
+                                    { kind: "text", label: "Prompt", value: input.prompt }
+                                ]
+                            },
                             right: outputMapping
                                 ? { kind: "artifact", label: "Output", artifactId: outputMapping.artifactId, preview: "image" }
                                 : { kind: "text", label: "Output", value: "No output artifact is available yet." }
@@ -1618,6 +2004,64 @@ function createWorkflows(sdk) {
     function resolvePausedPromptImageForResume(storedPausedPrompt) {
         return storedPausedPrompt ? { pausedPrompt: storedPausedPrompt } : {};
     }
+    function canResumeFailedChatGptImagePromptRun(run) {
+        if (run.status !== "failed" || run.workflowId !== "based-blink.chatgpt.extension-image-prompt-transform")
+            return false;
+        const parsedInput = imagePromptInputSchema.safeParse(run.input);
+        if (!parsedInput.success)
+            return false;
+        const output = readStoredImagePromptOutput(run.output);
+        if (output?.checkpoint || output?.chatGptPage)
+            return true;
+        return Boolean(targetUrl(parsedInput.data.extensionTab));
+    }
+    function readStoredImagePromptOutput(value) {
+        const parsed = imagePromptOutputSchema.safeParse(value);
+        return parsed.success ? parsed.data : null;
+    }
+    function restoreImagePromptCheckpointState(previousOutput, input, artifactDir) {
+        const output = readStoredImagePromptOutput(previousOutput);
+        if (!output) {
+            return { artifactIds: [] };
+        }
+        const restored = restoreImagePromptOutputMapping(output.checkpoint?.outputMapping, input, artifactDir);
+        return {
+            artifactIds: restored ? [restored.mapping.artifactId] : [],
+            ...(restored ? { outputMapping: restored.mapping, output: restored.output } : {}),
+            ...(output.chatGptPage ? { chatGptPage: output.chatGptPage } : {}),
+            ...(output.checkpoint?.completed || restored ? {} : resolvePausedPromptImageForResume(output.checkpoint?.pausedPrompt))
+        };
+    }
+    function restoreImagePromptOutputMapping(mapping, input, artifactDir) {
+        if (!mapping)
+            return null;
+        if (mapping.image !== input.image)
+            return null;
+        if (mapping.prompt !== input.prompt)
+            return null;
+        if (!mapping.outputPath || !node_fs_1.default.existsSync(mapping.outputPath))
+            return null;
+        const outputPath = node_path_1.default.resolve(mapping.outputPath);
+        const resolvedArtifactDir = node_path_1.default.resolve(artifactDir);
+        if (outputPath !== resolvedArtifactDir && !outputPath.startsWith(`${resolvedArtifactDir}${node_path_1.default.sep}`))
+            return null;
+        const mimeType = inferMimeType(outputPath) ?? "image/png";
+        return {
+            mapping,
+            output: {
+                subjectIndex: 0,
+                subjectName: node_path_1.default.basename(mapping.image),
+                name: node_path_1.default.basename(outputPath),
+                mimeType,
+                base64: node_fs_1.default.readFileSync(outputPath).toString("base64"),
+                metadata: {
+                    source: "restored-checkpoint",
+                    artifactId: mapping.artifactId,
+                    outputPath
+                }
+            }
+        };
+    }
     class MissingExtensionTabError extends Error {
         constructor() {
             super("ChatGPT tab disconnected before the extension task completed.");
@@ -1696,7 +2140,12 @@ function createWorkflows(sdk) {
             /No compatible BLINK browser extension tab is connected/i.test(error.message) ||
             /Selected browser extension tab is not connected/i.test(error.message));
     }
-    return [chatGptExtensionImageTransformWorkflow, chatGptExtensionImageSequenceWorkflow, chatGptExtensionPromptImageWorkflow];
+    return [
+        chatGptExtensionImageTransformWorkflow,
+        chatGptExtensionImageSequenceWorkflow,
+        chatGptExtensionPromptImageWorkflow,
+        chatGptExtensionImagePromptWorkflow
+    ];
 }
 const CHATGPT_FOCUS_THROTTLE_MS = 20_000;
 function createChatGptBrowserController(browser, sleep) {
@@ -2415,6 +2864,13 @@ function outputFileNameForPrompt(sourceImage, promptIndex, extension, usedNames)
 }
 function outputFileNameForPromptImage(prompt, extension, usedNames) {
     const baseName = `${safePromptStem(prompt)}-chatgpt`;
+    return uniqueOutputFileName(baseName, extension, usedNames);
+}
+function outputFileNameForImagePrompt(sourceImage, prompt, extension, usedNames) {
+    const baseName = `${safeStem(sourceImage)}-${safePromptStem(prompt)}-chatgpt`;
+    return uniqueOutputFileName(baseName, extension, usedNames);
+}
+function uniqueOutputFileName(baseName, extension, usedNames) {
     let candidate = `${baseName}.${extension}`;
     let duplicate = 2;
     while (usedNames.has(candidate)) {
@@ -2518,6 +2974,9 @@ function normalizeChatGptExtensionPromptImageOutputs(outputs) {
             "This workflow expects exactly one result.");
     }
     return distinctOutputs[0];
+}
+function normalizeChatGptExtensionImagePromptOutputs(outputs) {
+    return normalizeChatGptExtensionPromptImageOutputs(outputs);
 }
 function outputIdentityKey(output) {
     return `${output.mimeType ?? "image/png"}:${base64IdentityKey(output.base64)}`;

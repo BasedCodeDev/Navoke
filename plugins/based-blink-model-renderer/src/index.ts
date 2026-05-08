@@ -65,6 +65,7 @@ interface BrowserModelDescriptor {
   format: ModelFormat;
   modelFileName: string;
   mtlFileName?: string;
+  textureFileNames?: string[];
 }
 
 interface RegisteredModelArtifact {
@@ -409,9 +410,43 @@ async function prepareModelAssetPackage(modelFile: string, ctx: WorkflowContext,
     throw new sdk.errors.WorkflowConfigurationError("Model input must be an .obj, .fbx, or .zip file.");
   }
 
+  if (ext === ".obj") {
+    copyObjWithSidecars(sourcePath, assetRoot, sdk);
+    return discoverModelAssets(assetRoot);
+  }
+
   const targetPath = path.join(assetRoot, stripRunInputPrefix(path.basename(sourcePath)));
   fs.copyFileSync(sourcePath, targetPath);
   return discoverModelAssets(assetRoot);
+}
+
+function copyObjWithSidecars(sourcePath: string, assetRoot: string, sdk: WorkflowSdk): void {
+  const sourceDir = path.dirname(sourcePath);
+  const objTargetPath = path.join(assetRoot, stripRunInputPrefix(path.basename(sourcePath)));
+  fs.copyFileSync(sourcePath, objTargetPath);
+
+  const objText = fs.readFileSync(sourcePath, "utf8");
+  for (const materialFileName of objMaterialLibraryNames(objText, sourceDir)) {
+    const materialSourcePath = path.resolve(sourceDir, materialFileName);
+    if (!isSameOrChildPath(sourceDir, materialSourcePath) || !fs.existsSync(materialSourcePath) || !fs.statSync(materialSourcePath).isFile()) {
+      throw new sdk.errors.WorkflowConfigurationError(
+        `OBJ file references missing material library "${materialFileName}". Use a ZIP or include the MTL and texture sidecar files with the OBJ.`
+      );
+    }
+
+    fs.copyFileSync(materialSourcePath, path.join(assetRoot, path.basename(materialSourcePath)));
+    const materialDir = path.dirname(materialSourcePath);
+    const materialText = fs.readFileSync(materialSourcePath, "utf8");
+    for (const textureFileName of mtlTextureFileNames(materialText)) {
+      const textureSourcePath = path.resolve(materialDir, textureFileName);
+      if (!isSameOrChildPath(materialDir, textureSourcePath) || !fs.existsSync(textureSourcePath) || !fs.statSync(textureSourcePath).isFile()) {
+        throw new sdk.errors.WorkflowConfigurationError(
+          `MTL file references missing texture "${textureFileName}". Use a ZIP or include the texture sidecar files with the OBJ.`
+        );
+      }
+      fs.copyFileSync(textureSourcePath, path.join(assetRoot, path.basename(textureSourcePath)));
+    }
+  }
 }
 
 async function registerModelArtifact(
@@ -657,6 +692,7 @@ function rendererHtml(): string {
           objLoader.setMaterials(materials);
         }
         const object = await loadWith(objLoader, modelUrl(model.modelFileName));
+        await applyDiffuseTextureFallback(object, model, manager);
         await assetsLoaded;
         await waitForTextureImages(object);
         return object;
@@ -797,6 +833,51 @@ function rendererHtml(): string {
       });
     }
 
+    function selectDiffuseTextureFileName(textureFileNames) {
+      if (!Array.isArray(textureFileNames) || textureFileNames.length === 0) return null;
+      const candidates = textureFileNames.filter((fileName) => !isNonDiffuseTextureFileName(fileName));
+      if (candidates.length === 0) return null;
+      return candidates.find((fileName) => /(?:^|[_\\-.])(albedo|basecolor|base_color|diffuse|color|texture_pbr)(?:[_\\-.]|$)/i.test(fileName)) || candidates[0] || null;
+    }
+
+    function isNonDiffuseTextureFileName(fileName) {
+      return /(?:^|[_\\-.])(normal|roughness|rough|metallic|metalness|metal|specular|ao|occlusion|opacity|alpha|bump|height|displacement|disp)(?:[_\\-.]|$)/i.test(fileName);
+    }
+
+    function objectNeedsDiffuseTextureFallback(object) {
+      let needsFallback = false;
+      object.traverse((child) => {
+        if (needsFallback || !child.isMesh || !child.geometry || !child.geometry.getAttribute) return;
+        if (!child.geometry.getAttribute("uv") || child.geometry.getAttribute("color")) return;
+        needsFallback = materialList(child.material).some((material) => material && !material.vertexColors && !material.map);
+      });
+      return needsFallback;
+    }
+
+    function loadTexture(loader, url) {
+      return new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
+    }
+
+    async function applyDiffuseTextureFallback(object, model, manager) {
+      if (!objectNeedsDiffuseTextureFallback(object)) return false;
+      const textureFileName = selectDiffuseTextureFileName(model.textureFileNames);
+      if (!textureFileName) return false;
+      const texture = await loadTexture(new THREE.TextureLoader(manager), modelUrl(textureFileName));
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      object.traverse((child) => {
+        if (!child.isMesh || !child.geometry || !child.geometry.getAttribute) return;
+        if (!child.geometry.getAttribute("uv") || child.geometry.getAttribute("color")) return;
+        for (const material of materialList(child.material)) {
+          if (!material || material.vertexColors || material.map === undefined || material.map) continue;
+          material.map = texture;
+          if (material.color) material.color.setRGB(1, 1, 1);
+          material.needsUpdate = true;
+        }
+      });
+      return true;
+    }
+
     function colorLuminance(color) {
       return color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
     }
@@ -910,7 +991,8 @@ function browserModelDescriptor(assets: ModelAssetDiscovery): BrowserModelDescri
   return {
     format: assets.format,
     modelFileName: assets.modelFileName,
-    ...(assets.mtlFileName ? { mtlFileName: assets.mtlFileName } : {})
+    ...(assets.mtlFileName ? { mtlFileName: assets.mtlFileName } : {}),
+    ...(assets.textureFileNames.length > 0 ? { textureFileNames: assets.textureFileNames } : {})
   };
 }
 
@@ -1015,6 +1097,53 @@ function isSupportedModelInput(filePath: string): boolean {
 
 function stripRunInputPrefix(fileName: string): string {
   return fileName.replace(/^\d{2}-/, "") || fileName;
+}
+
+function objMaterialLibraryNames(objText: string, sourceDir: string): string[] {
+  const names = new Set<string>();
+  for (const line of objText.split(/\r?\n/)) {
+    const trimmed = stripInlineComment(line).trim();
+    if (!trimmed.toLowerCase().startsWith("mtllib ")) continue;
+    const value = trimmed.slice("mtllib ".length).trim();
+    if (!value) continue;
+    const wholePath = path.resolve(sourceDir, value);
+    if (fs.existsSync(wholePath)) {
+      names.add(value);
+      continue;
+    }
+    for (const token of value.split(/\s+/).filter(Boolean)) {
+      names.add(token);
+    }
+  }
+  return [...names];
+}
+
+function mtlTextureFileNames(mtlText: string): string[] {
+  const names = new Set<string>();
+  for (const line of mtlText.split(/\r?\n/)) {
+    const trimmed = stripInlineComment(line).trim();
+    if (!trimmed) continue;
+    const [key = "", ...tokens] = trimmed.split(/\s+/);
+    const normalizedKey = key.toLowerCase();
+    if (!normalizedKey.startsWith("map_") && !["bump", "norm", "disp", "decal", "refl"].includes(normalizedKey)) continue;
+    const textureFileName = lastTextureToken(tokens);
+    if (textureFileName) names.add(textureFileName);
+  }
+  return [...names];
+}
+
+function lastTextureToken(tokens: string[]): string | null {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index];
+    if (!token || token.startsWith("-")) continue;
+    return token;
+  }
+  return null;
+}
+
+function stripInlineComment(value: string): string {
+  const commentIndex = value.indexOf("#");
+  return commentIndex === -1 ? value : value.slice(0, commentIndex);
 }
 
 function formatVector(vector: Vector3Json): string {

@@ -74,7 +74,8 @@ describe("workflow plugin packages", () => {
     expect(manager.listWorkflowRegistrations().map((registration) => registration.definition.manifest.id)).toEqual([
       "based-blink.chatgpt.extension-image-transform",
       "based-blink.chatgpt.extension-image-sequence",
-      "based-blink.chatgpt.extension-image-prompt"
+      "based-blink.chatgpt.extension-image-prompt",
+      "based-blink.chatgpt.extension-image-prompt-transform"
     ]);
     const workflow = manager
       .listWorkflowRegistrations()
@@ -85,6 +86,9 @@ describe("workflow plugin packages", () => {
     const promptWorkflow = manager
       .listWorkflowRegistrations()
       .find((registration) => registration.definition.manifest.id === "based-blink.chatgpt.extension-image-prompt")!.definition;
+    const imagePromptWorkflow = manager
+      .listWorkflowRegistrations()
+      .find((registration) => registration.definition.manifest.id === "based-blink.chatgpt.extension-image-prompt-transform")!.definition;
     expect(workflow.inputSchema.safeParse({ referenceImages: [], subjectImages: [], masterPrompt: "" }).success).toBe(false);
     expect(
       workflow.inputSchema.safeParse({
@@ -110,6 +114,15 @@ describe("workflow plugin packages", () => {
     expect(
       promptWorkflow.inputSchema.safeParse({
         prompt: "Generate a small brass key on a white background.",
+        extensionTab: { mode: "existing", clientId: "client-1" }
+      }).success
+    ).toBe(true);
+    expect(imagePromptWorkflow.inputSchema.safeParse({ image: "", prompt: "Remove the background." }).success).toBe(false);
+    expect(imagePromptWorkflow.inputSchema.safeParse({ image: "C:\\tmp\\source.png", prompt: "" }).success).toBe(false);
+    expect(
+      imagePromptWorkflow.inputSchema.safeParse({
+        image: "C:\\tmp\\source.png",
+        prompt: "Remove the background.",
         extensionTab: { mode: "existing", clientId: "client-1" }
       }).success
     ).toBe(true);

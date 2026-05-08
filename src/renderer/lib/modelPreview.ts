@@ -6,6 +6,7 @@ interface PreviewMaterial extends THREE.Material {
   map?: THREE.Texture | null;
   metalness?: number;
   roughness?: number;
+  vertexColors?: boolean;
 }
 
 export type PreviewableModelFormat = "obj" | "fbx";
@@ -87,14 +88,19 @@ export function getModelArtifactMetadata(metadata: unknown): {
   modelFileName?: string;
   objFileName?: string;
   mtlFileName?: string;
+  textureFileNames?: string[];
 } {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
   const record = metadata as Record<string, unknown>;
+  const textureFileNames = Array.isArray(record.textureFileNames)
+    ? record.textureFileNames.filter((fileName): fileName is string => typeof fileName === "string")
+    : undefined;
   return {
     ...(typeof record.modelFormat === "string" ? { modelFormat: record.modelFormat } : {}),
     ...(typeof record.modelFileName === "string" ? { modelFileName: record.modelFileName } : {}),
     ...(typeof record.objFileName === "string" ? { objFileName: record.objFileName } : {}),
-    ...(typeof record.mtlFileName === "string" ? { mtlFileName: record.mtlFileName } : {})
+    ...(typeof record.mtlFileName === "string" ? { mtlFileName: record.mtlFileName } : {}),
+    ...(textureFileNames ? { textureFileNames } : {})
   };
 }
 
@@ -148,6 +154,32 @@ export function preparePreviewMaterials(object: THREE.Object3D): void {
   });
 }
 
+export async function applyPreviewDiffuseTextureFallback(
+  object: THREE.Object3D,
+  textureUrl: string | null,
+  manager?: THREE.LoadingManager
+): Promise<boolean> {
+  if (!textureUrl || !objectNeedsDiffuseTextureFallback(object)) return false;
+  const texture = await new Promise<THREE.Texture>((resolve, reject) => {
+    new THREE.TextureLoader(manager).load(textureUrl, resolve, undefined, reject);
+  });
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  applyDiffuseTexture(object, texture);
+  return true;
+}
+
+export function selectDiffuseTextureFileName(textureFileNames: string[] | undefined): string | null {
+  if (!textureFileNames?.length) return null;
+  const candidates = textureFileNames.filter((fileName) => !isNonDiffuseTextureFileName(fileName));
+  if (candidates.length === 0) return null;
+  return (
+    candidates.find((fileName) => /(?:^|[_\-.])(albedo|basecolor|base_color|diffuse|color|texture_pbr)(?:[_\-.]|$)/i.test(fileName)) ??
+    candidates[0] ??
+    null
+  );
+}
+
 export function addPreviewLighting(scene: THREE.Scene, camera: THREE.Camera): void {
   scene.add(camera);
   scene.add(new THREE.AmbientLight(0xffffff, 0.45));
@@ -177,6 +209,35 @@ export function disposeMaterial(material: THREE.Material | THREE.Material[]): vo
 
 function materialList(material: THREE.Material | THREE.Material[]): PreviewMaterial[] {
   return (Array.isArray(material) ? material : [material]).filter(Boolean) as PreviewMaterial[];
+}
+
+function objectNeedsDiffuseTextureFallback(object: THREE.Object3D): boolean {
+  let needsFallback = false;
+  object.traverse((child) => {
+    if (needsFallback || !(child instanceof THREE.Mesh)) return;
+    if (!child.geometry.getAttribute("uv") || child.geometry.getAttribute("color")) return;
+    needsFallback = materialList(child.material).some((material) => !material.vertexColors && !material.map);
+  });
+  return needsFallback;
+}
+
+function applyDiffuseTexture(object: THREE.Object3D, texture: THREE.Texture): void {
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    if (!child.geometry.getAttribute("uv") || child.geometry.getAttribute("color")) return;
+    for (const material of materialList(child.material)) {
+      if (material.vertexColors || material.map === undefined || material.map) continue;
+      material.map = texture;
+      material.color?.setRGB(1, 1, 1);
+      material.needsUpdate = true;
+    }
+  });
+}
+
+function isNonDiffuseTextureFileName(fileName: string): boolean {
+  return /(?:^|[_\-.])(normal|roughness|rough|metallic|metalness|metal|specular|ao|occlusion|opacity|alpha|bump|height|displacement|disp)(?:[_\-.]|$)/i.test(
+    fileName
+  );
 }
 
 function colorLuminance(color: THREE.Color): number {

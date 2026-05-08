@@ -7,6 +7,7 @@ import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { artifactAssetUrl, artifactUrl, type RunArtifactPreview } from "@/lib/api";
 import {
   addPreviewLighting,
+  applyPreviewDiffuseTextureFallback,
   disposeMaterial,
   ensurePreviewGeometryNormals,
   getModelArtifactMetadata,
@@ -14,6 +15,7 @@ import {
   modelArtifactFormat,
   normalizePreviewObject,
   preparePreviewMaterials,
+  selectDiffuseTextureFileName,
   waitForPreviewAssets,
   waitForPreviewTextures
 } from "@/lib/modelPreview";
@@ -169,6 +171,8 @@ async function loadObjArtifact(artifact: RunArtifactPreview): Promise<THREE.Grou
   const metadata = getModelArtifactMetadata(artifact.metadata);
   const objUrl = metadata.objFileName ? await artifactAssetUrl(artifact.id, metadata.objFileName) : await artifactUrl(artifact.id);
   const mtlUrl = metadata.mtlFileName ? await artifactAssetUrl(artifact.id, metadata.mtlFileName) : null;
+  const fallbackTextureFileName = selectDiffuseTextureFileName(metadata.textureFileNames);
+  const fallbackTextureUrl = fallbackTextureFileName ? await artifactAssetUrl(artifact.id, fallbackTextureFileName) : null;
   const manager = new THREE.LoadingManager();
   const objLoader = new OBJLoader(manager);
   let assetsLoaded = waitForPreviewAssets(manager);
@@ -185,6 +189,7 @@ async function loadObjArtifact(artifact: RunArtifactPreview): Promise<THREE.Grou
   const object = await new Promise<THREE.Group>((resolve, reject) => {
     objLoader.load(objUrl, resolve, undefined, reject);
   });
+  await applyPreviewDiffuseTextureFallback(object, fallbackTextureUrl, manager);
   await assetsLoaded;
   await waitForPreviewTextures(object);
   return object;

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createWorkflows,
   normalizeChatGptExtensionOutputs,
+  normalizeChatGptExtensionImagePromptOutputs,
   normalizeChatGptExtensionPromptImageOutputs,
   normalizeChatGptExtensionSequenceOutputs
 } from "../src";
@@ -79,10 +80,38 @@ describe("ChatGPT plugin browser-extension workflows", () => {
     expect(extensionTab.url).toContain("based-blink-tab=");
   });
 
+  it("defaults the image-prompt workflow to a routed new window and one source image", () => {
+    const workflow = workflows.find((candidate) => candidate.manifest.id === "based-blink.chatgpt.extension-image-prompt-transform")!;
+    const parsed = workflow.inputSchema.safeParse({
+      image: "C:\\tmp\\source.png",
+      prompt: "Remove the background."
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const extensionTab = (parsed.data as { extensionTab: { mode: string; routingToken?: string; url?: string; openMode?: string } }).extensionTab;
+    expect(extensionTab.mode).toBe("new");
+    expect(extensionTab.openMode).toBe("window");
+    expect(extensionTab.routingToken).toEqual(expect.any(String));
+    expect(extensionTab.url).toContain("based-blink-tab=");
+    expect(workflow.manifest.inputFields.find((field) => field.name === "image")).toMatchObject({
+      type: "fileList",
+      fileValue: "single",
+      maxFiles: 1
+    });
+  });
+
   it("normalizes one output for a single prompt image workflow", () => {
     expect(normalizeChatGptExtensionPromptImageOutputs([output(0, "first")]).base64).toBe("first");
     expect(() => normalizeChatGptExtensionPromptImageOutputs([])).toThrow(/did not return/);
     expect(() => normalizeChatGptExtensionPromptImageOutputs([output(0, "first"), output(0, "second")])).toThrow(
+      /distinct output images/
+    );
+  });
+
+  it("normalizes one output for a single image prompt workflow", () => {
+    expect(normalizeChatGptExtensionImagePromptOutputs([output(0, "first")]).base64).toBe("first");
+    expect(() => normalizeChatGptExtensionImagePromptOutputs([])).toThrow(/did not return/);
+    expect(() => normalizeChatGptExtensionImagePromptOutputs([output(0, "first"), output(0, "second")])).toThrow(
       /distinct output images/
     );
   });
@@ -398,6 +427,37 @@ describe("ChatGPT plugin browser-extension workflows", () => {
 
     expect(attachFileNames(actions)).toEqual([]);
     expect(fillActionValues(actions)).toEqual(["Generate a small brass key on a white background."]);
+    expect(clickActionCount(actions)).toBe(1);
+    expect(artifacts.map((artifact) => artifact.base64)).toEqual([generatedBase64]);
+  });
+
+  it("submits one source image with one prompt and captures one generated image", async () => {
+    const generatedBase64 = Buffer.from("single image prompt generated output").toString("base64");
+    const { actions, artifacts, run } = runPromptImageWithFakeBrowser({
+      workflowId: "based-blink.chatgpt.extension-image-prompt-transform",
+      image: "C:\\tmp\\source.png",
+      prompt: "Remove the background.",
+      imageExtractResult: {
+        images: [
+          {
+            src: "https://images.example.test/content?id=file_image_prompt",
+            fingerprint: "https://images.example.test/content?id=file_image_prompt|512x512",
+            stableSourceId: "id:file_image_prompt",
+            alt: "Generated image",
+            messageRole: "assistant",
+            width: 512,
+            height: 512,
+            mimeType: "image/png",
+            base64: generatedBase64
+          }
+        ]
+      }
+    });
+
+    await run;
+
+    expect(attachFileNames(actions)).toEqual([["source.png"]]);
+    expect(fillActionValues(actions)).toEqual(["Remove the background."]);
     expect(clickActionCount(actions)).toBe(1);
     expect(artifacts.map((artifact) => artifact.base64)).toEqual([generatedBase64]);
   });
@@ -1107,6 +1167,8 @@ function runTransformWithFakeBrowser(input: {
 }
 
 function runPromptImageWithFakeBrowser(input: {
+  workflowId?: string;
+  image?: string;
   prompt: string;
   imageExtractResult?: { images: Array<Record<string, unknown>> };
   actionError?: (action: { kind: string; [key: string]: unknown }) => Error | undefined;
@@ -1238,14 +1300,17 @@ function runPromptImageWithFakeBrowser(input: {
     }
   };
 
-  const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === "based-blink.chatgpt.extension-image-prompt")!;
+  const workflowId = input.workflowId ?? "based-blink.chatgpt.extension-image-prompt";
+  const workflow = createWorkflows(sdk).find((candidate) => candidate.manifest.id === workflowId)!;
   const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "chatgpt-prompt-image-test-"));
+  const parsedInput = workflow.inputSchema.parse({
+    ...(input.image ? { image: input.image } : {}),
+    prompt: input.prompt,
+    extensionTab: { mode: "existing", clientId: "client-1" }
+  });
   const run = workflow
     .run(
-      workflow.inputSchema.parse({
-        prompt: input.prompt,
-        extensionTab: { mode: "existing", clientId: "client-1" }
-      }),
+      parsedInput,
       {
         runId: "run-prompt-image-test",
         artifactDir,

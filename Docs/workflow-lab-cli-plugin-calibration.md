@@ -75,6 +75,18 @@ For `based-blink.chatgpt.extension-image-sequence`, remember that CLI input does
 
 The suffix is appended only to `masterPrompt` during setup. It is not a `prompts[]` entry, and it has no effect when the setup prompt is blank.
 
+For one-off ChatGPT image generation, use `based-blink.chatgpt.extension-image-prompt` with a single `prompt` string, or `based-blink.chatgpt.extension-image-prompt-transform` with a single image path in `image` plus `prompt`:
+
+```json
+{
+  "image": "C:\\path\\to\\source.png",
+  "prompt": "Use the attached source image and generate the requested variation.",
+  "extensionTab": { "mode": "new", "routingToken": "replace-with-a-stable-routing-token" }
+}
+```
+
+When debugging the image-plus-prompt workflow in Lab, verify the submitted upload preview and the generated assistant image separately; capture logic should register only the assistant output.
+
 3. Run the installed plugin:
 
 ```powershell
