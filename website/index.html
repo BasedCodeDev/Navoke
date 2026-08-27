@@ -5,17 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Navoke turns work in signed-in websites into reusable browser workflows that agents can run."
+      content="Capture web workflows once, then reuse them as actions people can click and agents can call."
     />
     <meta name="theme-color" content="#0d0c11" />
     <meta name="author" content="Based Code" />
     <link rel="icon" type="image/png" sizes="any" href="./logo.png" />
     <link rel="apple-touch-icon" href="./logo.png" />
     <link rel="canonical" href="https://navoke.basedcode.dev/" />
-    <meta property="og:title" content="Navoke — Let agents invoke the web." />
+    <meta property="og:title" content="Navoke - Turn websites into reusable actions." />
     <meta
       property="og:description"
-      content="Turn work in signed-in websites into reusable browser workflows, then keep every file and result."
+      content="Capture web workflows once, then reuse them as actions people can click and agents can call."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://navoke.basedcode.dev/" />
@@ -23,16 +23,16 @@
     <meta property="og:image" content="https://navoke.basedcode.dev/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Navoke — Let agents invoke the web." />
+    <meta property="og:image:alt" content="Navoke - Turn websites into reusable actions." />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Navoke — Let agents invoke the web." />
+    <meta name="twitter:title" content="Navoke - Turn websites into reusable actions." />
     <meta
       name="twitter:description"
-      content="Turn work in signed-in websites into reusable browser workflows, then keep every file and result."
+      content="Capture web workflows once, then reuse them as actions people can click and agents can call."
     />
     <meta name="twitter:image" content="https://navoke.basedcode.dev/og.png" />
-    <meta name="twitter:image:alt" content="Navoke — Let agents invoke the web." />
-    <title>Navoke — Let agents invoke the web.</title>
+    <meta name="twitter:image:alt" content="Navoke - Turn websites into reusable actions." />
+    <title>Navoke - Turn websites into reusable actions.</title>
   </head>
   <body>
     <svg class="icon-sprite" aria-hidden="true">
@@ -61,11 +61,13 @@
           <span class="motion-dot" aria-hidden="true"></span>
           <span data-motion-label>Motion on</span>
         </button>
-        <a class="text-link header-basedcode" href="https://basedcode.dev/" target="_blank" rel="noreferrer">Based Code <span aria-hidden="true">↗</span></a>
-        <a class="text-link icon-link header-github" href="https://github.com/BasedCodeDev/Navoke" target="_blank" rel="noreferrer">
-          <svg class="icon icon-github" aria-hidden="true"><use href="#icon-github"></use></svg>
-          GitHub
-        </a>
+        <div class="header-link-stack">
+          <a class="text-link icon-link header-basedcode" href="https://basedcode.dev/" target="_blank" rel="noreferrer"><span aria-hidden="true">↗</span> Based Code</a>
+          <a class="text-link icon-link header-github" href="https://github.com/BasedCodeDev/Navoke" target="_blank" rel="noreferrer">
+            <svg class="icon icon-github" aria-hidden="true"><use href="#icon-github"></use></svg>
+            GitHub
+          </a>
+        </div>
         <a class="button button-small" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
           <svg class="icon icon-download" aria-hidden="true"><use href="#icon-download"></use></svg>
           Download
@@ -76,10 +78,13 @@
     <main id="main-content">
       <section class="hero" id="top">
         <div class="hero-copy">
-          <p class="eyebrow"><span>01</span> Browser workflows for people and agents</p>
-          <h1>Let agents invoke <em>the web.</em></h1>
+          <p class="eyebrow"><span>01 /</span> Capture once. Reuse on demand.</p>
+          <h1>
+            <span class="headline-line">Turn websites into</span>
+            <em>reusable actions.</em>
+          </h1>
           <p class="hero-lede">
-            Navoke turns work you already do in signed-in websites into reusable workflows for agents. It saves the files and results when each run is done.
+            Capture once. Reuse whenever. Click to run, or let an agent call it.
           </p>
           <div class="hero-actions">
             <a class="button button-primary" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
@@ -224,107 +229,232 @@
         </div>
       </section>
 
-      <section class="content-section proof-section" id="why-navoke">
-        <div class="section-heading section-heading-wide reveal">
-          <p class="eyebrow"><span>03</span> Built for real browser work</p>
-          <h2>Agents build their own workflows.</h2>
+      <section class="content-section case-study-section" id="real-project">
+        <div class="case-study-heading reveal">
+          <div>
+            <p class="eyebrow"><span>03 /</span> Used on a real project</p>
+            <h2>Real workflows. <em>Real game assets.</em></h2>
+          </div>
           <p>
-            Agents can combine steps, try them, fix problems, and reuse what works. Navoke keeps every run visible and puts the results where you can find them.
+            Not Monsters is a solo game project. Its developer runs Navoke workflows directly or delegates them to an agent, with every result kept inside the project.
           </p>
         </div>
 
-        <div class="proof-grid reveal">
-          <article>
-            <span class="proof-label">session / 01</span>
-            <h3>Use the account you already have</h3>
-            <p>Use a separate saved browser session or the Chrome window where you are already signed in.</p>
-          </article>
-          <article>
-            <span class="proof-label">instructions / 02</span>
-            <h3>Give agents clear instructions</h3>
-            <p>Each workflow says what it needs, what it will do, and what it gives back.</p>
-          </article>
-          <article>
-            <span class="proof-label">control / 03</span>
-            <h3>Pause where people matter</h3>
-            <p>When a login or verification needs you, the workflow pauses clearly and continues when you are ready.</p>
-          </article>
-          <article>
-            <span class="proof-label">history / 04</span>
-            <h3>See what happened</h3>
-            <p>A clear history of steps, messages, screenshots, and errors helps you find and fix problems.</p>
-          </article>
-          <article>
-            <span class="proof-label">results / 05</span>
-            <h3>Keep every useful result</h3>
-            <p>Files and other results stay on your machine, organized with the run that created them.</p>
-          </article>
-          <article>
-            <span class="proof-label">reuse / 06</span>
-            <h3>Run successful work again</h3>
-            <p>Save a working setup to your workflow library and start it again from Navoke or the command line.</p>
+        <div class="case-study-shell reveal">
+          <figure class="case-study-media">
+            <img
+              class="case-study-key-art"
+              src="./img/not-monsters-key-art.webp"
+              alt="Not Monsters key art showing villagers confronting monsters in a medieval town"
+              width="1400"
+              height="788"
+              loading="lazy"
+            />
+            <img
+              class="case-study-media__logo"
+              src="./img/not-monsters-logo.webp"
+              alt="Not Monsters"
+              width="520"
+              height="346"
+              loading="lazy"
+            />
+            <div class="case-study-shot">
+              <img
+                src="./img/not-monsters-character-select.webp"
+                alt="Not Monsters character selection screen showing the Farmer and other playable characters"
+                width="900"
+                height="508"
+                loading="lazy"
+              />
+              <p><span>in game</span><span>character select</span></p>
+            </div>
+          </figure>
+
+          <article class="case-study-record">
+            <header class="case-study-record__header">
+              <span class="case-study-status"><i aria-hidden="true"></i> production use</span>
+            </header>
+
+            <div class="case-study-record__copy">
+              <span>project record / art pipeline</span>
+              <h3>A repeatable art pipeline.</h3>
+              <p>Navoke handles recurring work for character reference views, 3D models, and multi-angle reviews.</p>
+            </div>
+
+            <dl class="case-study-stats">
+              <div><dt>recorded runs</dt><dd>300+</dd></div>
+              <div><dt>workflow types</dt><dd>8</dd></div>
+            </dl>
+
+            <ol class="case-study-flow">
+              <li><span>01</span><strong>Create reference views</strong></li>
+              <li><span>02</span><strong>Build 3D models</strong></li>
+              <li><span>03</span><strong>Review every angle</strong></li>
+            </ol>
+
+            <footer>
+              <span>images · models · metadata · review renders</span>
+              <a class="case-study-steam-link" href="https://store.steampowered.com/app/4879320/Not_Monsters/#game_area_purchase&amp;utm_source=navoke_landing" target="_blank" rel="noreferrer">
+                <img src="./img/not-monsters-wishlist.png" alt="Wishlist Not Monsters on Steam" width="1424" height="542" loading="lazy" />
+              </a>
+            </footer>
           </article>
         </div>
       </section>
 
-      <section class="content-section workflows-section" id="workflows">
-        <div class="section-heading reveal">
-          <p class="eyebrow marketplace-eyebrow">
-            <span>04 /</span> Plugin marketplace
-            <span class="marketplace-status">Coming soon</span>
-          </p>
-          <h2>Publish a workflow. Make it reusable.</h2>
-          <p>Soon, authors will be able to publish Navoke plugins so other people and agents can find and reuse them instead of building the same browser workflow again.</p>
+      <section class="content-section proof-section" id="why-navoke">
+        <div class="proof-heading reveal">
+          <div>
+            <p class="eyebrow"><span>04 /</span> A workflow-building loop</p>
+            <h2>Agents build their own <em>workflows.</em></h2>
+          </div>
+          <div class="proof-heading__copy">
+            <p class="proof-heading__lead">The workflow improves as the agent works.</p>
+            <p>Give an agent a browser task. Navoke lets it try the work, see what happened, improve the steps, and keep the path that works.</p>
+          </div>
         </div>
 
-        <div class="workflow-list reveal">
-          <article class="workflow-card">
-            <div class="workflow-card__meta">
-              <span>build / reusable plugin</span>
-              <span>setup · inputs · results</span>
-            </div>
-            <div class="workflow-card__body">
-              <div>
-                <span class="workflow-number">01</span>
-                <h3>Package proven browser work.</h3>
-              </div>
-              <p>Turn a working browser procedure into a plugin with clear setup steps, required inputs, and useful results.</p>
-            </div>
-          </article>
+        <div class="agent-builder reveal" aria-label="How an agent builds a reusable Navoke workflow">
+          <header class="agent-builder__bar">
+            <span>build session / browser task</span>
+            <span class="agent-builder__status"><i aria-hidden="true"></i> visible feedback loop</span>
+          </header>
 
-          <article class="workflow-card">
-            <div class="workflow-card__meta">
-              <span>publish / coming soon</span>
-              <span>versions · description · discovery</span>
-            </div>
-            <div class="workflow-card__body">
-              <div>
-                <span class="workflow-number">02</span>
-                <h3>Share it with the marketplace.</h3>
-              </div>
-              <p>Authors will be able to share updated versions of their plugins with a clear description of what each workflow does and needs.</p>
-            </div>
-          </article>
+          <div class="agent-builder__body">
+            <aside class="agent-builder__brief">
+              <span class="proof-label">Give the agent an outcome</span>
+              <blockquote>“Complete this browser task, then save the working path so it can run again.”</blockquote>
+              <dl>
+                <div><dt>Works in</dt><dd>Your signed-in browser</dd></div>
+                <div><dt>Shows you</dt><dd>Every step and result</dd></div>
+                <div><dt>Pauses for</dt><dd>Logins and human checks</dd></div>
+              </dl>
+            </aside>
 
-          <article class="workflow-card">
-            <div class="workflow-card__meta">
-              <span>reuse / local-first</span>
-              <span>app · command line · agents</span>
-            </div>
-            <div class="workflow-card__body">
-              <div>
-                <span class="workflow-number">03</span>
-                <h3>Install once. Run it anywhere.</h3>
+            <ol class="agent-builder__loop">
+              <li>
+                <span class="agent-builder__number">01</span>
+                <div><small>Try</small><h3>Run the browser task</h3><p>The agent works through the real website using the browser session you choose.</p></div>
+              </li>
+              <li>
+                <span class="agent-builder__number">02</span>
+                <div><small>See</small><h3>Read what happened</h3><p>Progress, screenshots, results, and errors make each attempt easy to understand.</p></div>
+              </li>
+              <li>
+                <span class="agent-builder__number">03</span>
+                <div><small>Improve</small><h3>Fix the weak steps</h3><p>The agent adjusts the workflow and tries again without losing the earlier run.</p></div>
+              </li>
+              <li class="is-complete">
+                <span class="agent-builder__number">04</span>
+                <div><small>Keep</small><h3>Save the path that works</h3><p>The successful process becomes a reusable action instead of one-off work.</p></div>
+              </li>
+            </ol>
+          </div>
+
+          <footer class="agent-builder__output">
+            <div><span>What comes back</span><strong>One tested action, ready to use again.</strong></div>
+            <ul aria-label="Ways to run the finished workflow">
+              <li>Click to run</li>
+              <li>Command line</li>
+              <li>Agent call</li>
+            </ul>
+          </footer>
+        </div>
+      </section>
+
+      <section class="content-section workflows-section" id="workflows">
+        <div class="marketplace-heading reveal">
+          <div class="marketplace-heading__title">
+            <p class="eyebrow marketplace-eyebrow">
+              <span>05 /</span> Plugin marketplace
+              <span class="marketplace-status">Coming soon</span>
+            </p>
+            <h2>Build it once.<br /> <em>Share the shortcut.</em></h2>
+          </div>
+          <div class="marketplace-intro">
+            <p class="marketplace-intro__lead">A shared library of ready-to-run web actions.</p>
+            <p>
+              The marketplace will let creators publish working Navoke plugins. Others will be able to install them locally and run the same action with a click or an agent.
+            </p>
+          </div>
+        </div>
+
+        <div class="marketplace-board reveal" aria-label="Concept preview of the future Navoke plugin marketplace">
+          <div class="marketplace-board__bar">
+            <span>marketplace / concept preview</span>
+            <span class="marketplace-board__status"><i aria-hidden="true"></i> roadmap</span>
+          </div>
+          <div class="marketplace-board__canvas">
+            <span class="marketplace-watermark" aria-hidden="true">MARKETPLACE</span>
+
+            <article class="marketplace-plugin">
+              <div class="marketplace-plugin__topline">
+                <span class="marketplace-plugin__label">Creator package</span>
+                <span class="marketplace-plugin__version">v1.0</span>
               </div>
-              <p>People and agents will be able to add a published plugin to their local Navoke setup and run it from the app, command line, or agent tooling.</p>
-            </div>
+              <div class="marketplace-plugin__mark" aria-hidden="true">
+                <span></span><span></span><span></span>
+              </div>
+              <p class="marketplace-plugin__id">your.workflow</p>
+              <h3>A workflow you know works.</h3>
+              <p>Package the browser steps with everything another person or agent needs to run them.</p>
+              <ul class="marketplace-tags" aria-label="Plugin contents">
+                <li>setup</li>
+                <li>inputs</li>
+                <li>results</li>
+              </ul>
+            </article>
+
+            <ol class="marketplace-route" aria-label="Future marketplace path">
+              <li><span>01</span><strong>Publish</strong></li>
+              <li><span>02</span><strong>Discover</strong></li>
+              <li><span>03</span><strong>Install</strong></li>
+            </ol>
+
+            <article class="marketplace-outcomes">
+              <div class="marketplace-outcomes__header">
+                <span>Ready to run</span>
+                <span aria-hidden="true">•••</span>
+              </div>
+              <h3>Use it your way.</h3>
+              <div class="marketplace-outcome">
+                <span class="marketplace-outcome__icon" aria-hidden="true">↗</span>
+                <div><small>One click</small><strong>Run it from Navoke</strong></div>
+              </div>
+              <div class="marketplace-outcome">
+                <span class="marketplace-outcome__icon" aria-hidden="true">⌁</span>
+                <div><small>Agent call</small><strong>Invoke the same action</strong></div>
+              </div>
+              <div class="marketplace-outcome">
+                <span class="marketplace-outcome__icon" aria-hidden="true">⌂</span>
+                <div><small>Local first</small><strong>Keep the browser and results yours</strong></div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div class="marketplace-principles reveal">
+          <article>
+            <span class="marketplace-principle__index">01 / create</span>
+            <h3>Publish what works.</h3>
+            <p>Turn a proven browser workflow into a plugin with clear setup, inputs, and results.</p>
+          </article>
+          <article>
+            <span class="marketplace-principle__index">02 / discover</span>
+            <h3>Find the shortcut.</h3>
+            <p>See what an action does, what it needs, and what it returns before installing it.</p>
+          </article>
+          <article>
+            <span class="marketplace-principle__index">03 / reuse</span>
+            <h3>Make it yours.</h3>
+            <p>Install locally, then run it from the app, command line, or your preferred agent.</p>
           </article>
         </div>
       </section>
 
       <section class="content-section author-section" id="authors">
         <div class="author-copy reveal">
-          <p class="eyebrow"><span>05</span> For plugin authors</p>
+          <p class="eyebrow"><span>06</span> For plugin authors</p>
           <h2>Write the steps. Navoke handles the rest.</h2>
           <p>
             Your plugin describes what should happen on the website. Navoke handles inputs, browser access, progress, and saved results.
@@ -352,13 +482,13 @@
           </div>
           <div class="terminal-line">
             <span aria-hidden="true">$</span>
-            <code>navoke --project C:\work run provider.example --input input.json --wait</code>
+            <code>navoke --project "C:\work\My Project" run provider.example --input input.json --wait</code>
           </div>
         </div>
       </section>
 
-      <section class="content-section local-section reveal">
-        <p class="eyebrow"><span>06</span> Local by design</p>
+      <section class="content-section local-section reveal" id="local-first">
+        <p class="eyebrow"><span>07</span> Local by design</p>
         <blockquote>Your browser stays yours. The repeated work becomes reusable.</blockquote>
         <div class="local-detail">
           <p>Your workflow history, files, and browser sign-ins stay on your machine. Navoke organizes the work without sending it to a hosted automation service.</p>
@@ -371,14 +501,14 @@
         </div>
       </section>
 
-      <section class="final-cta">
-        <div class="final-cta__signal" aria-hidden="true">
-          <span></span><span></span><span></span><span></span>
-        </div>
+      <section class="final-cta" id="download">
         <div class="final-cta__content reveal">
           <img class="cta-mark" src="./logo.png" alt="" width="1254" height="1254" aria-hidden="true" />
-          <p class="eyebrow"><span>07</span> Run something real</p>
+          <p class="eyebrow"><span>08</span> Run something real</p>
           <h2>Give your agents a better way to use the web.</h2>
+          <div class="final-cta__signal" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
           <div class="hero-actions">
             <a class="button button-primary" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
               <svg class="icon icon-download" aria-hidden="true"><use href="#icon-download"></use></svg>
@@ -393,6 +523,21 @@
         </div>
       </section>
     </main>
+
+    <nav class="section-navigator" aria-label="Page section navigation" data-section-navigator>
+      <span class="section-navigator__count" aria-hidden="true" data-section-count>01 / 08</span>
+      <button type="button" data-section-previous aria-label="No previous section" title="No previous section" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <polyline points="18 15 12 9 6 15"></polyline>
+        </svg>
+      </button>
+      <button type="button" data-section-next aria-label="Next section: How it works" title="Next: How it works">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </button>
+      <span class="section-navigator__status" aria-live="polite" data-section-status>Overview</span>
+    </nav>
 
     <footer class="site-footer">
       <div>

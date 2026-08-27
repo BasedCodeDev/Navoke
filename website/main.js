@@ -155,3 +155,97 @@ if (productStack) {
 
   Promise.allSettled(imageDecodeTasks).then(startCycle);
 }
+
+const sectionNavigator = document.querySelector("[data-section-navigator]");
+
+if (sectionNavigator) {
+  const pageSections = [
+    { id: "top", label: "Overview" },
+    { id: "how-it-works", label: "How it works" },
+    { id: "real-project", label: "Real project" },
+    { id: "why-navoke", label: "Agent workflows" },
+    { id: "workflows", label: "Marketplace" },
+    { id: "authors", label: "For plugin authors" },
+    { id: "local-first", label: "Local by design" },
+    { id: "download", label: "Get Navoke" }
+  ]
+    .map((section) => ({ ...section, element: document.getElementById(section.id) }))
+    .filter((section) => section.element);
+
+  const previousButton = sectionNavigator.querySelector("[data-section-previous]");
+  const nextButton = sectionNavigator.querySelector("[data-section-next]");
+  const countLabel = sectionNavigator.querySelector("[data-section-count]");
+  const statusLabel = sectionNavigator.querySelector("[data-section-status]");
+  let activeSectionIndex = 0;
+  let updateFrame = null;
+
+  function sectionActionLabel(direction, index) {
+    const section = pageSections[index];
+    return section ? `${direction} section: ${section.label}` : `No ${direction.toLowerCase()} section`;
+  }
+
+  function renderSectionNavigator() {
+    const previousIndex = activeSectionIndex - 1;
+    const nextIndex = activeSectionIndex + 1;
+    const currentSection = pageSections[activeSectionIndex];
+    const previousLabel = sectionActionLabel("Previous", previousIndex);
+    const nextLabel = sectionActionLabel("Next", nextIndex);
+
+    if (countLabel) {
+      countLabel.textContent = `${String(activeSectionIndex + 1).padStart(2, "0")} / ${String(pageSections.length).padStart(2, "0")}`;
+    }
+    if (statusLabel) statusLabel.textContent = currentSection?.label ?? "";
+    if (previousButton) {
+      previousButton.disabled = previousIndex < 0;
+      previousButton.setAttribute("aria-label", previousLabel);
+      previousButton.title = previousIndex < 0 ? "No previous section" : `Previous: ${pageSections[previousIndex].label}`;
+    }
+    if (nextButton) {
+      nextButton.disabled = nextIndex >= pageSections.length;
+      nextButton.setAttribute("aria-label", nextLabel);
+      nextButton.title = nextIndex >= pageSections.length ? "No next section" : `Next: ${pageSections[nextIndex].label}`;
+    }
+  }
+
+  function resolveActiveSection() {
+    const marker = window.scrollY + Math.min(window.innerHeight * 0.45, 360);
+    let nextActiveIndex = 0;
+
+    pageSections.forEach((section, index) => {
+      if (section.element.offsetTop <= marker) nextActiveIndex = index;
+    });
+
+    if (nextActiveIndex !== activeSectionIndex) {
+      activeSectionIndex = nextActiveIndex;
+      renderSectionNavigator();
+    }
+  }
+
+  function scheduleSectionUpdate() {
+    if (updateFrame !== null) return;
+    updateFrame = window.requestAnimationFrame(() => {
+      updateFrame = null;
+      resolveActiveSection();
+    });
+  }
+
+  function goToSection(index) {
+    const section = pageSections[index];
+    if (!section) return;
+    activeSectionIndex = index;
+    renderSectionNavigator();
+    section.element.scrollIntoView({
+      behavior: document.documentElement.dataset.motion === "on" ? "smooth" : "auto",
+      block: "start"
+    });
+  }
+
+  previousButton?.addEventListener("click", () => goToSection(activeSectionIndex - 1));
+  nextButton?.addEventListener("click", () => goToSection(activeSectionIndex + 1));
+  window.addEventListener("scroll", scheduleSectionUpdate, { passive: true });
+  window.addEventListener("resize", scheduleSectionUpdate);
+  window.addEventListener("hashchange", scheduleSectionUpdate);
+
+  resolveActiveSection();
+  renderSectionNavigator();
+}

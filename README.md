@@ -1,8 +1,8 @@
 # Navoke
 
-**Let agents invoke the web.**
+**Turn websites into reusable actions.**
 
-Navoke turns authenticated browser procedures into typed, resumable tools that return durable artifacts.
+Capture once. Reuse whenever. Click to run, or let an agent call it.
 
 [navoke.basedcode.dev](https://navoke.basedcode.dev) · [GitHub](https://github.com/BasedCodeDev/Navoke)
 
