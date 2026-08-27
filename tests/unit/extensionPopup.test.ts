@@ -109,6 +109,6 @@ function loadPopupHarness(input: { statusBody: unknown; controllerPulse: unknown
   });
   context.globalThis = context;
   vm.runInContext(popup, context);
-  const api = context.__BasedBlinkBrowserControllerPopupTest as { refresh(): Promise<void> };
+  const api = context.__NavokeBrowserControllerPopupTest as { refresh(): Promise<void> };
   return { refresh: api.refresh, status };
 }

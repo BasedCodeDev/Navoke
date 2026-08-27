@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe("project settings metadata", () => {
   function makeProjectDir(name = "Folder Project"): string {
-    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), "blink-project-settings-"));
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-project-settings-"));
     const projectDir = path.join(parentDir, name);
     fs.mkdirSync(projectDir);
     tempDirs.push(parentDir);
@@ -27,7 +27,7 @@ describe("project settings metadata", () => {
     expect(projectDisplayName(projectDir)).toBe("Folder Named Project");
   });
 
-  it("writes trimmed display names to .blink/project.json", () => {
+  it("writes trimmed display names to .navoke/project.json", () => {
     const projectDir = makeProjectDir("Storage Folder");
 
     const displayName = renameProject(projectDir, "  Client Campaign  ");
@@ -53,7 +53,7 @@ describe("project settings metadata", () => {
   });
 
   it("rejects rename requests for missing project folders", () => {
-    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), "blink-project-settings-"));
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-project-settings-"));
     tempDirs.push(parentDir);
     const missingProjectDir = path.join(parentDir, "Missing Project");
 

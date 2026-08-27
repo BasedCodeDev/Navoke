@@ -1,6 +1,6 @@
 export type FontId = "system" | "inter" | "jetbrains-mono" | "segoe-ui" | "verdana" | "georgia";
 
-export const FONT_STORAGE_KEY = "basedBlinkFont";
+export const FONT_STORAGE_KEY = "navokeFont";
 
 export interface FontDefinition {
   id: FontId;

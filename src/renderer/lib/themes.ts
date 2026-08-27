@@ -17,7 +17,7 @@ export type ThemeId =
 
 export type ThemeAppearance = "light" | "dark";
 
-export const THEME_STORAGE_KEY = "basedBlinkTheme";
+export const THEME_STORAGE_KEY = "navokeTheme";
 
 interface SemanticTone {
   background: string;

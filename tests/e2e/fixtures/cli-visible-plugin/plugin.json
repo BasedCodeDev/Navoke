@@ -1,9 +1,9 @@
 {
-  "id": "based-blink.test.cli-visible",
-  "name": "Based BLINK CLI Visible Test",
+  "id": "navoke.test.cli-visible",
+  "name": "Navoke CLI Visible Test",
   "version": "0.1.0",
   "pluginApiVersion": "1",
   "entrypoint": "dist/index.js",
-  "workflows": ["based-blink.test.cli-visible"],
+  "workflows": ["navoke.test.cli-visible"],
   "capabilities": ["filesystem.artifacts"]
 }

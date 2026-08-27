@@ -21,7 +21,7 @@ afterEach(() => {
 
 describe("workflow library", () => {
   it("copies run input files into the durable library folder", async () => {
-    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "blink-library-"));
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-library-"));
     tempDirs.push(projectDir);
     const sourcePath = path.join(projectDir, "source.png");
     fs.writeFileSync(sourcePath, "image");
@@ -50,7 +50,7 @@ describe("workflow library", () => {
     });
 
     const copiedImage = (entry.input as { images: string[] }).images[0];
-    expect(copiedImage).toContain(path.join(".blink", "library", entry.id, "inputs", "images"));
+    expect(copiedImage).toContain(path.join(".navoke", "library", entry.id, "inputs", "images"));
     expect(copiedImage).toContain("01-source.png");
     expect(fs.readFileSync(copiedImage, "utf8")).toBe("image");
     expect(entry).toMatchObject({
@@ -66,8 +66,49 @@ describe("workflow library", () => {
     store.close();
   });
 
+  it("preserves legacy workflow identities when saving a historical run", async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-legacy-library-"));
+    tempDirs.push(projectDir);
+    const sourcePath = path.join(projectDir, "source.png");
+    fs.writeFileSync(sourcePath, "image");
+    const paths = createRuntimePaths(projectDir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const workflow = workflowRegistration();
+    workflow.definition.manifest.id = "navoke.library";
+    workflow.plugin.id = "navoke.library";
+    const run = store.createRun({
+      id: "legacy-library-run",
+      workflowId: "based-blink.library",
+      workflowVersion: workflow.definition.manifest.version,
+      pluginId: "based-blink.library",
+      pluginVersion: workflow.plugin.version,
+      pluginApiVersion: workflow.plugin.apiVersion,
+      pluginSource: workflow.plugin.source,
+      name: "Historical source run",
+      status: "completed",
+      input: { images: [sourcePath] }
+    });
+
+    const entry = createWorkflowLibraryEntryFromRun({
+      store,
+      paths,
+      workflows: new Map([
+        ["navoke.library", workflow],
+        ["based-blink.library", workflow]
+      ]),
+      runId: run.id
+    });
+
+    expect(entry).toMatchObject({
+      workflowId: "based-blink.library",
+      pluginId: "based-blink.library"
+    });
+    expect(fs.readFileSync((entry.input as { images: string[] }).images[0], "utf8")).toBe("image");
+    store.close();
+  });
+
   it("fails clearly when a referenced input file is missing", async () => {
-    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "blink-library-"));
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-library-"));
     tempDirs.push(projectDir);
     const paths = createRuntimePaths(projectDir);
     const store = await SqliteStore.open(paths.dbPath);
@@ -94,7 +135,7 @@ describe("workflow library", () => {
   });
 
   it("prevents saving the same source run twice until the library entry is deleted", async () => {
-    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "blink-library-"));
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-library-"));
     tempDirs.push(projectDir);
     const sourcePath = path.join(projectDir, "source.png");
     fs.writeFileSync(sourcePath, "image");

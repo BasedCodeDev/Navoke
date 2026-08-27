@@ -1,7 +1,7 @@
-const BLINK_EXTENSION_PROTOCOL_VERSION = 6;
+const NAVOKE_EXTENSION_PROTOCOL_VERSION = 6;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const API_BASE_URL = "http://127.0.0.1:39201";
-const CONTROLLER_ID_STORAGE_KEY = "basedBlinkBrowserControllerId";
+const CONTROLLER_ID_STORAGE_KEY = "navokeBrowserControllerId";
 
 let controllerIdPromise = null;
 let lastControllerHeartbeat = {
@@ -38,14 +38,14 @@ async function apiFetch(path, options = {}) {
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;
   if (!response.ok) {
-    throw new Error(body?.error || body?.message || `BLINK API request failed with ${response.status}`);
+    throw new Error(body?.error || body?.message || `Navoke API request failed with ${response.status}`);
   }
   return body;
 }
 
 async function apiFetchForContent(path, options = {}) {
   if (typeof path !== "string" || !path.startsWith("/api/extension/")) {
-    return { type: "api-fetch-error", ok: false, status: 400, error: "Unsupported BLINK extension API relay path." };
+    return { type: "api-fetch-error", ok: false, status: 400, error: "Unsupported Navoke extension API relay path." };
   }
   try {
     const response = await fetch(apiUrl(path), {
@@ -76,12 +76,12 @@ async function apiFetchForContent(path, options = {}) {
 
 async function apiFetchBinaryForContent(path) {
   if (!isSupportedContentFileRelayPath(path)) {
-    return { type: "api-fetch-binary-error", ok: false, status: 400, error: "Unsupported BLINK binary relay path." };
+    return { type: "api-fetch-binary-error", ok: false, status: 400, error: "Unsupported Navoke binary relay path." };
   }
   try {
     const response = await fetch(apiUrl(path));
     if (!response.ok) {
-      return { type: "api-fetch-binary-error", ok: false, status: response.status, error: `BLINK file request failed with ${response.status}` };
+      return { type: "api-fetch-binary-error", ok: false, status: response.status, error: `Navoke file request failed with ${response.status}` };
     }
     const contentType = response.headers.get("content-type") || "application/octet-stream";
     const buffer = await response.arrayBuffer();
@@ -137,7 +137,7 @@ async function controllerHeartbeat() {
   const checkedAt = new Date().toISOString();
   const payload = {
     controllerId,
-    protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+    protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
     extensionVersion: EXTENSION_VERSION,
     capabilities: ["open-tab", "open-window", "focus-tab", "close-tab"],
     diagnostics: controllerDiagnostics()
@@ -151,7 +151,7 @@ async function controllerHeartbeat() {
       ok: result?.ok === true,
       checkedAt,
       controllerId,
-      requiredProtocolVersion: result?.requiredProtocolVersion ?? BLINK_EXTENSION_PROTOCOL_VERSION,
+      requiredProtocolVersion: result?.requiredProtocolVersion ?? NAVOKE_EXTENSION_PROTOCOL_VERSION,
       compatible: result?.compatible === true,
       capabilities: payload.capabilities
     };
@@ -243,15 +243,15 @@ function controllerDiagnostics() {
 }
 
 async function performControllerCommand(payload) {
-  if (!payload || payload.protocolVersion !== BLINK_EXTENSION_PROTOCOL_VERSION || payload.kind !== "controller-command") {
-    throw new Error("Unsupported BLINK controller command payload.");
+  if (!payload || payload.protocolVersion !== NAVOKE_EXTENSION_PROTOCOL_VERSION || payload.kind !== "controller-command") {
+    throw new Error("Unsupported Navoke controller command payload.");
   }
   const command = payload.command;
   if (!command || (command.kind !== "open-tab" && command.kind !== "open-window" && command.kind !== "focus-tab" && command.kind !== "close-tab")) {
-    throw new Error(`Unsupported BLINK controller command kind: ${command?.kind || "unknown"}`);
+    throw new Error(`Unsupported Navoke controller command kind: ${command?.kind || "unknown"}`);
   }
   if (command.kind === "close-tab") {
-    if (typeof command.tabId !== "number") throw new Error("BLINK close-tab command requires tabId.");
+    if (typeof command.tabId !== "number") throw new Error("Navoke close-tab command requires tabId.");
     try {
       await chrome.tabs.remove(command.tabId);
       return {
@@ -273,7 +273,7 @@ async function performControllerCommand(payload) {
     }
   }
   if (command.kind === "focus-tab") {
-    if (typeof command.tabId !== "number") throw new Error("BLINK focus-tab command requires tabId.");
+    if (typeof command.tabId !== "number") throw new Error("Navoke focus-tab command requires tabId.");
     const tab = await chrome.tabs.update(command.tabId, { active: true });
     const windowId = typeof command.windowId === "number" ? command.windowId : tab.windowId;
     if (typeof windowId === "number") await chrome.windows.update(windowId, { focused: command.focused !== false });
@@ -547,15 +547,15 @@ chrome.downloads?.onChanged?.addListener?.((delta) => {
 
 chrome.runtime.onInstalled?.addListener(() => void tickController());
 chrome.runtime.onStartup?.addListener(() => void tickController());
-chrome.alarms?.create?.("based-blink-controller-poll", { periodInMinutes: 1 });
+chrome.alarms?.create?.("navoke-controller-poll", { periodInMinutes: 1 });
 chrome.alarms?.onAlarm?.addListener?.((alarm) => {
-  if (alarm?.name === "based-blink-controller-poll") void tickController();
+  if (alarm?.name === "navoke-controller-poll") void tickController();
 });
 
 void tickController();
 setInterval(tickController, 2500);
 
-globalThis.__BasedBlinkBrowserControllerBackgroundTest = {
+globalThis.__NavokeBrowserControllerBackgroundTest = {
   performControllerCommand,
   controllerHeartbeat,
   apiFetchForContent,

@@ -1,4 +1,4 @@
-const BLINK_EXTENSION_PROTOCOL_VERSION = 6;
+const NAVOKE_EXTENSION_PROTOCOL_VERSION = 6;
 const API_BASE_URL = "http://127.0.0.1:39201";
 
 async function refresh() {
@@ -8,13 +8,13 @@ async function refresh() {
       .sendMessage({ type: "controller-heartbeat" })
       .catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
     const response = await fetch(`${API_BASE_URL}/api/extension/status`);
-    if (!response.ok) throw new Error(`BLINK app returned ${response.status}`);
+    if (!response.ok) throw new Error(`Navoke app returned ${response.status}`);
     const body = await response.json();
-    const requiredProtocolVersion = body.requiredProtocolVersion || BLINK_EXTENSION_PROTOCOL_VERSION;
+    const requiredProtocolVersion = body.requiredProtocolVersion || NAVOKE_EXTENSION_PROTOCOL_VERSION;
     const protocolMessage =
-      requiredProtocolVersion === BLINK_EXTENSION_PROTOCOL_VERSION
+      requiredProtocolVersion === NAVOKE_EXTENSION_PROTOCOL_VERSION
         ? "protocol compatible"
-        : `protocol mismatch: app requires ${requiredProtocolVersion}, extension has ${BLINK_EXTENSION_PROTOCOL_VERSION}`;
+        : `protocol mismatch: app requires ${requiredProtocolVersion}, extension has ${NAVOKE_EXTENSION_PROTOCOL_VERSION}`;
     const compatible = Number(body.compatible || 0);
     const incompatible = Number(body.incompatible || 0);
     const compatibleControllers = Number(body.compatibleControllers || 0);
@@ -35,18 +35,18 @@ async function refresh() {
     if (commandDiagnostics.lastPollResult) details.push(`last controller poll ${commandDiagnostics.lastPollResult}`);
     if (backgroundCommand?.status) details.push(`background command ${backgroundCommand.status}`);
     status.className = `status ${
-      incompatible > 0 || requiredProtocolVersion !== BLINK_EXTENSION_PROTOCOL_VERSION || controllerProblem || controllerHeartbeatError ? "warn" : "ok"
+      incompatible > 0 || requiredProtocolVersion !== NAVOKE_EXTENSION_PROTOCOL_VERSION || controllerProblem || controllerHeartbeatError ? "warn" : "ok"
     }`;
     status.textContent = `${compatible} compatible tab(s), ${incompatible} incompatible tab(s), ${compatibleControllers} browser controller(s); ${protocolMessage}${
       details.length > 0 ? `; ${details.join("; ")}` : ""
     }.`;
   } catch (error) {
     status.className = "status warn";
-    status.textContent = `BLINK app is not reachable at ${API_BASE_URL}. Start the app and refresh this tab.`;
+    status.textContent = `Navoke app is not reachable at ${API_BASE_URL}. Start the app and refresh this tab.`;
   }
 }
 
 void refresh();
 setInterval(refresh, 2000);
 
-globalThis.__BasedBlinkBrowserControllerPopupTest = { refresh };
+globalThis.__NavokeBrowserControllerPopupTest = { refresh };

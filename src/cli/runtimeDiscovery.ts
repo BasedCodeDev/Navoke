@@ -3,6 +3,8 @@ import path from "node:path";
 
 export const DEFAULT_API_URL = "http://127.0.0.1:39201";
 export const RUNTIME_POINTER_FILE = "runtime.json";
+export const NAVOKE_INTERNAL_DIR_NAME = ".navoke";
+const LEGACY_BLINK_INTERNAL_DIR_NAME = ".blink";
 
 export type RuntimeDiscoverySource = "flag" | "env" | "runtime-file" | "default";
 
@@ -42,12 +44,16 @@ export async function discoverRuntime(
     return { apiUrl: normalizeApiUrl(input.apiUrl), source: "flag" };
   }
 
+  if (env.NAVOKE_API_URL?.trim()) {
+    return { apiUrl: normalizeApiUrl(env.NAVOKE_API_URL), source: "env" };
+  }
+
   if (env.BASED_BLINK_API_URL?.trim()) {
     return { apiUrl: normalizeApiUrl(env.BASED_BLINK_API_URL), source: "env" };
   }
 
   const runtimeFile = input.projectPath
-    ? path.join(path.resolve(input.projectPath), ".blink", RUNTIME_POINTER_FILE)
+    ? findProjectRuntimeFile(path.resolve(input.projectPath), deps)
     : findNearestRuntimeFile(cwd, deps);
 
   if (runtimeFile && exists(runtimeFile, deps)) {
@@ -81,12 +87,20 @@ export async function discoverRuntime(
 export function findNearestRuntimeFile(startDir: string, deps: RuntimeDiscoveryDeps = {}): string | undefined {
   let current = path.resolve(startDir);
   while (true) {
-    const candidate = path.join(current, ".blink", RUNTIME_POINTER_FILE);
-    if (exists(candidate, deps)) return candidate;
+    const candidate = findProjectRuntimeFile(current, deps);
+    if (candidate) return candidate;
     const parent = path.dirname(current);
     if (parent === current) return undefined;
     current = parent;
   }
+}
+
+function findProjectRuntimeFile(projectDir: string, deps: RuntimeDiscoveryDeps): string | undefined {
+  for (const internalDirName of [NAVOKE_INTERNAL_DIR_NAME, LEGACY_BLINK_INTERNAL_DIR_NAME]) {
+    const candidate = path.join(projectDir, internalDirName, RUNTIME_POINTER_FILE);
+    if (exists(candidate, deps)) return candidate;
+  }
+  return undefined;
 }
 
 export function readRuntimePointer(filePath: string, deps: RuntimeDiscoveryDeps = {}): { apiBaseUrl?: string } {

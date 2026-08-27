@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { launchPersistentProfile } from "../../src/main/automation/browserHarness";
-import { BLINK_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
+import { NAVOKE_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
 import { WorkflowLab } from "../../src/main/lab/workflowLab";
 import { createRuntimePaths } from "../../src/main/runtime/paths";
 
@@ -71,10 +71,10 @@ describe("WorkflowLab", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       id: "lab-tab",
-      url: "https://BLINK.com/",
-      title: "BLINK",
+      url: "https://navoke.example/",
+      title: "Navoke",
       status: "ready",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.5.0"
     });
     const lab = new WorkflowLab(paths, bridge);
@@ -91,7 +91,7 @@ describe("WorkflowLab", () => {
 
     expect(command).toMatchObject({
       kind: "browser-command",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       command: {
         kind: "action",
         action: {

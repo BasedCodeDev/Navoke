@@ -41,7 +41,7 @@ describe("generic browser extension content script", () => {
       host_permissions: string[];
       content_scripts: Array<{ matches: string[]; run_at?: string }>;
     };
-    expect(manifest.name).toBe("Based BLINK Browser Controller");
+    expect(manifest.name).toBe("Navoke Browser Controller");
     expect(manifest.host_permissions).toEqual(["<all_urls>"]);
     expect(manifest.content_scripts[0].matches).toEqual(["<all_urls>"]);
     expect(manifest.content_scripts[0].run_at).toBe("document_start");
@@ -55,6 +55,15 @@ describe("generic browser extension content script", () => {
     harness.location.hash = "";
 
     expect(harness.routingTokenForHeartbeat()).toBe("token");
+  });
+
+  it("reads the legacy routing token from existing workflow URLs", () => {
+    const harness = loadContentScriptHarness(createFakeElement({ isContentEditable: true }));
+    harness.location.href = "https://example.test/#based-blink-tab=legacy-token";
+    harness.location.search = "";
+    harness.location.hash = "#based-blink-tab=legacy-token";
+
+    expect(harness.routingTokenForHeartbeat()).toBe("legacy-token");
   });
 
   it("reports background controller heartbeat diagnostics with tab heartbeats", async () => {
@@ -83,7 +92,7 @@ describe("generic browser extension content script", () => {
     });
   });
 
-  it("relays local BLINK API calls through the background service worker when available", async () => {
+  it("relays local Navoke API calls through the background service worker when available", async () => {
     const heartbeatBodies: Array<Record<string, unknown>> = [];
     const harness = loadContentScriptHarness(createFakeElement({ isContentEditable: true }), {
       runtimeSendMessage: async (message) => {
@@ -470,9 +479,9 @@ function loadContentScriptHarness(
       }
     },
     location: {
-      href: "https://example.test/#based-blink-tab=token",
+      href: "https://example.test/#navoke-tab=token",
       search: "",
-      hash: "#based-blink-tab=token"
+      hash: "#navoke-tab=token"
     },
     document: {
       title: "Test page",
@@ -524,13 +533,13 @@ function loadContentScriptHarness(
   };
   vm.runInNewContext(content, context);
   const testApi = (context as unknown as {
-    __BasedBlinkBrowserControllerTest: {
+    __NavokeBrowserControllerTest: {
       performAction(action: unknown): Promise<unknown>;
       extract(query: unknown): Promise<unknown>;
       heartbeat(): Promise<void>;
       routingTokenForHeartbeat(): string | undefined;
     };
-  }).__BasedBlinkBrowserControllerTest;
+  }).__NavokeBrowserControllerTest;
   return {
     ...testApi,
     location: context.location

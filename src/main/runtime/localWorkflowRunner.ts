@@ -16,6 +16,7 @@ import type {
 } from "./types";
 import { ensureRunDataDirs, getRunArtifactDir, getRunDir, getRunInputDir, getRunOutputArtifactDir } from "./paths";
 import { normalizeRunOrigin } from "./runOrigin";
+import { productIdsMatch } from "./legacyCompatibility";
 import { copyFileToDir, writeJson } from "../utils/files";
 
 function createId(): string {
@@ -571,7 +572,7 @@ export class LocalWorkflowRunner {
     if (!run.pluginId || !run.pluginVersion) return registration;
 
     const plugin = registration.plugin;
-    if (plugin.id === run.pluginId && plugin.version === run.pluginVersion) return registration;
+    if (productIdsMatch(plugin.id, run.pluginId) && plugin.version === run.pluginVersion) return registration;
 
     throw new Error(
       `The workflow plugin required by this run is not available: ${run.pluginId}@${run.pluginVersion}. ` +

@@ -1,0 +1,9 @@
+{
+  "id": "navoke.model-renderer",
+  "name": "Navoke Model Renderer",
+  "version": "0.1.0",
+  "pluginApiVersion": "1",
+  "entrypoint": "dist/index.js",
+  "workflows": ["navoke.model-renderer.render-image", "navoke.model-renderer.geometry-bounds"],
+  "capabilities": ["filesystem.artifacts", "browser"]
+}

@@ -1,12 +1,17 @@
 {
-  "name": "based-blink",
+  "name": "navoke",
   "version": "0.1.0",
   "private": true,
   "license": "GPL-3.0-only",
-  "description": "Local desktop app for Based BLINK browser workflow automation.",
+  "description": "Navoke turns authenticated browser procedures into typed, resumable tools that return durable artifacts.",
+  "homepage": "https://navoke.basedcode.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BasedCodeDev/Navoke.git"
+  },
   "main": "dist/main/main.js",
   "bin": {
-    "blink": "dist/cli/index.js"
+    "navoke": "dist/cli/index.js"
   },
   "scripts": {
     "dev": "npm run build:main && concurrently -k -n renderer,electron -c cyan,green \"vite --host 127.0.0.1 --port 5173\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist/main/main.js\"",
@@ -20,7 +25,9 @@
     "test": "npm run build:plugins && vitest run",
     "test:watch": "vitest",
     "pretest:e2e": "npm run build",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "site:preview": "npx wrangler pages dev website",
+    "site:deploy": "npx wrangler pages deploy website --project-name navoke"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",

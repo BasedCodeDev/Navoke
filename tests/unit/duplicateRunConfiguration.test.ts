@@ -158,7 +158,7 @@ describe("duplicate run configuration", () => {
         workflowId: browserWorkflow.manifest.id,
         input: {
           subjectFiles: ["C:\\runs\\inputs\\subject.png"],
-          extensionTab: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" }
+          extensionTab: { mode: "new", routingToken: "route-1", url: "https://example.test/#navoke-tab=route-1" }
         }
       }),
       {

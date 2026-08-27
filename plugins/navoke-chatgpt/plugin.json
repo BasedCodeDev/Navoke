@@ -1,0 +1,14 @@
+{
+  "id": "navoke.chatgpt",
+  "name": "Navoke ChatGPT",
+  "version": "0.1.0",
+  "pluginApiVersion": "1",
+  "entrypoint": "dist/index.js",
+  "workflows": [
+    "navoke.chatgpt.extension-image-transform",
+    "navoke.chatgpt.extension-image-sequence",
+    "navoke.chatgpt.extension-image-prompt",
+    "navoke.chatgpt.extension-image-prompt-transform"
+  ],
+  "capabilities": ["filesystem.artifacts", "extension.browser"]
+}

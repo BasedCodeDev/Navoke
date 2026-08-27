@@ -1,4 +1,4 @@
-# Based BLINK Agent Guide
+# Navoke Agent Guide
 
 This repo is a local Electron app for browser-based automation workflows. New automations should be code-first TypeScript workflow modules that expose a typed manifest, typed input/output schemas, and a single `run()` function.
 
@@ -9,7 +9,7 @@ This repo is a local Electron app for browser-based automation workflows. New au
 - Workflows live in `src/main/workflows`.
 - Shared workflow contracts live in `src/main/runtime/types.ts`.
 - Artifacts are files on disk registered through `ctx.addArtifact()`.
-- The unpacked BLINK browser controller extension lives in `extension` and communicates with Electron through `http://127.0.0.1:39201` by default.
+- The unpacked Navoke browser controller extension lives in `extension` and communicates with Electron through `http://127.0.0.1:39201` by default.
 
 ## Adding a Workflow
 
@@ -111,7 +111,7 @@ Use the Chrome extension path when the workflow must run inside the user's norma
 
 Detailed Workflow Lab guidance lives in `.agents/skills/workflow-lab/SKILL.md`. Use that skill when inspecting pages, calibrating selectors, debugging extension-backed tab states, adding Lab actions, adding Lab wait conditions, or turning Lab observations into workflow code.
 
-For browser plugin workflows, pair Workflow Lab with the BLINK CLI skill. Run the installed plugin with real inputs, capture exact failures and trace artifacts through `blink`, inspect the page state with Workflow Lab or trace snapshots, patch the plugin and tests, reload the installed plugin copy, and rerun until the intended artifact is produced. The durable loop is documented in `Docs/workflow-lab-cli-plugin-calibration.md`.
+For browser plugin workflows, pair Workflow Lab with the Navoke CLI skill. Run the installed plugin with real inputs, capture exact failures and trace artifacts through `navoke`, inspect the page state with Workflow Lab or trace snapshots, patch the plugin and tests, reload the installed plugin copy, and rerun until the intended artifact is produced. The durable loop is documented in `Docs/workflow-lab-navoke-cli-plugin-calibration.md`.
 
 ## Renderer Form Wiring
 

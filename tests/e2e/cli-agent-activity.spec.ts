@@ -9,14 +9,14 @@ const repoRoot = path.resolve(__dirname, "../..");
 const cliPath = path.join(repoRoot, "dist", "cli", "index.js");
 const electronMainPath = path.join(repoRoot, "dist", "main", "main.js");
 const fixturePluginPath = path.join(__dirname, "fixtures", "cli-visible-plugin");
-const workflowId = "based-blink.test.cli-visible";
+const workflowId = "navoke.test.cli-visible";
 
 interface AppConfigLike {
   apiBaseUrl: string;
   projectDir: string | null;
 }
 
-interface BlinkEvent {
+interface NavokeEvent {
   type?: string;
   run?: {
     id?: string;
@@ -25,19 +25,19 @@ interface BlinkEvent {
   [key: string]: unknown;
 }
 
-interface BlinkProcess {
+interface NavokeProcess {
   child: ChildProcessWithoutNullStreams;
-  events: BlinkEvent[];
+  events: NavokeEvent[];
   stderr: string[];
   completion: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
-  waitForEvent(type: string, timeoutMs?: number): Promise<BlinkEvent>;
+  waitForEvent(type: string, timeoutMs?: number): Promise<NavokeEvent>;
 }
 
 test.describe("CLI-origin runs", () => {
   test.setTimeout(90_000);
 
   test("exits a second Electron launch for the same user data directory", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "blink-single-instance-e2e-"));
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-single-instance-e2e-"));
     const projectDir = path.join(tempRoot, "project");
     const userDataDir = path.join(tempRoot, "user-data");
     fs.mkdirSync(projectDir, { recursive: true });
@@ -51,12 +51,12 @@ test.describe("CLI-origin runs", () => {
         cwd: repoRoot,
         env: {
           ...stringEnv(process.env),
-          BASED_BLINK_USER_DATA_DIR: userDataDir
+          NAVOKE_USER_DATA_DIR: userDataDir
         }
       });
       const page = await app.firstWindow();
       await page.waitForLoadState("domcontentloaded");
-      await expect(page.getByRole("heading", { name: "Based BLINK", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Navoke", level: 1 })).toBeVisible();
 
       const config = await openProject(page, projectDir);
       expect(config.projectDir).toBe(projectDir);
@@ -66,7 +66,7 @@ test.describe("CLI-origin runs", () => {
         cwd: repoRoot,
         env: {
           ...stringEnv(process.env),
-          BASED_BLINK_USER_DATA_DIR: userDataDir
+          NAVOKE_USER_DATA_DIR: userDataDir
         }
       });
       const secondExit = await waitForProcessClose(secondLaunch, 15_000);
@@ -86,8 +86,8 @@ test.describe("CLI-origin runs", () => {
     }
   });
 
-  test("shows a blink CLI workflow run in the UI while active and after completion", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "blink-cli-e2e-"));
+  test("shows a navoke CLI workflow run in the UI while active and after completion", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-cli-e2e-"));
     const projectDir = path.join(tempRoot, "project");
     const userDataDir = path.join(tempRoot, "user-data");
     const inputFile = path.join(tempRoot, "input.json");
@@ -96,14 +96,14 @@ test.describe("CLI-origin runs", () => {
     fs.writeFileSync(inputFile, `${JSON.stringify({ delayMs: 8000 })}\n`, "utf8");
 
     let app: ElectronApplication | null = null;
-    let blinkRun: BlinkProcess | null = null;
+    let navokeRun: NavokeProcess | null = null;
     try {
       app = await electron.launch({
         args: [electronMainPath],
         cwd: repoRoot,
         env: {
           ...stringEnv(process.env),
-          BASED_BLINK_USER_DATA_DIR: userDataDir
+          NAVOKE_USER_DATA_DIR: userDataDir
         }
       });
       const page = await app.firstWindow();
@@ -115,13 +115,13 @@ test.describe("CLI-origin runs", () => {
       await page.reload();
       await expect(page.getByRole("heading", { name: "Runs" })).toBeVisible();
 
-      await runBlinkJson(["--project", projectDir, "plugin-install", fixturePluginPath]);
-      const workflows = await runBlinkJson(["--project", projectDir, "workflows"]);
+      await runNavokeJson(["--project", projectDir, "plugin-install", fixturePluginPath]);
+      const workflows = await runNavokeJson(["--project", projectDir, "workflows"]);
       expect(JSON.stringify(workflows)).toContain(workflowId);
       await page.reload();
       await expect(page.getByRole("heading", { name: "Runs" })).toBeVisible();
 
-      blinkRun = startBlink([
+      navokeRun = startNavoke([
         "--project",
         projectDir,
         "run",
@@ -134,7 +134,7 @@ test.describe("CLI-origin runs", () => {
         "codex-e2e",
         "--wait"
       ]);
-      const created = await blinkRun.waitForEvent("run.created");
+      const created = await navokeRun.waitForEvent("run.created");
       expect(created.run?.id).toBeTruthy();
 
       await expect(page.getByText("CLI agents: 1")).toBeVisible({ timeout: 15_000 });
@@ -143,25 +143,25 @@ test.describe("CLI-origin runs", () => {
       await expect(activeRunCard).toBeVisible();
       await expect(activeRunCard).toContainText(workflowId);
       await expect(activeRunCard).toContainText("CLI integration started");
-      await expect(activeRunCard).toContainText("CLI: codex-e2e");
+      await expect(cliOriginBadge(page)).toBeVisible();
 
-      const completed = await waitForCompletedRun(blinkRun);
+      const completed = await waitForCompletedRun(navokeRun);
       expect(completed.run?.id).toBe(created.run?.id);
       expect(completed.run?.status).toBe("completed");
       await expect(page.getByText("CLI agents: 1")).toBeHidden({ timeout: 15_000 });
       const completedRunRow = visibleRunButton(page);
       await expect(completedRunRow).toBeVisible();
-      await expect(completedRunRow).toContainText("Completed");
-      await expect(page.getByText("CLI: codex-e2e").first()).toBeVisible();
+      await expect(page.getByText("Completed", { exact: true }).first()).toBeVisible();
+      await expect(cliOriginBadge(page)).toBeVisible();
 
       await completedRunRow.click();
       await expect(page.getByRole("heading", { name: "Run Detail" })).toBeVisible();
-      await expect(page.getByText("CLI: codex-e2e").first()).toBeVisible();
-      await expect(page.getByText(/blink .*based-blink\.test\.cli-visible/).first()).toBeVisible();
+      await expect(cliOriginBadge(page)).toBeVisible();
+      await expect(page.getByText(/navoke .*navoke\.test\.cli-visible/).first()).toBeVisible();
       await expect(page.getByText(`cwd: ${repoRoot}`).first()).toBeVisible();
     } finally {
-      if (blinkRun && blinkRun.child.exitCode === null) {
-        blinkRun.child.kill();
+      if (navokeRun && navokeRun.child.exitCode === null) {
+        navokeRun.child.kill();
       }
       await app?.close().catch(() => undefined);
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -170,28 +170,32 @@ test.describe("CLI-origin runs", () => {
 });
 
 function visibleRunButton(page: Page) {
-  return page.getByRole("button").filter({ hasText: "CLI Visible Test Run" }).filter({ hasText: workflowId }).first();
+  return page.getByRole("button").filter({ hasText: "CLI Visible Test Run" }).first();
+}
+
+function cliOriginBadge(page: Page) {
+  return page.locator("span").filter({ hasText: /^CLI: codex-e2e$/ }).first();
 }
 
 async function openProject(page: Page, projectDir: string): Promise<AppConfigLike> {
   return page.evaluate(async (targetProjectDir) => {
     const win = window as typeof window & {
-      basedBlink: {
+      navoke: {
         openProject(path?: string): Promise<AppConfigLike>;
       };
     };
-    return win.basedBlink.openProject(targetProjectDir);
+    return win.navoke.openProject(targetProjectDir);
   }, projectDir);
 }
 
 async function getConfig(page: Page): Promise<AppConfigLike> {
   return page.evaluate(async () => {
     const win = window as typeof window & {
-      basedBlink: {
+      navoke: {
         getConfig(): Promise<AppConfigLike>;
       };
     };
-    return win.basedBlink.getConfig();
+    return win.navoke.getConfig();
   });
 }
 
@@ -224,10 +228,10 @@ function waitForProcessClose(
   });
 }
 
-async function runBlinkJson(args: string[]): Promise<Record<string, unknown>> {
+async function runNavokeJson(args: string[]): Promise<Record<string, unknown>> {
   const result = await runProcess(process.execPath, [cliPath, ...args], repoRoot);
   if (result.code !== 0) {
-    throw new Error(`blink ${args.join(" ")} failed with ${result.code}: ${result.stderr}`);
+    throw new Error(`navoke ${args.join(" ")} failed with ${result.code}: ${result.stderr}`);
   }
   return JSON.parse(result.stdout.trim()) as Record<string, unknown>;
 }
@@ -254,13 +258,13 @@ function runProcess(
   });
 }
 
-function startBlink(args: string[]): BlinkProcess {
+function startNavoke(args: string[]): NavokeProcess {
   const child = spawn(process.execPath, [cliPath, ...args], { cwd: repoRoot, env: process.env });
-  const events: BlinkEvent[] = [];
+  const events: NavokeEvent[] = [];
   const stderr: string[] = [];
   const waiters: Array<{
     type: string;
-    resolve(event: BlinkEvent): void;
+    resolve(event: NavokeEvent): void;
     reject(error: Error): void;
     timeout: NodeJS.Timeout;
   }> = [];
@@ -272,7 +276,7 @@ function startBlink(args: string[]): BlinkProcess {
   child.stdout.on("data", (chunk: string) => {
     stdoutBuffer += chunk;
     stdoutBuffer = drainLines(stdoutBuffer, (line) => {
-      const event = JSON.parse(line) as BlinkEvent;
+      const event = JSON.parse(line) as NavokeEvent;
       events.push(event);
       for (const waiter of [...waiters]) {
         if (event.type === waiter.type) {
@@ -292,7 +296,7 @@ function startBlink(args: string[]): BlinkProcess {
     child.on("close", (code, signal) => {
       for (const waiter of waiters.splice(0)) {
         clearTimeout(waiter.timeout);
-        waiter.reject(new Error(`blink exited before ${waiter.type}: ${stderr.join("\n")}`));
+        waiter.reject(new Error(`navoke exited before ${waiter.type}: ${stderr.join("\n")}`));
       }
       resolve({ code, signal });
     });
@@ -303,14 +307,14 @@ function startBlink(args: string[]): BlinkProcess {
     events,
     stderr,
     completion,
-    waitForEvent(type: string, timeoutMs = 20_000): Promise<BlinkEvent> {
+    waitForEvent(type: string, timeoutMs = 20_000): Promise<NavokeEvent> {
       const existing = events.find((event) => event.type === type);
       if (existing) return Promise.resolve(existing);
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           const index = waiters.findIndex((waiter) => waiter.resolve === resolve);
           if (index >= 0) waiters.splice(index, 1);
-          reject(new Error(`Timed out waiting for blink event ${type}. stderr: ${stderr.join("\n")}`));
+          reject(new Error(`Timed out waiting for navoke event ${type}. stderr: ${stderr.join("\n")}`));
         }, timeoutMs);
         waiters.push({ type, resolve, reject, timeout });
       });
@@ -318,14 +322,14 @@ function startBlink(args: string[]): BlinkProcess {
   };
 }
 
-async function waitForCompletedRun(process: BlinkProcess): Promise<BlinkEvent> {
+async function waitForCompletedRun(process: NavokeProcess): Promise<NavokeEvent> {
   const completion = await process.completion;
   if (completion.code !== 0) {
-    throw new Error(`blink run failed with ${completion.code}: ${process.stderr.join("\n")}`);
+    throw new Error(`navoke run failed with ${completion.code}: ${process.stderr.join("\n")}`);
   }
   const completed = [...process.events].reverse().find((event) => event.type === "run.updated" && event.run?.status === "completed");
   if (!completed) {
-    throw new Error(`blink run completed without a terminal run.updated event: ${JSON.stringify(process.events)}`);
+    throw new Error(`navoke run completed without a terminal run.updated event: ${JSON.stringify(process.events)}`);
   }
   return completed;
 }

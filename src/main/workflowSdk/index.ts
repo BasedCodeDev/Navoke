@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import {
-  BLINK_EXTENSION_PROTOCOL_VERSION,
+  NAVOKE_EXTENSION_PROTOCOL_VERSION,
   extensionBridge,
   type ExtensionBrowserAction,
   type ExtensionBrowserExtractQuery,
@@ -90,7 +90,7 @@ export interface WorkflowSdk {
   };
   extension: {
     browser: {
-      protocolVersion: typeof BLINK_EXTENSION_PROTOCOL_VERSION;
+      protocolVersion: typeof NAVOKE_EXTENSION_PROTOCOL_VERSION;
       status?(): ReturnType<typeof extensionBridge.status>;
       findCompatibleClientForTarget(target: ExtensionBrowserTarget): ExtensionClientStatus | undefined;
       ensureRoutedTab(
@@ -179,7 +179,7 @@ export function createWorkflowSdk(): WorkflowSdk {
     },
     extension: {
       browser: {
-        protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+        protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
         status: () => extensionBridge.status(),
         findCompatibleClientForTarget: (target) => extensionBridge.findCompatibleClientForTarget(target),
         ensureRoutedTab: (target, options) =>

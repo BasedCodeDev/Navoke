@@ -4,6 +4,7 @@ import path from "node:path";
 import type { SqliteStore } from "../db/sqliteStore";
 import { copyFileToDir } from "../utils/files";
 import { getLibraryEntryDir, getLibraryEntryInputDir } from "./paths";
+import { productIdsMatch } from "./legacyCompatibility";
 import type { RunRecord, RuntimePaths, WorkflowLibraryEntry, WorkflowRegistration, WorkflowRegistry } from "./types";
 
 export function createWorkflowLibraryEntryFromRun(input: {
@@ -123,7 +124,11 @@ function workflowRegistrationForRun(run: RunRecord, workflows: WorkflowRegistry)
   if (!registration) return undefined;
   if (!run.pluginId || !run.pluginVersion) return registration;
   const plugin = registration.plugin;
-  if (plugin.id === run.pluginId && plugin.version === run.pluginVersion && plugin.apiVersion === (run.pluginApiVersion ?? plugin.apiVersion)) {
+  if (
+    productIdsMatch(plugin.id, run.pluginId) &&
+    plugin.version === run.pluginVersion &&
+    plugin.apiVersion === (run.pluginApiVersion ?? plugin.apiVersion)
+  ) {
     return registration;
   }
   return undefined;

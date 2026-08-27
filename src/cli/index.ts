@@ -89,7 +89,7 @@ export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): 
   const request = deps.request ?? apiRequest;
 
   try {
-    const parsed = parseBlinkArgs(argv);
+    const parsed = parseNavokeArgs(argv);
     if (parsed.kind === "help") {
       writeJson(stdout, { ok: true, commands: commandList() });
       return 0;
@@ -123,7 +123,8 @@ export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): 
       }
       case "workflow": {
         const workflows = await request<Array<{ manifest?: { id?: string } }>>(runtime.apiUrl, "GET", "/api/workflows");
-        const workflow = workflows.find((item) => item.manifest?.id === parsed.workflowId);
+        const requestedWorkflowId = canonicalWorkflowId(parsed.workflowId);
+        const workflow = workflows.find((item) => item.manifest?.id === requestedWorkflowId);
         if (!workflow) throw new Error(`Workflow not found: ${parsed.workflowId}`);
         writeJson(stdout, { ok: true, ...context, workflow });
         return 0;
@@ -183,7 +184,7 @@ export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): 
         const origin = {
           source: "cli",
           ...(parsed.agentName ? { agentName: parsed.agentName } : {}),
-          command: `blink ${argv.join(" ")}`,
+          command: `navoke ${argv.join(" ")}`,
           cwd,
           pid: deps.pid ?? process.pid,
           cliVersion: CLI_VERSION
@@ -209,7 +210,7 @@ export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): 
         const origin = {
           source: "cli",
           ...(parsed.agentName ? { agentName: parsed.agentName } : {}),
-          command: `blink ${argv.join(" ")}`,
+          command: `navoke ${argv.join(" ")}`,
           cwd,
           pid: deps.pid ?? process.pid,
           cliVersion: CLI_VERSION
@@ -241,18 +242,23 @@ export async function runCli(argv = process.argv.slice(2), deps: CliDeps = {}): 
   }
 }
 
+function canonicalWorkflowId(workflowId: string): string {
+  const legacyPrefix = "based-blink.";
+  return workflowId.startsWith(legacyPrefix) ? `navoke.${workflowId.slice(legacyPrefix.length)}` : workflowId;
+}
+
 function assertSafeRuntimeForCommand(command: ParsedCommand, runtime: RuntimeDiscovery): void {
   if (!MUTATING_COMMANDS.has(command.kind) || runtime.source !== "default") return;
   const staleHint = runtime.staleRuntimeFile
     ? ` The runtime file at ${runtime.staleRuntimeFile} is stale or invalid.`
     : "";
   throw new CliUsageError(
-    `Refusing to run mutating command "${command.kind}" using the default BLINK API ${DEFAULT_API_URL}.${staleHint} ` +
-      "Pass --project <project-dir>, pass --api-url <url>, or set BASED_BLINK_API_URL so the target app is explicit."
+    `Refusing to run mutating command "${command.kind}" using the default Navoke API ${DEFAULT_API_URL}.${staleHint} ` +
+      "Pass --project <project-dir>, pass --api-url <url>, or set NAVOKE_API_URL so the target app is explicit."
   );
 }
 
-export function parseBlinkArgs(argv: string[]): ParsedCommand {
+export function parseNavokeArgs(argv: string[]): ParsedCommand {
   const { globals, args } = extractGlobals(argv);
   const command = args[0] ?? "help";
   const rest = args.slice(1);
@@ -377,7 +383,7 @@ function parseRunCommand(globals: ParsedGlobals, args: string[]): ParsedCommand 
   const workflowId = requiredPositional(args, "workflow id");
   const options = parseOptions(args.slice(1), new Set(["input", "name", "agent"]), new Set(["wait"]));
   const inputFile = options.values.input;
-  if (!inputFile) throw new CliUsageError("blink run requires --input <json-file>.");
+  if (!inputFile) throw new CliUsageError("navoke run requires --input <json-file>.");
   return {
     kind: "run",
     globals,
@@ -505,19 +511,19 @@ function exitCodeForRun(run: RunRecordLike): number {
 
 function commandList(): string[] {
   return [
-    "blink status",
-    "blink workflows",
-    "blink workflow <workflowId>",
-    "blink --project <project-dir> run <workflowId> --input <json-file> [--name <name>] [--agent <name>] [--wait]",
-    "blink library",
-    "blink library get <entryId>",
-    "blink --project <project-dir> library run <entryId> [--name <name>] [--input-overrides <json-file>] [--agent <name>] [--wait]",
-    "blink runs [--active]",
-    "blink get <runId>",
-    "blink watch <runId>",
-    "blink --project <project-dir> pause|resume|cancel|delete <runId>",
-    "blink plugins",
-    "blink --project <project-dir> plugin-install <path>"
+    "navoke status",
+    "navoke workflows",
+    "navoke workflow <workflowId>",
+    "navoke --project <project-dir> run <workflowId> --input <json-file> [--name <name>] [--agent <name>] [--wait]",
+    "navoke library",
+    "navoke library get <entryId>",
+    "navoke --project <project-dir> library run <entryId> [--name <name>] [--input-overrides <json-file>] [--agent <name>] [--wait]",
+    "navoke runs [--active]",
+    "navoke get <runId>",
+    "navoke watch <runId>",
+    "navoke --project <project-dir> pause|resume|cancel|delete <runId>",
+    "navoke plugins",
+    "navoke --project <project-dir> plugin-install <path>"
   ];
 }
 

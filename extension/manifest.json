@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Based BLINK Browser Controller",
+  "name": "Navoke Browser Controller",
   "version": "0.1.8",
-  "description": "Generic local browser controller for Based BLINK workflows.",
+  "description": "Generic local browser controller for Navoke workflows.",
   "permissions": ["tabs", "storage", "scripting", "alarms", "downloads"],
   "host_permissions": ["<all_urls>"],
   "background": {
@@ -17,6 +17,6 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Based BLINK"
+    "default_title": "Navoke"
   }
 }

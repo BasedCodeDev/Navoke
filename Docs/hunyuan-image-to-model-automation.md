@@ -2,7 +2,7 @@
 
 ## Goal
 
-Automate the `based-blink.hunyuan.image-to-model` workflow end to end so BLINK can take a front image plus at least one additional view image, generate a Hunyuan 3D model, run the intended post-processing steps, and download the final OBJ artifact without manual selector intervention.
+Automate the `navoke.hunyuan.image-to-model` workflow end to end so Navoke can take a front image plus at least one additional view image, generate a Hunyuan 3D model, run the intended post-processing steps, and download the final OBJ artifact without manual selector intervention.
 
 The target happy path is:
 
@@ -33,13 +33,13 @@ The target happy path is:
 - Calibrated OBJ export. Hunyuan uses a TDesign dropdown menu: `button.download__dropdown__btn` opens `.download__dropdown li.t-dropdown__item` options.
 - Added focused unit coverage for selector defaults and disabled-safe click behavior.
 - Rebuilt and reloaded/copied the Hunyuan plugin bundle during calibration so the installed plugin tracked source changes.
-- Completed an end-to-end BLINK CLI run that generated geometry, ran quad smart retopology, generated texture, selected OBJ, and downloaded the final artifact.
+- Completed an end-to-end Navoke CLI run that generated geometry, ran quad smart retopology, generated texture, selected OBJ, and downloaded the final artifact.
 
 ## Current Known State
 
 The workflow has successfully completed with the real front/back calibration images.
 
-This run is the case study for the reusable [Workflow Lab And BLINK CLI Plugin Calibration Loop](./workflow-lab-cli-plugin-calibration.md): every major selector fix was proven by a real BLINK CLI run, inspected through Workflow Lab or trace evidence, patched, reloaded into the installed plugin, and rerun until the OBJ artifact downloaded.
+This run is the case study for the reusable [Workflow Lab And Navoke CLI Plugin Calibration Loop](./workflow-lab-navoke-cli-plugin-calibration.md): every major selector fix was proven by a real Navoke CLI run, inspected through Workflow Lab or trace evidence, patched, reloaded into the installed plugin, and rerun until the OBJ artifact downloaded.
 
 The verified selector shape for quad retopology is:
 

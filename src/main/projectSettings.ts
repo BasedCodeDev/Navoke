@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { BLINK_INTERNAL_DIR_NAME } from "./runtime/paths";
+import { NAVOKE_INTERNAL_DIR_NAME } from "./runtime/paths";
 
 interface AppSettingsModel {
   lastProjectDir?: string;
@@ -64,7 +64,7 @@ export function renameProject(projectDir: string, name: string): string {
 }
 
 export function projectMetadataPath(projectDir: string): string {
-  return path.join(path.resolve(projectDir), BLINK_INTERNAL_DIR_NAME, "project.json");
+  return path.join(path.resolve(projectDir), NAVOKE_INTERNAL_DIR_NAME, "project.json");
 }
 
 function readProjectMetadataName(projectDir: string): string | null {

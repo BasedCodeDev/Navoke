@@ -45,10 +45,11 @@ let startupCanCreateWindow = false;
 let pendingWindowFocus = false;
 const APP_ICON_PNG_RELATIVE_PATH = path.join("assets", "app-icon.png");
 const APP_ICON_ICO_RELATIVE_PATH = path.join("assets", "app-icon.ico");
-const WINDOWS_APP_USER_MODEL_ID = "com.based.blink";
-const TEST_USER_DATA_DIR_ENV = "BASED_BLINK_USER_DATA_DIR";
+const WINDOWS_APP_USER_MODEL_ID = "dev.basedcode.navoke";
+const TEST_USER_DATA_DIR_ENV = "NAVOKE_USER_DATA_DIR";
+const LEGACY_TEST_USER_DATA_DIR_ENV = "BASED_BLINK_USER_DATA_DIR";
 
-app.setName("Based BLINK");
+app.setName("Navoke");
 if (process.platform === "win32") {
   app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
 }
@@ -88,7 +89,7 @@ async function bootstrap(): Promise<void> {
 }
 
 function applyUserDataDirOverride(): string {
-  const override = process.env[TEST_USER_DATA_DIR_ENV]?.trim();
+  const override = process.env[TEST_USER_DATA_DIR_ENV]?.trim() || process.env[LEGACY_TEST_USER_DATA_DIR_ENV]?.trim();
   if (!override) return app.getPath("userData");
   const userDataDir = path.resolve(override);
   fs.mkdirSync(userDataDir, { recursive: true });
@@ -224,7 +225,7 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("project:open", async (_event, targetPath?: string) => {
-    const projectDir = targetPath?.trim() || (await chooseProjectDirectory("Open Based BLINK project folder"));
+    const projectDir = targetPath?.trim() || (await chooseProjectDirectory("Open Navoke project folder"));
     if (!projectDir) return { ...getConfig(), projectDialogCancelled: true };
     return openProject(projectDir);
   });
@@ -278,7 +279,7 @@ function createWindow(): BrowserWindow {
 
   const appIconPath = resolveAppIconPath();
   const window = new BrowserWindow({
-    title: "Based BLINK",
+    title: "Navoke",
     width: 1440,
     height: 960,
     minWidth: 1120,
@@ -317,7 +318,7 @@ function showManualWaitNotification(run: RunRecord): void {
   if (!Notification.isSupported()) return;
   const runLabel = run.runNumber === null ? run.name : `Run #${run.runNumber}: ${run.name}`;
   const notification = new Notification({
-    title: "Based BLINK needs manual action",
+    title: "Navoke needs manual action",
     body: `${runLabel}\n${run.currentStep ?? "Manual action required."}`,
     ...(resolveAppIconPath() ? { icon: resolveAppIconPath() } : {})
   });

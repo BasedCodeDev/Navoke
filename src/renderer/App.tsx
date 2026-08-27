@@ -145,8 +145,8 @@ function workflowHasCapability(workflow: WorkflowSummary | undefined, capability
 }
 
 const NEW_EXTENSION_TAB_VALUE = "__new_extension_tab__";
-const EXTENSION_TAB_ROUTING_PARAM = "based-blink-tab";
-const APP_ICON_SRC = "/assets/app-icon.png";
+const EXTENSION_TAB_ROUTING_PARAM = "navoke-tab";
+const APP_ICON_SRC = "./assets/app-icon.png";
 
 type ExtensionTabInput =
   | { mode: "existing"; clientId: string; url?: string; title?: string }
@@ -547,7 +547,7 @@ export default function App(): JSX.Element {
     maxFiles?: number,
     filters?: Array<{ name: string; extensions: string[] }>
   ): Promise<void> {
-    const files = await window.basedBlink.selectFiles({
+    const files = await window.navoke.selectFiles({
       title,
       filters: filters ?? [
         { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
@@ -560,7 +560,7 @@ export default function App(): JSX.Element {
     }
   }
 
-  async function openProjectAndRefresh(projectPath?: string): Promise<BasedBlinkConfig> {
+  async function openProjectAndRefresh(projectPath?: string): Promise<NavokeConfig> {
     const previousProjectDir = configQuery.data?.projectDir ?? null;
     const config = await openProject(projectPath);
     queryClient.setQueryData(["config"], config);
@@ -735,7 +735,7 @@ export default function App(): JSX.Element {
 
   const showLanding = showProjectLanding || !hasProject;
   const currentProjectDir = configQuery.data?.projectDir ?? "";
-  const projectName = configQuery.data?.projectName ?? "Based BLINK";
+  const projectName = configQuery.data?.projectName ?? "Navoke";
   const reusedSourceInput = resubmitSourceRun?.input ?? librarySourceEntry?.input ?? null;
   const reusedWorkflow = resubmitSourceRun
     ? resolveRunWorkflowAvailability(resubmitSourceRun, workflows).workflow ?? undefined
@@ -856,9 +856,9 @@ export default function App(): JSX.Element {
               draggable={false}
             />
             <div className="min-w-0">
-              <h1 className="truncate text-xl font-semibold">{showLanding ? "Based BLINK" : projectName}</h1>
+              <h1 className="truncate text-xl font-semibold">{showLanding ? "Navoke" : projectName}</h1>
               <p className="truncate text-sm text-muted-foreground">
-                {showLanding ? "Choose a Based BLINK project folder to continue." : configQuery.data?.projectDir}
+                {showLanding ? "Choose a Navoke project folder to continue." : configQuery.data?.projectDir}
               </p>
             </div>
           </div>
@@ -888,7 +888,7 @@ export default function App(): JSX.Element {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => void window.basedBlink.openPath(currentProjectDir)}
+                  onClick={() => void window.navoke.openPath(currentProjectDir)}
                   disabled={!currentProjectDir}
                 >
                   <ExternalLink className="h-4 w-4" />
@@ -1090,7 +1090,7 @@ export default function App(): JSX.Element {
           onPause={(runId) => void pauseRun(runId).then(() => queryClient.invalidateQueries())}
           onResume={(runId) => void resumeRun(runId).then(() => queryClient.invalidateQueries())}
           onCancel={(runId) => void cancelRun(runId).then(() => queryClient.invalidateQueries())}
-          onOpenDataFolder={() => window.basedBlink.openPath(activeRun?.runDir ?? "")}
+          onOpenDataFolder={() => window.navoke.openPath(activeRun?.runDir ?? "")}
           onFocusClient={(clientId) => focusExtensionClient(clientId)}
           onRename={(runId, nextName) => renameRunMutation.mutateAsync({ runId, nextName }).then(() => undefined)}
           onSaveToLibrary={(runId) => saveRunToLibraryMutation.mutate(runId)}
@@ -1134,7 +1134,7 @@ export default function App(): JSX.Element {
 }
 
 function AppWindowControls(): JSX.Element | null {
-  const controls = window.basedBlink?.windowControls;
+  const controls = window.navoke?.windowControls;
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
@@ -1197,13 +1197,13 @@ function AppWindowControls(): JSX.Element | null {
   );
 }
 
-function LocalRuntimeFooter({ config, system }: { config?: BasedBlinkConfig; system?: SystemInfo }): JSX.Element {
+function LocalRuntimeFooter({ config, system }: { config?: NavokeConfig; system?: SystemInfo }): JSX.Element {
   return (
     <footer className="shrink-0 overflow-hidden border-t border-border bg-card/90 px-5 py-1 text-[10px] leading-4 text-muted-foreground">
       <div className="mx-auto flex max-w-[1500px] min-w-0 items-center gap-3 overflow-hidden">
         <span className="shrink-0 font-medium text-foreground">Local Runtime</span>
         <span className="min-w-0 flex-[1.2_1_0] truncate">Project: {config?.projectDir ?? "No project selected"}</span>
-        <span className="min-w-0 flex-1 truncate">Data: {config?.dataDir || "Choose a project to create .blink data"}</span>
+        <span className="min-w-0 flex-1 truncate">Data: {config?.dataDir || "Choose a project to create .navoke data"}</span>
         <span className="shrink-0 truncate">API: {config?.apiBaseUrl || "Not running"}</span>
         <span className="shrink-0 truncate">Plugins: {system?.plugins?.installed ?? 0}</span>
         <span className="shrink-0">
@@ -1584,7 +1584,7 @@ function ProjectLanding({
   onSelectProject,
   onRenameProject
 }: {
-  config?: BasedBlinkConfig;
+  config?: NavokeConfig;
   isLoading: boolean;
   error: string | null;
   onOpenProject(): void;
@@ -1597,7 +1597,7 @@ function ProjectLanding({
   const [editingName, setEditingName] = useState("");
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
 
-  function startRename(project: BasedBlinkConfig["recentProjects"][number]): void {
+  function startRename(project: NavokeConfig["recentProjects"][number]): void {
     setEditingPath(project.path);
     setEditingName(project.name);
   }
@@ -1624,7 +1624,7 @@ function ProjectLanding({
             className="mx-auto h-24 w-24 rounded-lg border border-border bg-background object-cover"
             draggable={false}
           />
-          <h2 className="text-3xl font-semibold">{config?.projectName ?? "Based BLINK"}</h2>
+          <h2 className="text-3xl font-semibold">{config?.projectName ?? "Navoke"}</h2>
           <p className="text-sm text-muted-foreground">
             {activeProjectDir ? `Current project: ${activeProjectDir}` : "Open a project folder to load its runs and local workflow data."}
           </p>
@@ -2044,7 +2044,7 @@ function RunDetailModal({
                       title={
                         extensionFocusTarget.disabledReason ??
                         (extensionFocusTarget.action === "open"
-                          ? "Open the tracked URL through the BLINK browser controller."
+                          ? "Open the tracked URL through the Navoke browser controller."
                           : `Go to ${extensionFocusTarget.client?.title || "the selected browser tab"}`)
                       }
                     >
@@ -2853,7 +2853,7 @@ function WorkflowLabPanel({
   }
 
   async function chooseActionFiles(): Promise<void> {
-    const files = await window.basedBlink.selectFiles({
+    const files = await window.navoke.selectFiles({
       title: "Choose files for Workflow Lab attach-file probe",
       filters: [
         { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] },
@@ -3297,7 +3297,7 @@ function ExtensionTabRoutingPanel({
             <div className="invisible absolute left-0 top-6 z-30 w-80 max-w-[calc(100vw-3rem)] rounded-md border border-border bg-card p-3 text-xs text-foreground opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
               <div className="space-y-3">
                 <p className="leading-5 text-muted-foreground">
-                  Choose an open compatible browser tab for this run, or let the BLINK browser controller open a new token-routed window. Other browser tabs keep
+                  Choose an open compatible browser tab for this run, or let the Navoke browser controller open a new token-routed window. Other browser tabs keep
                   polling but will not receive the task.
                 </p>
                 <p className="leading-5 text-muted-foreground">
@@ -3313,7 +3313,7 @@ function ExtensionTabRoutingPanel({
                   <div className="mb-2 font-medium">Reporting browser tabs</div>
                   {clients.length === 0 ? (
                     <div className="rounded border border-border bg-muted p-2 text-muted-foreground">
-                      No BLINK extension tab has checked in yet.
+                      No Navoke extension tab has checked in yet.
                     </div>
                   ) : (
                     <div className="max-h-40 space-y-2 overflow-auto">
@@ -3369,7 +3369,7 @@ function ExtensionTabRoutingPanel({
           onChange={(event) => onChange(event.target.value)}
           className="h-9 min-w-0 rounded-md border border-border bg-background px-3 text-sm"
         >
-          <option value={NEW_EXTENSION_TAB_VALUE}>Open via BLINK browser controller</option>
+          <option value={NEW_EXTENSION_TAB_VALUE}>Open via Navoke browser controller</option>
           {compatibleClients.map((client) => (
             <option key={client.id} value={client.id}>
               {extensionTabOptionLabel(client)}

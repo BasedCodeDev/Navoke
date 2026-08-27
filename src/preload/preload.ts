@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-contextBridge.exposeInMainWorld("basedBlink", {
+contextBridge.exposeInMainWorld("navoke", {
   getConfig: () => ipcRenderer.invoke("app:get-config"),
   openProject: (path?: string) => ipcRenderer.invoke("project:open", path),
   renameProject: (projectPath: string, name: string) => ipcRenderer.invoke("project:rename", { projectPath, name }),

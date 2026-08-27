@@ -7,7 +7,8 @@ import { SqliteStore } from "../../src/main/db/sqliteStore";
 import { RuntimeEventBus } from "../../src/main/runtime/eventBus";
 import { LocalWorkflowRunner } from "../../src/main/runtime/localWorkflowRunner";
 import { createRuntimePaths, getRunDir } from "../../src/main/runtime/paths";
-import type { WorkflowDefinition } from "../../src/main/runtime/types";
+import { addLegacyWorkflowAliases } from "../../src/main/runtime/legacyCompatibility";
+import type { WorkflowDefinition, WorkflowRegistry } from "../../src/main/runtime/types";
 
 const tempDirs: string[] = [];
 
@@ -129,7 +130,7 @@ describe("LocalWorkflowRunner", () => {
       origin: {
         source: "cli",
         agentName: "codex",
-        command: "blink run test.cli-origin --input input.json --wait",
+        command: "navoke run test.cli-origin --input input.json --wait",
         cwd: dir,
         pid: 123,
         cliVersion: "0.1.0"
@@ -137,11 +138,74 @@ describe("LocalWorkflowRunner", () => {
     });
 
     expect(run.origin).toMatchObject({ source: "cli", agentName: "codex", pid: 123 });
-    expect(store.getRun(run.id)?.origin).toMatchObject({ source: "cli", command: "blink run test.cli-origin --input input.json --wait" });
+    expect(store.getRun(run.id)?.origin).toMatchObject({ source: "cli", command: "navoke run test.cli-origin --input input.json --wait" });
     const inputRecord = JSON.parse(fs.readFileSync(path.join(run.runDir!, "run-inputs.json"), "utf8")) as { origin: unknown };
     expect(inputRecord.origin).toMatchObject({ source: "cli", agentName: "codex" });
 
     await waitFor(() => store.getRun(run.id)?.status === "completed");
+    store.close();
+  });
+
+  it("resumes a historical run through legacy workflow and plugin aliases", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-legacy-run-"));
+    tempDirs.push(dir);
+    const paths = createRuntimePaths(dir);
+    const store = await SqliteStore.open(paths.dbPath);
+    const workflow: WorkflowDefinition<Record<string, never>, { ok: boolean }> = {
+      manifest: {
+        id: "navoke.compatibility.resume",
+        title: "Compatibility Resume",
+        description: "Compatibility test workflow",
+        category: "utility",
+        version: "0.1.0",
+        concurrency: 1,
+        inputFields: [],
+        outputKinds: ["json"],
+        requiresBrowser: false
+      },
+      inputSchema: z.object({}),
+      outputSchema: z.object({ ok: z.boolean() }),
+      canResumeFailedRun: () => true,
+      async run() {
+        return { ok: true };
+      }
+    };
+    const registration = {
+      definition: workflow,
+      plugin: {
+        id: "navoke.compatibility",
+        name: "Navoke Compatibility",
+        version: "0.1.0",
+        source: "user" as const,
+        apiVersion: "1",
+        capabilities: ["filesystem.artifacts" as const]
+      }
+    };
+    const workflows = addLegacyWorkflowAliases(
+      new Map([[workflow.manifest.id, registration]]) as WorkflowRegistry
+    );
+    const historicalRun = store.createRun({
+      id: "legacy-run",
+      workflowId: "based-blink.compatibility.resume",
+      workflowVersion: workflow.manifest.version,
+      pluginId: "based-blink.compatibility",
+      pluginVersion: registration.plugin.version,
+      pluginApiVersion: registration.plugin.apiVersion,
+      pluginSource: "user",
+      name: "Historical run",
+      status: "failed",
+      input: {}
+    });
+    const runner = new LocalWorkflowRunner(workflows, store, paths, new RuntimeEventBus());
+
+    runner.resume(historicalRun.id);
+    await waitFor(() => store.getRun(historicalRun.id)?.status === "completed");
+
+    expect(store.getRun(historicalRun.id)).toMatchObject({
+      workflowId: "based-blink.compatibility.resume",
+      pluginId: "based-blink.compatibility",
+      output: { ok: true }
+    });
     store.close();
   });
 
@@ -175,7 +239,7 @@ describe("LocalWorkflowRunner", () => {
       new RuntimeEventBus()
     );
 
-    const safeUrl = "https://example.test/#based-blink-tab=run-token-1";
+    const safeUrl = "https://example.test/#navoke-tab=run-token-1";
     const extensionTab = { mode: "new", routingToken: "run-token-1", url: safeUrl };
     runner.enqueue({
       workflowId: workflow.manifest.id,
@@ -198,7 +262,7 @@ describe("LocalWorkflowRunner", () => {
         extensionTab: {
           mode: "new",
           routingToken: "run-token-2",
-          url: "https://another.example/#based-blink-tab=run-token-2"
+          url: "https://another.example/#navoke-tab=run-token-2"
         }
       },
       origin: { source: "cli" }
@@ -209,7 +273,7 @@ describe("LocalWorkflowRunner", () => {
         extensionTab: {
           mode: "new",
           routingToken: "run-token-3",
-          url: "https://example.test/#based-blink-tab=other-token"
+          url: "https://example.test/#navoke-tab=other-token"
         }
       },
       origin: { source: "cli" }

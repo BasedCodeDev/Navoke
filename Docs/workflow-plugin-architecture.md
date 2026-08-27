@@ -2,7 +2,7 @@
 
 ## Summary
 
-Based BLINK will support trusted local workflow plugins installed per user. The Electron main process will discover installed plugin packages, load their workflow definitions into the runtime registry, and snapshot plugin identity onto every run so a project can report when a workflow plugin is missing or the installed version does not match the run.
+Navoke will support trusted local workflow plugins installed per user. The Electron main process will discover installed plugin packages, load their workflow definitions into the runtime registry, and snapshot plugin identity onto every run so a project can report when a workflow plugin is missing or the installed version does not match the run.
 
 This first version is a local developer/plugin-author model. Plugins are trusted JavaScript modules and run with the same process privileges as built-in workflows. Sandboxing, signing, marketplace distribution, and review workflows are out of scope for v1.
 
@@ -88,7 +88,7 @@ Uninstall removes an installed plugin version from the user plugin directory and
 
 ## Calibration Workflow
 
-Browser workflow plugins should be built and hardened with the repeatable Workflow Lab plus BLINK CLI loop in [Workflow Lab And BLINK CLI Plugin Calibration Loop](./workflow-lab-cli-plugin-calibration.md).
+Browser workflow plugins should be built and hardened with the repeatable Workflow Lab plus Navoke CLI loop in [Workflow Lab And Navoke CLI Plugin Calibration Loop](./workflow-lab-navoke-cli-plugin-calibration.md).
 
 The short version:
 

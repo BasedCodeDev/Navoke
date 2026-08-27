@@ -136,7 +136,7 @@ function urlToOpenTarget(url: string): ExtensionFocusTarget {
     client: null,
     url,
     action: "open",
-    buttonLabel: "Open via BLINK controller",
+    buttonLabel: "Open via Navoke controller",
     disabledReason: null
   };
 }
@@ -177,7 +177,7 @@ function addRoutingTokenToUrl(value: string, routingToken: string | undefined): 
   try {
     const url = new URL(value);
     const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-    hash.set("based-blink-tab", routingToken);
+    hash.set("navoke-tab", routingToken);
     url.hash = hash.toString();
     return url.toString();
   } catch {
@@ -188,14 +188,12 @@ function addRoutingTokenToUrl(value: string, routingToken: string | undefined): 
 function removeRoutingToken(url: URL): void {
   const search = new URLSearchParams(url.search);
   const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-  if (search.has("based-blink-tab")) {
-    search.delete("based-blink-tab");
-    url.search = search.toString();
+  for (const param of ["navoke-tab", "based-blink-tab"]) {
+    search.delete(param);
+    hash.delete(param);
   }
-  if (hash.has("based-blink-tab")) {
-    hash.delete("based-blink-tab");
-    url.hash = hash.toString();
-  }
+  url.search = search.toString();
+  url.hash = hash.toString();
 }
 
 function firstNonEmptyString(...values: Array<string | undefined>): string | undefined {

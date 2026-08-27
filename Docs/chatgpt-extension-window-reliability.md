@@ -2,11 +2,11 @@
 
 ## Problem
 
-The `based-blink.chatgpt.extension-image-transform` workflow can stall before it starts real work when it targets a tab that disappears, is reused by the user, or is no longer active enough for ChatGPT to keep generating responses. In the observed run, the workflow entered `waiting_manual` with:
+The `navoke.chatgpt.extension-image-transform` workflow can stall before it starts real work when it targets a tab that disappears, is reused by the user, or is no longer active enough for ChatGPT to keep generating responses. In the observed run, the workflow entered `waiting_manual` with:
 
-> The Based BLINK browser controller could not open or connect to the tracked ChatGPT page. Reload the extension in the intended browser profile, then resume this run.
+> The Navoke browser controller could not open or connect to the tracked ChatGPT page. Reload the extension in the intended browser profile, then resume this run.
 
-This is not acceptable as the normal path. BLINK workflows should run end-to-end without user intervention whenever the target site is authenticated and usable.
+This is not acceptable as the normal path. Navoke workflows should run end-to-end without user intervention whenever the target site is authenticated and usable.
 
 ## Why Current Behavior Is Fragile
 
@@ -20,7 +20,7 @@ This is not acceptable as the normal path. BLINK workflows should run end-to-end
 
 Extension-backed ChatGPT workflows should prefer an isolated browser surface owned by the run:
 
-1. Open a new Chrome window through the BLINK extension controller, not through OS URL routing.
+1. Open a new Chrome window through the Navoke extension controller, not through OS URL routing.
 2. Create the routed ChatGPT tab inside that new window.
 3. Keep the run-owned window/tab focused or at least known-active while commands and generation waits are in progress.
 4. Record the controller id, window id, tab id, routing token, URL, and client id in the run checkpoint.
@@ -51,7 +51,7 @@ This should not replace automatic recovery. It is only the fallback path when lo
 
 ## Acceptance Criteria
 
-- A fresh `based-blink.chatgpt.extension-image-transform` run opens a new extension-owned Chrome window.
+- A fresh `navoke.chatgpt.extension-image-transform` run opens a new extension-owned Chrome window.
 - The workflow does not target arbitrary existing ChatGPT tabs by default.
 - If the tab is closed mid-run, resume can recover through the extension controller without user intervention when possible.
 - `waiting_manual` is only used for genuine human-required states or unrecoverable controller loss.

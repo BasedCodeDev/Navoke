@@ -3,8 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { inferMimeType } from "../utils/files";
 
-export const BLINK_EXTENSION_PROTOCOL_VERSION = 6;
-export const BLINK_ROUTING_TOKEN_PARAM = "based-blink-tab";
+export const NAVOKE_EXTENSION_PROTOCOL_VERSION = 6;
+export const NAVOKE_ROUTING_TOKEN_PARAM = "navoke-tab";
+const LEGACY_BLINK_ROUTING_TOKEN_PARAM = "based-blink-tab";
+const ROUTING_TOKEN_PARAMS = [NAVOKE_ROUTING_TOKEN_PARAM, LEGACY_BLINK_ROUTING_TOKEN_PARAM] as const;
 
 const CLIENT_TTL_MS = 30_000;
 const CONTROLLER_TTL_MS = 30_000;
@@ -324,7 +326,7 @@ export class ExtensionBridge {
     const previous = this.clients.get(clientId);
     const routingToken =
       firstNonEmptyString(record.routingToken) ?? routingTokenFromUrl(url) ?? previous?.routingToken ?? undefined;
-    const compatible = protocolVersion === BLINK_EXTENSION_PROTOCOL_VERSION;
+    const compatible = protocolVersion === NAVOKE_EXTENSION_PROTOCOL_VERSION;
 
     const status: ExtensionClientStatus = {
       id: clientId,
@@ -354,14 +356,14 @@ export class ExtensionBridge {
       ...(compatible
         ? {}
         : {
-            incompatibilityReason: `Reload the unpacked BLINK browser extension and refresh browser tabs. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION}.`
+            incompatibilityReason: `Reload the unpacked Navoke browser extension and refresh browser tabs. App requires extension protocol ${NAVOKE_EXTENSION_PROTOCOL_VERSION}.`
           }),
       lastSeenAt: new Date().toISOString(),
       capabilities
     };
     this.clients.set(clientId, status);
     this.prune();
-    return { ok: true, requiredProtocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION, compatible, clientId };
+    return { ok: true, requiredProtocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION, compatible, clientId };
   }
 
   controllerHeartbeat(payload: unknown): {
@@ -385,7 +387,7 @@ export class ExtensionBridge {
           ? (record.backgroundDiagnostics as Record<string, unknown>)
           : undefined;
     const compatible =
-      protocolVersion === BLINK_EXTENSION_PROTOCOL_VERSION &&
+      protocolVersion === NAVOKE_EXTENSION_PROTOCOL_VERSION &&
       capabilities.includes("open-tab") &&
       capabilities.includes("open-window") &&
       capabilities.includes("focus-tab") &&
@@ -399,7 +401,7 @@ export class ExtensionBridge {
       ...(compatible
         ? {}
         : {
-            incompatibilityReason: `Reload the unpacked BLINK browser extension. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION} with open-tab, open-window, focus-tab, and close-tab support.`
+            incompatibilityReason: `Reload the unpacked Navoke browser extension. App requires extension protocol ${NAVOKE_EXTENSION_PROTOCOL_VERSION} with open-tab, open-window, focus-tab, and close-tab support.`
           }),
       lastSeenAt: new Date().toISOString(),
       capabilities,
@@ -407,7 +409,7 @@ export class ExtensionBridge {
     };
     this.controllers.set(controllerId, status);
     this.prune();
-    return { ok: true, requiredProtocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION, compatible, controllerId };
+    return { ok: true, requiredProtocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION, compatible, controllerId };
   }
 
   status(): {
@@ -429,7 +431,7 @@ export class ExtensionBridge {
     const controllers = [...this.controllers.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
     const controllerDiagnostics = buildControllerDiagnostics(clients);
     return {
-      requiredProtocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      requiredProtocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       connected: clients.length,
       compatible: clients.filter((client) => client.compatible).length,
       incompatible: clients.filter((client) => !client.compatible).length,
@@ -588,7 +590,7 @@ export class ExtensionBridge {
 
     const url = openableTargetUrl(input.target);
     if (!url) {
-      throw new Error("No compatible BLINK browser extension tab is connected for the requested target.");
+      throw new Error("No compatible Navoke browser extension tab is connected for the requested target.");
     }
 
     let openResult: unknown = null;
@@ -643,13 +645,13 @@ export class ExtensionBridge {
         controllerHeartbeatError: client.controllerHeartbeatError
       }));
     const error = new Error(
-      `Opened a routed BLINK browser window, but no compatible page client connected. openResult=${JSON.stringify(
+      `Opened a routed Navoke browser window, but no compatible page client connected. openResult=${JSON.stringify(
         openResult
       )}; knownClients=${JSON.stringify(
         visibleClients
       )}; controllerCommandDiagnostics=${JSON.stringify(
         this.buildControllerCommandDiagnostics()
-      )}. Do not open chrome.exe or paste this routed URL into another Chrome profile. The routed window must be opened by the BLINK extension controller in the intended browser profile. Reload the unpacked extension, confirm site access is enabled for the opened page, open the BLINK extension popup in that profile, and refresh the opened page.`
+      )}. Do not open chrome.exe or paste this routed URL into another Chrome profile. The routed window must be opened by the Navoke extension controller in the intended browser profile. Reload the unpacked extension, confirm site access is enabled for the opened page, open the Navoke extension popup in that profile, and refresh the opened page.`
     );
     if (openedSurface) Object.assign(error, { openedSurface });
     throw error;
@@ -777,7 +779,7 @@ export class ExtensionBridge {
     signal?: AbortSignal;
   }): Promise<unknown> {
     const client = this.findCompatibleClientForTarget(input.target);
-    if (!client) throw new Error("No compatible BLINK browser extension tab is connected for the requested target.");
+    if (!client) throw new Error("No compatible Navoke browser extension tab is connected for the requested target.");
     return this.executeCommand({ clientId: client.id, command: input.command, timeoutMs: input.timeoutMs, signal: input.signal });
   }
 
@@ -818,7 +820,7 @@ export class ExtensionBridge {
     return {
       id: command.id,
       kind: "browser-command",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       command: command.command,
       createdAt: command.createdAt
     };
@@ -900,7 +902,7 @@ export class ExtensionBridge {
     return {
       id: command.id,
       kind: "controller-command",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       command: command.command,
       createdAt: command.createdAt
     };
@@ -969,7 +971,7 @@ export class ExtensionBridge {
 
   async focusTarget(input: { target: ExtensionBrowserTarget; timeoutMs?: number; signal?: AbortSignal }): Promise<unknown> {
     const client = this.findCompatibleClientForTarget(input.target);
-    if (!client) throw new Error("No compatible BLINK browser extension tab is connected for the requested target.");
+    if (!client) throw new Error("No compatible Navoke browser extension tab is connected for the requested target.");
     if (client.tabId !== undefined) {
       try {
         return await this.focusBrowserSurfaceWithController({
@@ -1000,7 +1002,7 @@ export class ExtensionBridge {
     return {
       id: command.id,
       kind: "focus-tab",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       createdAt: command.createdAt
     };
   }
@@ -1129,7 +1131,7 @@ export class ExtensionBridge {
     if (!client.compatible) {
       throw new Error(
         client.incompatibilityReason ??
-          `Reload the unpacked BLINK browser extension and refresh browser tabs. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION}.`
+          `Reload the unpacked Navoke browser extension and refresh browser tabs. App requires extension protocol ${NAVOKE_EXTENSION_PROTOCOL_VERSION}.`
       );
     }
     return client;
@@ -1139,12 +1141,12 @@ export class ExtensionBridge {
     this.prune();
     const controller = this.controllers.get(controllerId);
     if (!controller) {
-      throw new Error("BLINK browser controller has not checked in. Reload the unpacked extension and open any page in that browser profile.");
+      throw new Error("Navoke browser controller has not checked in. Reload the unpacked extension and open any page in that browser profile.");
     }
     if (!controller.compatible) {
       throw new Error(
         controller.incompatibilityReason ??
-          `Reload the unpacked BLINK browser extension. App requires extension protocol ${BLINK_EXTENSION_PROTOCOL_VERSION}.`
+          `Reload the unpacked Navoke browser extension. App requires extension protocol ${NAVOKE_EXTENSION_PROTOCOL_VERSION}.`
       );
     }
     return controller;
@@ -1218,9 +1220,9 @@ export class ExtensionBridge {
       incompatibilityReason: controller.incompatibilityReason
     }));
     return (
-      `No compatible BLINK browser controller with ${capability} support is connected. ` +
-      "Do not open chrome.exe or paste routed workflow URLs into another Chrome profile; that bypasses the BLINK extension controller and can open the wrong profile. " +
-      "Open the BLINK extension popup in the intended Chrome profile, confirm it reports at least 1 browser controller, then resume the run. " +
+      `No compatible Navoke browser controller with ${capability} support is connected. ` +
+      "Do not open chrome.exe or paste routed workflow URLs into another Chrome profile; that bypasses the Navoke extension controller and can open the wrong profile. " +
+      "Open the Navoke extension popup in the intended Chrome profile, confirm it reports at least 1 browser controller, then resume the run. " +
       `connectedTabs=${JSON.stringify(connectedTabs)}; connectedControllers=${JSON.stringify(controllers)}; ` +
       `controllerDiagnostics=${JSON.stringify(status.controllerDiagnostics)}; ` +
       `controllerCommandDiagnostics=${JSON.stringify(status.controllerCommandDiagnostics)}`
@@ -1229,7 +1231,7 @@ export class ExtensionBridge {
 
   private controllerCommandFailureMessage(error: unknown): string {
     return (
-      `The BLINK browser controller command was not completed. ${formatErrorMessage(error)} ` +
+      `The Navoke browser controller command was not completed. ${formatErrorMessage(error)} ` +
       `controllerCommandDiagnostics=${JSON.stringify(this.buildControllerCommandDiagnostics())}`
     );
   }
@@ -1239,7 +1241,7 @@ export class ExtensionBridge {
     const status = command?.status ?? "missing";
     const expectedState = status === "running" ? "complete" : "be picked up";
     return (
-      `Timed out waiting for BLINK browser controller command ${commandId} to ${expectedState}. ` +
+      `Timed out waiting for Navoke browser controller command ${commandId} to ${expectedState}. ` +
       `status=${status}; controllerId=${command?.controllerId ?? "unknown"}; commandKind=${command?.command.kind ?? "unknown"}; ` +
       `createdAt=${command?.createdAt ?? ""}; updatedAt=${command?.updatedAt ?? ""}; ` +
       `controllerCommandDiagnostics=${JSON.stringify(this.buildControllerCommandDiagnostics())}`
@@ -1420,10 +1422,14 @@ function buildControllerDiagnostics(clients: ExtensionClientStatus[]): Extension
 function routingTokenFromUrl(value: string): string | undefined {
   try {
     const url = new URL(value);
-    const searchToken = url.searchParams.get(BLINK_ROUTING_TOKEN_PARAM)?.trim();
-    if (searchToken) return searchToken;
     const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-    return hash.get(BLINK_ROUTING_TOKEN_PARAM)?.trim() || undefined;
+    for (const param of ROUTING_TOKEN_PARAMS) {
+      const searchToken = url.searchParams.get(param)?.trim();
+      if (searchToken) return searchToken;
+      const hashToken = hash.get(param)?.trim();
+      if (hashToken) return hashToken;
+    }
+    return undefined;
   } catch {
     return undefined;
   }
@@ -1436,8 +1442,8 @@ function openableTargetUrl(target: ExtensionBrowserTarget): string | undefined {
   const url = new URL(safeExtensionTabUrl(rawUrl));
   if (target.mode === "new" && target.routingToken) {
     const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-    if (!hash.get(BLINK_ROUTING_TOKEN_PARAM)) {
-      hash.set(BLINK_ROUTING_TOKEN_PARAM, target.routingToken);
+    if (!ROUTING_TOKEN_PARAMS.some((param) => hash.get(param))) {
+      hash.set(NAVOKE_ROUTING_TOKEN_PARAM, target.routingToken);
       url.hash = hash.toString();
     }
   }
@@ -1491,12 +1497,10 @@ function sameUrl(left: string | undefined, right: string | undefined): boolean {
 function removeRoutingToken(url: URL): void {
   const search = new URLSearchParams(url.search);
   const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-  if (search.has(BLINK_ROUTING_TOKEN_PARAM)) {
-    search.delete(BLINK_ROUTING_TOKEN_PARAM);
-    url.search = search.toString();
+  for (const param of ROUTING_TOKEN_PARAMS) {
+    search.delete(param);
+    hash.delete(param);
   }
-  if (hash.has(BLINK_ROUTING_TOKEN_PARAM)) {
-    hash.delete(BLINK_ROUTING_TOKEN_PARAM);
-    url.hash = hash.toString();
-  }
+  url.search = search.toString();
+  url.hash = hash.toString();
 }

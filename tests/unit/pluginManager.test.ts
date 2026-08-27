@@ -41,7 +41,7 @@ describe("PluginManager", () => {
   });
 
   it("installs and loads a trusted local workflow plugin", async () => {
-    const userDataDir = tempDir("blink-user-data-");
+    const userDataDir = tempDir("navoke-user-data-");
     const sourceDir = createPluginSource("vendor.example", "0.1.0", "vendor.example.workflow");
     const manager = new PluginManager(userDataDir);
 
@@ -55,7 +55,7 @@ describe("PluginManager", () => {
   });
 
   it("keeps incompatible plugins installed but does not register their workflows", async () => {
-    const userDataDir = tempDir("blink-user-data-");
+    const userDataDir = tempDir("navoke-user-data-");
     const sourceDir = createPluginSource("vendor.incompatible", "0.1.0", "vendor.incompatible.workflow", {
       pluginApiVersion: "999"
     });
@@ -68,7 +68,7 @@ describe("PluginManager", () => {
   });
 
   it("marks duplicate workflow ids as failed", async () => {
-    const userDataDir = tempDir("blink-user-data-");
+    const userDataDir = tempDir("navoke-user-data-");
     const firstSource = createPluginSource("vendor.first", "0.1.0", "vendor.duplicate.workflow");
     const secondSource = createPluginSource("vendor.second", "0.1.0", "vendor.duplicate.workflow");
     const manager = new PluginManager(userDataDir);
@@ -93,7 +93,7 @@ function createPluginSource(
   workflowId: string,
   overrides: Partial<{ pluginApiVersion: string }> = {}
 ): string {
-  const dir = tempDir("blink-plugin-source-");
+  const dir = tempDir("navoke-plugin-source-");
   const distDir = path.join(dir, "dist");
   fs.mkdirSync(distDir, { recursive: true });
   fs.writeFileSync(

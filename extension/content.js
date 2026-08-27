@@ -1,13 +1,14 @@
 (() => {
-if (globalThis.__basedBlinkBrowserControllerContentStarted) return;
-globalThis.__basedBlinkBrowserControllerContentStarted = true;
+if (globalThis.__navokeBrowserControllerContentStarted) return;
+globalThis.__navokeBrowserControllerContentStarted = true;
 
-const BLINK_EXTENSION_PROTOCOL_VERSION = 6;
+const NAVOKE_EXTENSION_PROTOCOL_VERSION = 6;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const API_BASE_URL = "http://127.0.0.1:39201";
-const ROUTING_TOKEN_PARAM = "based-blink-tab";
-const CLIENT_ID_STORAGE_KEY = "basedBlinkBrowserClientId";
-const ROUTING_TOKEN_STORAGE_KEY = "basedBlinkBrowserRoutingToken";
+const ROUTING_TOKEN_PARAM = "navoke-tab";
+const LEGACY_BLINK_ROUTING_TOKEN_PARAM = "based-blink-tab";
+const CLIENT_ID_STORAGE_KEY = "navokeBrowserClientId";
+const ROUTING_TOKEN_STORAGE_KEY = "navokeBrowserRoutingToken";
 
 const memoryStorage = new Map();
 let lastControllerHeartbeat = {
@@ -40,9 +41,13 @@ if (!clientId) {
 }
 
 function routingTokenFromLocation() {
-  const searchToken = new URLSearchParams(location.search).get(ROUTING_TOKEN_PARAM);
-  if (searchToken) return searchToken;
-  return new URLSearchParams(location.hash.startsWith("#") ? location.hash.slice(1) : location.hash).get(ROUTING_TOKEN_PARAM) || undefined;
+  const search = new URLSearchParams(location.search);
+  const hash = new URLSearchParams(location.hash.startsWith("#") ? location.hash.slice(1) : location.hash);
+  for (const param of [ROUTING_TOKEN_PARAM, LEGACY_BLINK_ROUTING_TOKEN_PARAM]) {
+    const routingToken = search.get(param) || hash.get(param);
+    if (routingToken) return routingToken;
+  }
+  return undefined;
 }
 
 function rememberRoutingTokenFromLocation() {
@@ -77,7 +82,7 @@ async function apiFetch(path, options = {}) {
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;
   if (!response.ok) {
-    throw new Error(body?.error || body?.message || `BLINK API request failed with ${response.status}`);
+    throw new Error(body?.error || body?.message || `Navoke API request failed with ${response.status}`);
   }
   return body;
 }
@@ -102,11 +107,11 @@ async function relayApiFetch(path, options = {}) {
 
 function apiFetchBodyFromRelay(result) {
   if (result.type === "api-fetch-error") {
-    throw new Error(result.error || `BLINK API request failed with ${result.status || "unknown status"}`);
+    throw new Error(result.error || `Navoke API request failed with ${result.status || "unknown status"}`);
   }
   if (result.status === 204) return null;
   if (!result.ok) {
-    throw new Error(result.body?.error || result.body?.message || `BLINK API request failed with ${result.status}`);
+    throw new Error(result.body?.error || result.body?.message || `Navoke API request failed with ${result.status}`);
   }
   return result.body ?? null;
 }
@@ -119,7 +124,7 @@ async function heartbeat() {
       method: "POST",
       body: JSON.stringify({
         clientId,
-        protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+        protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
         extensionVersion: EXTENSION_VERSION,
         url: location.href,
         title: document.title,
@@ -202,8 +207,8 @@ async function pollFocusCommands() {
 
 async function runCommand(payload) {
   try {
-    if (!payload || payload.protocolVersion !== BLINK_EXTENSION_PROTOCOL_VERSION || payload.kind !== "browser-command") {
-      throw new Error("Unsupported BLINK browser command payload.");
+    if (!payload || payload.protocolVersion !== NAVOKE_EXTENSION_PROTOCOL_VERSION || payload.kind !== "browser-command") {
+      throw new Error("Unsupported Navoke browser command payload.");
     }
     const result = await performCommand(payload.command);
     await apiFetch(`/api/extension/commands/${encodeURIComponent(payload.id)}/complete`, {
@@ -219,12 +224,12 @@ async function runCommand(payload) {
 }
 
 async function performCommand(command) {
-  if (!command || typeof command !== "object") throw new Error("BLINK browser command is required.");
+  if (!command || typeof command !== "object") throw new Error("Navoke browser command is required.");
   if (command.kind === "inspect") return collectPageState();
   if (command.kind === "action") return performAction(command.action);
   if (command.kind === "wait") return waitForCondition(command.condition);
   if (command.kind === "extract") return extract(command.query);
-  throw new Error(`Unsupported BLINK browser command kind: ${command.kind || "unknown"}`);
+  throw new Error(`Unsupported Navoke browser command kind: ${command.kind || "unknown"}`);
 }
 
 function requireSelector(selector) {
@@ -466,7 +471,7 @@ function fillElementDiagnostics(element) {
 }
 
 async function performAction(action) {
-  if (!action || typeof action !== "object") throw new Error("BLINK browser action is required.");
+  if (!action || typeof action !== "object") throw new Error("Navoke browser action is required.");
   if (action.kind === "click") {
     const textFilter = createTextFilter(action);
     const { element, candidateCount, visibleCount, enabledCount, textMatchCount } = firstActionableElement(action.selector, textFilter);
@@ -563,7 +568,7 @@ async function performAction(action) {
     element.dispatchEvent(new Event("change", { bubbles: true }));
     return { ok: true, action: "attach-file", selector: action.selector, count: dataTransfer.files.length };
   }
-  throw new Error(`Unsupported BLINK browser action kind: ${action.kind || "unknown"}`);
+  throw new Error(`Unsupported Navoke browser action kind: ${action.kind || "unknown"}`);
 }
 
 function clickElement(element) {
@@ -793,11 +798,11 @@ function evaluateCondition(condition, state) {
       diagnostics: { networkIdle: state.networkIdle ?? null }
     };
   }
-  throw new Error(`Unsupported BLINK browser wait condition: ${condition?.kind || "unknown"}`);
+  throw new Error(`Unsupported Navoke browser wait condition: ${condition?.kind || "unknown"}`);
 }
 
 async function waitForCondition(condition) {
-  if (!condition || typeof condition !== "object") throw new Error("BLINK browser wait condition is required.");
+  if (!condition || typeof condition !== "object") throw new Error("Navoke browser wait condition is required.");
   const timeoutMs = Number(condition.timeoutMs || (condition.kind === "network-idle" ? 15000 : 30000));
   const startedAt = Date.now();
   let lastEvaluation = { satisfied: false, reason: "Wait has not evaluated yet.", diagnostics: {} };
@@ -921,7 +926,7 @@ function imageExtractionRecord(image, domIndex) {
 }
 
 async function extract(query) {
-  if (!query || typeof query !== "object") throw new Error("BLINK browser extract query is required.");
+  if (!query || typeof query !== "object") throw new Error("Navoke browser extract query is required.");
   if (query.kind === "element-state") {
     const selector = requireSelector(query.selector);
     const elements = elementsForSelector(selector);
@@ -965,7 +970,7 @@ async function extract(query) {
     }
     return { images: withData };
   }
-  throw new Error(`Unsupported BLINK browser extract query: ${query.kind || "unknown"}`);
+  throw new Error(`Unsupported Navoke browser extract query: ${query.kind || "unknown"}`);
 }
 
 async function fetchImageData(src, timeoutMs = 10_000) {
@@ -997,7 +1002,7 @@ setInterval(heartbeat, 2500);
 setInterval(pollCommands, 500);
 setInterval(pollFocusCommands, 800);
 
-globalThis.__BasedBlinkBrowserControllerTest = {
+globalThis.__NavokeBrowserControllerTest = {
   performCommand,
   performAction,
   collectPageState,

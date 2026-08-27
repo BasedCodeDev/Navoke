@@ -1,10 +1,11 @@
 import type { WorkflowDefinition, WorkflowPluginMetadata, WorkflowRegistry, WorkflowRegistration } from "../runtime/types";
 import type { PluginManager } from "../plugins/pluginManager";
 import { WORKFLOW_PLUGIN_API_VERSION } from "../plugins/types";
+import { addLegacyWorkflowAliases } from "../runtime/legacyCompatibility";
 
 export const BUILTIN_WORKFLOW_PLUGIN: WorkflowPluginMetadata = {
-  id: "based-blink.builtin",
-  name: "Based BLINK Built-ins",
+  id: "navoke.builtin",
+  name: "Navoke Built-ins",
   version: "0.1.0",
   source: "builtin",
   apiVersion: WORKFLOW_PLUGIN_API_VERSION,
@@ -24,7 +25,7 @@ export function createWorkflowRegistry(pluginManager?: PluginManager): WorkflowR
     }
     registry.set(registration.definition.manifest.id, registration);
   }
-  return registry;
+  return addLegacyWorkflowAliases(registry);
 }
 
 export function registerBuiltInWorkflow(definition: WorkflowDefinition): WorkflowRegistration {

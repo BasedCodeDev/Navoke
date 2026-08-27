@@ -1,7 +1,7 @@
 export {};
 
 declare global {
-  interface BasedBlinkConfig {
+  interface NavokeConfig {
     apiBaseUrl: string;
     dataDir: string;
     projectDir: string | null;
@@ -12,15 +12,15 @@ declare global {
     pluginRootDir: string | null;
   }
 
-  interface BasedBlinkWindowState {
+  interface NavokeWindowState {
     isMaximized: boolean;
   }
 
   interface Window {
-    basedBlink: {
-      getConfig(): Promise<BasedBlinkConfig>;
-      openProject(path?: string): Promise<BasedBlinkConfig>;
-      renameProject(projectPath: string, name: string): Promise<BasedBlinkConfig>;
+    navoke: {
+      getConfig(): Promise<NavokeConfig>;
+      openProject(path?: string): Promise<NavokeConfig>;
+      renameProject(projectPath: string, name: string): Promise<NavokeConfig>;
       selectFiles(options?: {
         title?: string;
         filters?: Array<{ name: string; extensions: string[] }>;
@@ -29,8 +29,8 @@ declare global {
       openExternal(url: string): Promise<void>;
       windowControls?: {
         minimize(): Promise<void>;
-        toggleMaximize(): Promise<BasedBlinkWindowState>;
-        getState(): Promise<BasedBlinkWindowState>;
+        toggleMaximize(): Promise<NavokeWindowState>;
+        getState(): Promise<NavokeWindowState>;
         close(): Promise<void>;
       };
     };

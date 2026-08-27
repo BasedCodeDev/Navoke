@@ -12,7 +12,7 @@ module.exports = {
     return [
       {
         manifest: {
-          id: "based-blink.test.cli-visible",
+          id: "navoke.test.cli-visible",
           title: "CLI Visible Test Workflow",
           description: "Deterministic workflow used by the CLI-origin e2e test.",
           category: "utility",

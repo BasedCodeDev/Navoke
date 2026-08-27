@@ -18,6 +18,7 @@ import {
   deleteWorkflowLibraryEntry,
   mergeLibraryInput
 } from "../runtime/workflowLibrary";
+import { productIdsMatch, uniqueWorkflowRegistrations } from "../runtime/legacyCompatibility";
 
 interface ApiServerOptions {
   store: SqliteStore;
@@ -140,7 +141,7 @@ export class ApiServer {
     });
 
     app.get("/api/workflows", (_req, res) => {
-      res.json([...this.options.workflows.values()].map(publicWorkflow));
+      res.json(uniqueWorkflowRegistrations(this.options.workflows).map(publicWorkflow));
     });
 
     app.post("/api/files/validate", (req, res) => {
@@ -690,7 +691,11 @@ function assertWorkflowLibraryEntryIsRunnable(entry: WorkflowLibraryEntry, workf
   if (!entry.pluginId || !entry.pluginVersion) return;
 
   const plugin = registration.plugin;
-  if (plugin.id === entry.pluginId && plugin.version === entry.pluginVersion && plugin.apiVersion === (entry.pluginApiVersion ?? plugin.apiVersion)) {
+  if (
+    productIdsMatch(plugin.id, entry.pluginId) &&
+    plugin.version === entry.pluginVersion &&
+    plugin.apiVersion === (entry.pluginApiVersion ?? plugin.apiVersion)
+  ) {
     return;
   }
 

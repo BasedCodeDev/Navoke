@@ -36,22 +36,22 @@ Workflow Lab is the repo's interactive harness for learning a target site's DOM,
 6. Translate proven selectors and wait predicates into plugin workflow/controller code.
 7. Add unit coverage for the reusable wait/action logic before handing off.
 
-## Pairing With BLINK CLI
+## Pairing With Navoke CLI
 
-Workflow Lab learns the page; the BLINK CLI proves the installed workflow. Use both for browser plugin calibration:
+Workflow Lab learns the page; the Navoke CLI proves the installed workflow. Use both for browser plugin calibration:
 
-1. Run the workflow through `blink --project <project-dir> run ...` with real input files.
+1. Run the workflow through `navoke --project <project-dir> run ...` with real input files.
 2. Watch progress until the run completes or fails.
-3. On failure, use `blink --project <project-dir> get <runId>` to capture the exact step, error, screenshot artifacts, trace artifact, and selector key involved.
+3. On failure, use `navoke --project <project-dir> get <runId>` to capture the exact step, error, screenshot artifacts, trace artifact, and selector key involved.
 4. Use Workflow Lab against the live target page when it is still open. Match the workflow's browser profile owner/name when login or generated page state matters.
 5. If the workflow closed the browser, inspect the Playwright trace snapshots from the failed run and reproduce the relevant state in Lab when possible.
-6. Patch the workflow defaults/helpers and renderer preset, add focused tests, rebuild, reload the installed plugin, and rerun with BLINK CLI.
+6. Patch the workflow defaults/helpers and renderer preset, add focused tests, rebuild, reload the installed plugin, and rerun with Navoke CLI.
 
 This loop should continue until a real run produces the intended artifact. A selector is not considered calibrated just because it matches once in isolation; it must work in the workflow phase where the automation uses it.
 
-For `based-blink.chatgpt.extension-image-sequence` calibration, keep setup and sequence prompts separate in CLI inputs. `masterPromptSuffix` belongs to the optional setup phase: it is appended to `masterPrompt` only when both are non-empty, and it should not be treated as a `prompts[]` entry. When a non-empty setup prompt is used and the user has not cleared the guardrail, include `masterPromptSuffix` with: `Only generate images, one at a time, no text responses after the first response to this message. Respond "Ready" when you're ready to proceed.`
+For `navoke.chatgpt.extension-image-sequence` calibration, keep setup and sequence prompts separate in CLI inputs. `masterPromptSuffix` belongs to the optional setup phase: it is appended to `masterPrompt` only when both are non-empty, and it should not be treated as a `prompts[]` entry. When a non-empty setup prompt is used and the user has not cleared the guardrail, include `masterPromptSuffix` with: `Only generate images, one at a time, no text responses after the first response to this message. Respond "Ready" when you're ready to proceed.`
 
-For single ChatGPT prompt calibration, `based-blink.chatgpt.extension-image-prompt` submits text only through `prompt`; `based-blink.chatgpt.extension-image-prompt-transform` submits one source file through the single-path `image` field plus the `prompt`. Use Lab inspection to confirm the attachment preview is not classified as the generated output before changing capture logic.
+For single ChatGPT prompt calibration, `navoke.chatgpt.extension-image-prompt` submits text only through `prompt`; `navoke.chatgpt.extension-image-prompt-transform` submits one source file through the single-path `image` field plus the `prompt`. Use Lab inspection to confirm the attachment preview is not classified as the generated output before changing capture logic.
 
 ## Trace-Backed Calibration
 
@@ -118,7 +118,7 @@ When adding a new action or wait condition:
 4. Wire the UI in `src/renderer/App.tsx`.
 5. Add API routes in `src/main/api/server.ts` only if the capability needs new staged resources or transport.
 6. Add focused unit tests for predicates, command payloads, staged resources, or inspection parsing.
-7. If the extension protocol changes, bump `BLINK_EXTENSION_PROTOCOL_VERSION` in main, content, and popup scripts, and bump `extension/manifest.json`.
+7. If the extension protocol changes, bump `NAVOKE_EXTENSION_PROTOCOL_VERSION` in main, content, and popup scripts, and bump `extension/manifest.json`.
 
 ## Verification
 

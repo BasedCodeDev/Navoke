@@ -6,9 +6,12 @@ describe("renderer run origin helpers", () => {
   it("labels UI and CLI runs", () => {
     expect(isCliRun(run({ source: "ui" }))).toBe(false);
     expect(runOriginLabel(run({ source: "ui" }))).toBe("UI");
-    expect(isCliRun(run({ source: "cli", agentName: "codex", command: "blink run wf --wait" }))).toBe(true);
+    expect(isCliRun(run({ source: "cli", agentName: "codex", command: "navoke run wf --wait" }))).toBe(true);
     expect(runOriginLabel(run({ source: "cli", agentName: "codex" }))).toBe("CLI: codex");
-    expect(runOriginCommand(run({ source: "cli", command: "blink run wf --wait" }))).toBe("blink run wf --wait");
+    expect(runOriginCommand(run({ source: "cli", command: "navoke run wf --wait" }))).toBe("navoke run wf --wait");
+    expect(runOriginCommand(run({ source: "cli", command: "blink run legacy.workflow --wait" }))).toBe(
+      "blink run legacy.workflow --wait"
+    );
   });
 
   it("returns active CLI runs only", () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BLINK_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
+import { NAVOKE_EXTENSION_PROTOCOL_VERSION, ExtensionBridge } from "../../src/main/extension/extensionBridge";
 
 const CONTROLLER_CAPABILITIES = ["open-tab", "open-window", "focus-tab", "close-tab"];
 
@@ -10,9 +10,9 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       clientId: "tab-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
-      url: "https://example.test/#based-blink-tab=route-1",
+      url: "https://example.test/#navoke-tab=route-1",
       title: "Example",
       controllerId: "controller-1",
       tabId: 42,
@@ -26,7 +26,7 @@ describe("ExtensionBridge", () => {
       extensionVersion: "0.0.1"
     });
 
-    expect(BLINK_EXTENSION_PROTOCOL_VERSION).toBe(6);
+    expect(NAVOKE_EXTENSION_PROTOCOL_VERSION).toBe(6);
     expect(bridge.status()).toMatchObject({
       requiredProtocolVersion: 6,
       connected: 2,
@@ -49,11 +49,26 @@ describe("ExtensionBridge", () => {
     });
   });
 
+  it("accepts the legacy routing token during the extension transition", () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({
+      clientId: "legacy-tab",
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
+      extensionVersion: "0.1.0",
+      url: "https://example.test/#based-blink-tab=legacy-route"
+    });
+
+    expect(bridge.findCompatibleClientForTarget({ mode: "new", routingToken: "legacy-route" })).toMatchObject({
+      id: "legacy-tab",
+      routingToken: "legacy-route"
+    });
+  });
+
   it("queues, leases, and completes generic browser commands", async () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       clientId: "tab-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0"
     });
 
@@ -65,7 +80,7 @@ describe("ExtensionBridge", () => {
     const command = bridge.nextCommand("tab-1");
     expect(command).toMatchObject({
       kind: "browser-command",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       command: { kind: "inspect" }
     });
 
@@ -77,13 +92,13 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       clientId: "other",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0"
     });
     bridge.heartbeat({
       clientId: "routed",
       routingToken: "run-token",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0"
     });
 
@@ -104,7 +119,7 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES,
       diagnostics: { lastControllerCommand: { status: "none" } }
@@ -135,7 +150,7 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "stale-controller",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.7",
       capabilities: ["open-tab", "open-window", "focus-tab"]
     });
@@ -157,17 +172,17 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
 
-    const wait = bridge.openTabWithController({ url: "https://example.test/#based-blink-tab=route-1", timeoutMs: 1_000 });
+    const wait = bridge.openTabWithController({ url: "https://example.test/#navoke-tab=route-1", timeoutMs: 1_000 });
     const command = bridge.nextControllerCommand("controller-1");
     expect(command).toMatchObject({
       kind: "controller-command",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
-      command: { kind: "open-tab", url: "https://example.test/#based-blink-tab=route-1", active: true }
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
+      command: { kind: "open-tab", url: "https://example.test/#navoke-tab=route-1", active: true }
     });
 
     bridge.completeControllerCommand(command!.id, { ok: true, tabId: 1 });
@@ -178,17 +193,17 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
 
-    const wait = bridge.openWindowWithController({ url: "https://example.test/#based-blink-tab=route-1", timeoutMs: 1_000 });
+    const wait = bridge.openWindowWithController({ url: "https://example.test/#navoke-tab=route-1", timeoutMs: 1_000 });
     const command = bridge.nextControllerCommand("controller-1");
     expect(command).toMatchObject({
       kind: "controller-command",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
-      command: { kind: "open-window", url: "https://example.test/#based-blink-tab=route-1", focused: true }
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
+      command: { kind: "open-window", url: "https://example.test/#navoke-tab=route-1", focused: true }
     });
 
     bridge.completeControllerCommand(command!.id, { ok: true, tabId: 1, windowId: 2 });
@@ -199,7 +214,7 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
@@ -208,7 +223,7 @@ describe("ExtensionBridge", () => {
     const command = bridge.nextControllerCommand("controller-1");
     expect(command).toMatchObject({
       kind: "controller-command",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       command: { kind: "close-tab", tabId: 42 }
     });
 
@@ -220,7 +235,7 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
@@ -241,22 +256,22 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
 
     const wait = bridge.ensureRoutedTab({
-      target: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" },
+      target: { mode: "new", routingToken: "route-1", url: "https://example.test/#navoke-tab=route-1" },
       timeoutMs: 1_000
     });
     const command = bridge.nextControllerCommand("controller-1");
-    expect(command?.command).toMatchObject({ kind: "open-window", url: "https://example.test/#based-blink-tab=route-1" });
+    expect(command?.command).toMatchObject({ kind: "open-window", url: "https://example.test/#navoke-tab=route-1" });
     bridge.completeControllerCommand(command!.id, { ok: true, action: "open-window", tabId: 1, windowId: 2 });
     bridge.heartbeat({
       clientId: "routed-tab",
       routingToken: "route-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       url: "https://example.test/"
     });
@@ -277,20 +292,20 @@ describe("ExtensionBridge", () => {
     bridge.heartbeat({
       clientId: "routed-tab",
       routingToken: "route-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       url: "https://example.test/"
     });
 
     await expect(
       bridge.ensureRoutedTab({
-        target: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" },
+        target: { mode: "new", routingToken: "route-1", url: "https://example.test/#navoke-tab=route-1" },
         timeoutMs: 1_000
       })
     ).resolves.toMatchObject({ id: "routed-tab", routingToken: "route-1" });
     expect(
       await bridge.ensureRoutedTab({
-        target: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" },
+        target: { mode: "new", routingToken: "route-1", url: "https://example.test/#navoke-tab=route-1" },
         timeoutMs: 1_000
       })
     ).not.toHaveProperty("openedByController");
@@ -300,12 +315,12 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
 
-    await expect(bridge.openWindowWithController({ url: "https://example.test/#based-blink-tab=route-1", timeoutMs: 5 })).rejects.toThrow(
+    await expect(bridge.openWindowWithController({ url: "https://example.test/#navoke-tab=route-1", timeoutMs: 5 })).rejects.toThrow(
       /to be picked up/
     );
 
@@ -320,12 +335,12 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
 
-    const wait = bridge.openWindowWithController({ url: "https://example.test/#based-blink-tab=route-1", timeoutMs: 5 });
+    const wait = bridge.openWindowWithController({ url: "https://example.test/#navoke-tab=route-1", timeoutMs: 5 });
     const command = bridge.nextControllerCommand("controller-1");
     expect(command?.command.kind).toBe("open-window");
 
@@ -341,13 +356,13 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
 
     const wait = bridge.ensureRoutedTab({
-      target: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" },
+      target: { mode: "new", routingToken: "route-1", url: "https://example.test/#navoke-tab=route-1" },
       timeoutMs: 10
     });
     const command = bridge.nextControllerCommand("controller-1");
@@ -359,14 +374,14 @@ describe("ExtensionBridge", () => {
       injection: { injected: false, reason: "Cannot access contents of url" }
     });
 
-    await expect(wait).rejects.toThrow(/Opened a routed BLINK browser window, but no compatible page client connected.*Cannot access contents of url/s);
+    await expect(wait).rejects.toThrow(/Opened a routed Navoke browser window, but no compatible page client connected.*Cannot access contents of url/s);
   });
 
   it("does not match arbitrary same-url tabs for routed run-owned targets", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       clientId: "same-url",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       url: "https://example.test/conversation/123"
     });
@@ -384,7 +399,7 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
@@ -394,7 +409,7 @@ describe("ExtensionBridge", () => {
         mode: "new",
         clientId: "closed-client",
         routingToken: "route-1",
-        url: "https://example.test/#based-blink-tab=route-1"
+        url: "https://example.test/#navoke-tab=route-1"
       },
       timeoutMs: 1_000
     });
@@ -404,7 +419,7 @@ describe("ExtensionBridge", () => {
     bridge.heartbeat({
       clientId: "replacement-client",
       routingToken: "route-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       url: "https://example.test/"
     });
@@ -416,7 +431,7 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       clientId: "tab-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       url: "https://example.test/",
       controllerHeartbeatOk: false,
@@ -424,7 +439,7 @@ describe("ExtensionBridge", () => {
     });
     await expect(
       bridge.ensureRoutedTab({
-        target: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" },
+        target: { mode: "new", routingToken: "route-1", url: "https://example.test/#navoke-tab=route-1" },
         timeoutMs: 1_000
       })
     ).rejects.toThrow(/Do not open chrome\.exe/);
@@ -434,14 +449,14 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       clientId: "routed",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
-      url: "https://example.test/#based-blink-tab=run-token",
+      url: "https://example.test/#navoke-tab=run-token",
       title: "Routed start"
     });
     bridge.heartbeat({
       clientId: "routed",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       url: "https://example.test/conversation/123",
       title: "Conversation"
@@ -458,14 +473,14 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       clientId: "stuck",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       url: "https://example.test/conversation/123",
       title: "Conversation"
     });
     bridge.heartbeat({
       clientId: "fresh",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       url: "https://example.test/conversation/123",
       title: "Conversation"
@@ -542,13 +557,13 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       clientId: "tab-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0"
     });
 
     const wait = bridge.focusClient("tab-1");
     const command = bridge.nextFocusCommand("tab-1");
-    expect(command).toMatchObject({ kind: "focus-tab", protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION });
+    expect(command).toMatchObject({ kind: "focus-tab", protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION });
     bridge.completeFocusCommand(command!.id, { ok: true });
     await expect(wait).resolves.toMatchObject({ ok: true });
   });
@@ -557,14 +572,14 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.controllerHeartbeat({
       controllerId: "controller-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       capabilities: CONTROLLER_CAPABILITIES
     });
     bridge.heartbeat({
       clientId: "tab-1",
       routingToken: "route-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0",
       tabId: 42,
       windowId: 7,
@@ -585,7 +600,7 @@ describe("ExtensionBridge", () => {
     const bridge = new ExtensionBridge();
     bridge.heartbeat({
       clientId: "tab-1",
-      protocolVersion: BLINK_EXTENSION_PROTOCOL_VERSION,
+      protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION,
       extensionVersion: "0.1.0"
     });
 

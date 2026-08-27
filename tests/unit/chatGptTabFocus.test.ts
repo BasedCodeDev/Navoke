@@ -48,11 +48,11 @@ describe("extension tab focus", () => {
 
   it("opens a tracked URL when the tab is disconnected", () => {
     const target = resolveExtensionFocusTarget(
-      run({ extensionTab: { mode: "new", routingToken: "route-1", url: "https://example.test/#based-blink-tab=route-1" } }),
+      run({ extensionTab: { mode: "new", routingToken: "route-1", url: "https://example.test/#navoke-tab=route-1" } }),
       [],
       workflow
     );
-    expect(target).toMatchObject({ action: "open", url: expect.stringContaining("based-blink-tab=route-1") });
+    expect(target).toMatchObject({ action: "open", url: expect.stringContaining("navoke-tab=route-1") });
   });
 
   it("marks failed runs with extension state as recoverable", () => {

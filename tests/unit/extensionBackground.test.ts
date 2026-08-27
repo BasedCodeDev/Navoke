@@ -17,10 +17,10 @@ describe("generic browser extension background controller", () => {
       id: "command-1",
       kind: "controller-command",
       protocolVersion: 6,
-      command: { kind: "open-tab", url: "https://example.test/#based-blink-tab=route-1", active: true }
+      command: { kind: "open-tab", url: "https://example.test/#navoke-tab=route-1", active: true }
     });
 
-    expect(createdTabs).toEqual([{ url: "https://example.test/#based-blink-tab=route-1", active: true }]);
+    expect(createdTabs).toEqual([{ url: "https://example.test/#navoke-tab=route-1", active: true }]);
     expect(result).toMatchObject({ ok: true, action: "open-tab", tabId: 42, windowId: 7 });
   });
 
@@ -28,7 +28,7 @@ describe("generic browser extension background controller", () => {
     const injected: unknown[] = [];
     const harness = loadBackgroundHarness({
       tabsCreate: async (input: unknown) => ({ id: 42, windowId: 7, url: (input as { url: string }).url, title: "Opened tab" }),
-      tabsGet: async (tabId) => ({ id: tabId, windowId: 7, url: "https://example.test/#based-blink-tab=route-1", status: "complete" }),
+      tabsGet: async (tabId) => ({ id: tabId, windowId: 7, url: "https://example.test/#navoke-tab=route-1", status: "complete" }),
       scriptingExecuteScript: async (input: unknown) => {
         injected.push(input);
         return [];
@@ -39,7 +39,7 @@ describe("generic browser extension background controller", () => {
       id: "command-1",
       kind: "controller-command",
       protocolVersion: 6,
-      command: { kind: "open-tab", url: "https://example.test/#based-blink-tab=route-1", active: true }
+      command: { kind: "open-tab", url: "https://example.test/#navoke-tab=route-1", active: true }
     });
 
     expect(injected).toEqual([{ target: { tabId: 42 }, files: ["content.js"] }]);
@@ -81,10 +81,10 @@ describe("generic browser extension background controller", () => {
       id: "command-1",
       kind: "controller-command",
       protocolVersion: 6,
-      command: { kind: "open-window", url: "https://example.test/#based-blink-tab=route-1", focused: true }
+      command: { kind: "open-window", url: "https://example.test/#navoke-tab=route-1", focused: true }
     });
 
-    expect(createdWindows).toEqual([{ url: "https://example.test/#based-blink-tab=route-1", focused: true }]);
+    expect(createdWindows).toEqual([{ url: "https://example.test/#navoke-tab=route-1", focused: true }]);
     expect(result).toMatchObject({ ok: true, action: "open-window", tabId: 43, windowId: 9 });
   });
 
@@ -197,7 +197,7 @@ describe("generic browser extension background controller", () => {
       fetch: async () => ({
         status: 500,
         ok: false,
-        text: async () => JSON.stringify({ error: "BLINK app is down" })
+        text: async () => JSON.stringify({ error: "Navoke app is down" })
       })
     });
 
@@ -205,7 +205,7 @@ describe("generic browser extension background controller", () => {
       ok: false,
       controllerHeartbeat: {
         ok: false,
-        error: "BLINK app is down",
+        error: "Navoke app is down",
         capabilities: ["open-tab", "open-window", "focus-tab", "close-tab"]
       }
     });
@@ -247,7 +247,7 @@ describe("generic browser extension background controller", () => {
     await expect(harness.sendRuntimeMessage({ type: "api-fetch", path: "/api/runs" })).resolves.toMatchObject({
       type: "api-fetch-error",
       status: 400,
-      error: "Unsupported BLINK extension API relay path."
+      error: "Unsupported Navoke extension API relay path."
     });
   });
 
@@ -284,7 +284,7 @@ describe("generic browser extension background controller", () => {
     await expect(harness.apiFetchBinaryForContent("/api/runs/1")).resolves.toMatchObject({
       type: "api-fetch-binary-error",
       status: 400,
-      error: "Unsupported BLINK binary relay path."
+      error: "Unsupported Navoke binary relay path."
     });
   });
 
@@ -316,7 +316,7 @@ describe("generic browser extension background controller", () => {
     let enableCommand = false;
     const completed: unknown[] = [];
     const harness = loadBackgroundHarness({
-      tabsCreate: async () => ({ id: 42, windowId: 7, url: "https://example.test/#based-blink-tab=route-1", title: "Opened tab" }),
+      tabsCreate: async () => ({ id: 42, windowId: 7, url: "https://example.test/#navoke-tab=route-1", title: "Opened tab" }),
       fetch: async (url, options) => {
         if (url.includes("/commands/next")) {
           if (!enableCommand) return { status: 204, ok: true, text: async () => "" };
@@ -329,7 +329,7 @@ describe("generic browser extension background controller", () => {
                 id: "command-1",
                 kind: "controller-command",
                 protocolVersion: 6,
-                command: { kind: "open-tab", url: "https://example.test/#based-blink-tab=route-1", active: true }
+                command: { kind: "open-tab", url: "https://example.test/#navoke-tab=route-1", active: true }
               })
           };
         }
@@ -362,7 +362,7 @@ describe("generic browser extension background controller", () => {
       tabsCreate: async () => ({ id: 1 })
     });
 
-    expect(harness.createdAlarms).toEqual([{ name: "based-blink-controller-poll", input: { periodInMinutes: 1 } }]);
+    expect(harness.createdAlarms).toEqual([{ name: "navoke-controller-poll", input: { periodInMinutes: 1 } }]);
   });
 });
 
@@ -444,7 +444,7 @@ function loadBackgroundHarness(options: {
   });
   context.globalThis = context;
   vm.runInContext(background, context);
-  const api = context.__BasedBlinkBrowserControllerBackgroundTest as {
+  const api = context.__NavokeBrowserControllerBackgroundTest as {
     performControllerCommand(payload: unknown): Promise<unknown>;
     apiFetchForContent(path: string, options?: unknown): Promise<unknown>;
     apiFetchBinaryForContent(path: string): Promise<unknown>;
