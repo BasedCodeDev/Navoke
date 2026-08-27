@@ -68,7 +68,7 @@
             GitHub
           </a>
         </div>
-        <a class="button button-small" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
+        <a class="button button-small attention-tick" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
           <svg class="icon icon-download" aria-hidden="true"><use href="#icon-download"></use></svg>
           Download
         </a>
@@ -84,10 +84,11 @@
             <em>reusable actions.</em>
           </h1>
           <p class="hero-lede">
-            Capture once. Reuse whenever. Click to run, or let an agent call it.
+            <span>Capture once. Reuse whenever.</span>
+            <span class="hero-lede__action">Click to run, or let an agent call it.</span>
           </p>
           <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
+            <a class="button button-primary attention-tick" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
               <svg class="icon icon-download" aria-hidden="true"><use href="#icon-download"></use></svg>
               Download the installer
             </a>
@@ -100,7 +101,14 @@
         </div>
 
         <figure class="product-stage" aria-label="Navoke desktop application">
-          <div class="product-stack" data-product-stack role="group" aria-roledescription="carousel" aria-label="Navoke product screenshots">
+          <div
+            class="product-stack"
+            data-product-stack
+            role="button"
+            tabindex="0"
+            aria-roledescription="screenshot carousel"
+            aria-label="Navoke product screenshots. Activate to show the next screenshot."
+          >
             <div class="product-shot is-front" data-stack-slide aria-hidden="false">
               <div class="product-shot__bar"><span>Projects</span><span class="status"><i aria-hidden="true"></i> local workspace</span></div>
               <img
@@ -505,7 +513,7 @@
         </div>
       </section>
 
-      <section class="final-cta" id="download">
+      <section class="final-cta" id="download" data-final-tilt>
         <div class="final-cta__content reveal">
           <img class="cta-mark" src="./logo.png" alt="" width="1254" height="1254" aria-hidden="true" />
           <p class="eyebrow"><span>08</span> Run something real</p>
@@ -514,7 +522,7 @@
             <span></span><span></span><span></span><span></span>
           </div>
           <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
+            <a class="button button-primary attention-tick" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
               <svg class="icon icon-download" aria-hidden="true"><use href="#icon-download"></use></svg>
               Download the installer
             </a>

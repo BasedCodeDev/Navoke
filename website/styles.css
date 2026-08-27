@@ -366,6 +366,24 @@ main section[id] {
   transform: translateY(-2px);
 }
 
+[data-motion="on"] .attention-tick {
+  animation: cta-attention-tick 9s cubic-bezier(0.22, 1, 0.36, 1) var(--attention-tick-delay, 0s) infinite;
+}
+
+[data-motion="on"] .site-header .attention-tick {
+  --attention-tick-delay: -3s;
+}
+
+[data-motion="on"] .final-cta .attention-tick {
+  --attention-tick-delay: -5s;
+}
+
+[data-motion="on"] .attention-tick:hover,
+[data-motion="on"] .attention-tick:focus-visible,
+[data-motion="on"] .attention-tick:active {
+  animation-name: none;
+}
+
 .button-small {
   min-height: 38px;
   padding: 0 14px;
@@ -463,6 +481,14 @@ h1 em {
   line-height: 1.68;
 }
 
+.hero-lede > span {
+  display: block;
+}
+
+.hero-lede__action {
+  white-space: nowrap;
+}
+
 .release-note {
   margin: 17px 0 0;
   color: var(--quiet);
@@ -497,7 +523,18 @@ h1 em {
   transform: rotateX(var(--stack-tilt-x)) rotateY(var(--stack-tilt-y));
   transform-origin: 48% 46%;
   transform-style: preserve-3d;
+  cursor: pointer;
   will-change: transform;
+}
+
+.product-stack:focus-visible {
+  outline: none;
+}
+
+.product-stack:focus-visible .product-shot.is-front {
+  border-color: var(--violet-bright);
+  outline: 2px solid var(--violet-bright);
+  outline-offset: 4px;
 }
 
 .product-shot {
@@ -779,6 +816,7 @@ h1 em {
 }
 
 .process-node {
+  --process-card-lift: 0px;
   position: relative;
   z-index: 1;
   display: flex;
@@ -789,17 +827,27 @@ h1 em {
   border-radius: 12px;
   background: rgba(14, 13, 18, 0.78);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
+  transform: translateY(var(--process-card-lift)) scale(1);
+  transform-origin: center;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .process-node.is-highlighted {
+  --process-card-lift: -8px;
   border-color: rgba(181, 104, 194, 0.52);
   background: linear-gradient(150deg, rgba(102, 54, 116, 0.22), rgba(20, 16, 27, 0.9) 60%);
   box-shadow: 0 20px 48px rgba(23, 11, 38, 0.28), inset 0 0 34px rgba(102, 54, 116, 0.08);
-  transform: translateY(-8px);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .process-node:hover {
+    z-index: 3;
+    transform: translateY(var(--process-card-lift)) scale(1.02);
+  }
 }
 
 .process-node.is-result {
-  overflow: hidden;
+  overflow: visible;
   border-color: rgba(181, 104, 194, 0.3);
   background:
     radial-gradient(circle at 82% 18%, rgba(181, 104, 194, 0.2), transparent 24%),
@@ -822,16 +870,16 @@ h1 em {
 .process-artifact-preview {
   position: absolute;
   z-index: 0;
-  top: 42px;
-  right: 8px;
-  width: 168px;
-  height: 164px;
+  top: -14px;
+  right: -12px;
+  width: 280px;
+  height: 240px;
   pointer-events: none;
 }
 
 .process-artifact-preview::before {
   position: absolute;
-  inset: 16% 6%;
+  inset: 22% 12%;
   border-radius: 50%;
   background: rgba(102, 54, 116, 0.22);
   content: "";
@@ -849,7 +897,7 @@ h1 em {
 .process-artifact-preview img {
   object-fit: contain;
   opacity: 0.48;
-  transform: scale(0.84);
+  transform: scale(1.12);
   transition: opacity 300ms ease;
 }
 
@@ -1795,6 +1843,7 @@ h1 em {
 
 .marketplace-plugin,
 .marketplace-outcomes {
+  --marketplace-card-rotation: 0deg;
   position: relative;
   min-height: 320px;
   padding: 26px;
@@ -1802,10 +1851,36 @@ h1 em {
   border-radius: 12px;
   background: rgba(20, 16, 27, 0.92);
   box-shadow: 0 26px 70px rgba(0, 0, 0, 0.32);
+  transform: rotate(var(--marketplace-card-rotation)) scale(1);
+  transform-origin: center;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .marketplace-plugin {
-  transform: rotate(-1deg);
+  --marketplace-card-rotation: -1deg;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .marketplace-plugin:hover,
+  .marketplace-outcomes:hover {
+    z-index: 2;
+    transform: rotate(var(--marketplace-card-rotation)) scale(1.02);
+  }
+}
+
+[data-motion="off"] .process-node,
+[data-motion="off"] .marketplace-plugin,
+[data-motion="off"] .marketplace-outcomes {
+  transition: none;
+}
+
+[data-motion="off"] .process-node:hover {
+  transform: translateY(var(--process-card-lift)) scale(1);
+}
+
+[data-motion="off"] .marketplace-plugin:hover,
+[data-motion="off"] .marketplace-outcomes:hover {
+  transform: rotate(var(--marketplace-card-rotation)) scale(1);
 }
 
 .marketplace-plugin::after {
@@ -2176,6 +2251,8 @@ pre {
 }
 
 .final-cta {
+  --final-tilt-x: 0deg;
+  --final-tilt-y: 0deg;
   position: relative;
   display: grid;
   min-height: 620px;
@@ -2188,6 +2265,10 @@ pre {
     radial-gradient(circle at 68% 42%, rgba(102, 54, 116, 0.3), transparent 30%),
     linear-gradient(145deg, #171020, #0f0d13 60%);
   box-shadow: var(--shadow);
+  transform: perspective(1600px) rotateX(var(--final-tilt-x)) rotateY(var(--final-tilt-y));
+  transform-origin: center;
+  transform-style: preserve-3d;
+  will-change: transform;
 }
 
 .final-cta__content {
@@ -2195,6 +2276,12 @@ pre {
   z-index: 2;
   width: min(880px, 100%);
   text-align: center;
+  transform: translateZ(22px);
+}
+
+[data-motion="off"] .final-cta {
+  --final-tilt-x: 0deg;
+  --final-tilt-y: 0deg;
 }
 
 .final-cta__content .eyebrow,
@@ -2322,6 +2409,14 @@ pre {
   50% { opacity: 1; transform: scale(1.12); }
 }
 
+@keyframes cta-attention-tick {
+  0%, 75%, 100% { transform: translateY(0) scale(1); }
+  78% { transform: translateY(-1px) scale(1.016); }
+  81% { transform: translateY(0) scale(0.998); }
+  84% { transform: translateY(-0.5px) scale(1.008); }
+  88% { transform: translateY(0) scale(1); }
+}
+
 @media (max-width: 1080px) {
   .site-nav {
     display: none;
@@ -2386,7 +2481,8 @@ pre {
   }
 
   .process-node.is-highlighted {
-    transform: none;
+    --process-card-lift: 0px;
+    transform: translateY(var(--process-card-lift)) scale(1);
   }
 
   .proof-heading {
@@ -2709,9 +2805,9 @@ pre {
     position: relative;
     top: auto;
     right: auto;
-    width: min(220px, 100%);
-    height: 150px;
-    margin: -12px 0 4px;
+    width: min(240px, 100%);
+    height: 170px;
+    margin: -12px 0 2px;
     grid-row: 1;
     grid-column: 2;
   }
@@ -2977,7 +3073,8 @@ pre {
   }
 
   .marketplace-plugin {
-    transform: none;
+    --marketplace-card-rotation: 0deg;
+    transform: rotate(var(--marketplace-card-rotation)) scale(1);
   }
 
   .marketplace-plugin__mark {
@@ -3071,6 +3168,12 @@ pre {
 
   .footer-meta {
     align-items: flex-start;
+  }
+}
+
+@media (max-width: 360px) {
+  .hero-lede__action {
+    white-space: normal;
   }
 }
 

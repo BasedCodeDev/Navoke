@@ -75,7 +75,8 @@ if (productStack) {
   let frontIndex = Math.max(0, slides.findIndex((slide) => slide.classList.contains("is-front")));
   let cycleTimer = null;
   let transitionTimer = null;
-  let interactionPaused = false;
+  let pointerPaused = false;
+  let focusPaused = false;
   let isAdvancing = false;
   let tiltFrame = null;
   let targetTiltX = 0;
@@ -111,6 +112,18 @@ if (productStack) {
     setStackTilt(0, 0);
   }
 
+  function interactionIsPaused() {
+    return pointerPaused || focusPaused;
+  }
+
+  function updateStackLabel() {
+    const currentTitle = slides[frontIndex]?.querySelector(".product-shot__bar span")?.textContent?.trim() ?? "Product screenshot";
+    productStack.setAttribute(
+      "aria-label",
+      `Navoke screenshot ${frontIndex + 1} of ${slides.length}: ${currentTitle}. Activate to show the next screenshot.`
+    );
+  }
+
   function arrangeStack() {
     slides.forEach((slide, index) => {
       const distance = (index - frontIndex + slides.length) % slides.length;
@@ -118,6 +131,7 @@ if (productStack) {
       slide.classList.add(distance === 0 ? "is-front" : distance === 1 ? "is-middle" : distance === 2 ? "is-back" : "is-queued");
       slide.setAttribute("aria-hidden", String(distance !== 0));
     });
+    updateStackLabel();
   }
 
   function advanceStack() {
@@ -140,12 +154,20 @@ if (productStack) {
       slide.setAttribute("aria-hidden", String(distance !== 0));
     });
 
-    transitionTimer = window.setTimeout(() => {
+    updateStackLabel();
+
+    const settleOutgoingSlide = () => {
       outgoingSlide?.classList.remove("is-exiting");
       outgoingSlide?.classList.add("is-queued");
       transitionTimer = null;
       isAdvancing = false;
-    }, 640);
+    };
+
+    if (document.documentElement.dataset.motion === "on") {
+      transitionTimer = window.setTimeout(settleOutgoingSlide, 640);
+    } else {
+      settleOutgoingSlide();
+    }
   }
 
   function stopCycle() {
@@ -163,12 +185,12 @@ if (productStack) {
 
   function startCycle() {
     stopCycle();
-    if (document.documentElement.dataset.motion !== "on" || document.hidden || interactionPaused || slides.length < 2) return;
+    if (document.documentElement.dataset.motion !== "on" || document.hidden || interactionIsPaused() || slides.length < 2) return;
     cycleTimer = window.setInterval(advanceStack, 4000);
   }
 
   productStack.addEventListener("pointerenter", () => {
-    interactionPaused = true;
+    pointerPaused = true;
     stopCycle();
   });
 
@@ -181,9 +203,26 @@ if (productStack) {
   });
 
   productStack.addEventListener("pointerleave", () => {
-    interactionPaused = false;
+    pointerPaused = false;
     resetStackTilt();
     startCycle();
+  });
+
+  productStack.addEventListener("focus", () => {
+    focusPaused = true;
+    stopCycle();
+  });
+
+  productStack.addEventListener("blur", () => {
+    focusPaused = false;
+    startCycle();
+  });
+
+  productStack.addEventListener("click", advanceStack);
+  productStack.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    advanceStack();
   });
 
   document.addEventListener("visibilitychange", startCycle);
@@ -276,13 +315,13 @@ async function mountSwordPreview(preview) {
     const center = bounds.getCenter(new THREE.Vector3());
     const size = bounds.getSize(new THREE.Vector3());
     sword.position.copy(center).multiplyScalar(-1);
-    sword.scale.setScalar(2.3 / Math.max(size.x, size.y, size.z));
+    sword.scale.setScalar(3.4 / Math.max(size.x, size.y, size.z));
 
     const swordSpin = new THREE.Group();
     swordSpin.add(sword);
 
     const swordPivot = new THREE.Group();
-    swordPivot.rotation.set(0.26, -0.64, 0);
+    swordPivot.rotation.set(0.26, -0.74, 0);
     swordPivot.add(swordSpin);
     scene.add(swordPivot);
 
@@ -311,7 +350,7 @@ async function mountSwordPreview(preview) {
       if (motionEnabled) {
         pointerCurrent.lerp(pointerTarget, 0.055);
         swordPivot.rotation.x = 0.26 - pointerCurrent.y * 0.12;
-        swordPivot.rotation.y = -0.64 + pointerCurrent.x * 0.14;
+        swordPivot.rotation.y = -0.74 + pointerCurrent.x * 0.08;
         swordSpin.rotation.x = time * 0.00016;
       }
 
@@ -376,6 +415,53 @@ if (swordPreview) {
   } else {
     mountSwordPreview(swordPreview);
   }
+}
+
+const finalCta = document.querySelector("[data-final-tilt]");
+
+if (finalCta) {
+  let tiltFrame = null;
+  let targetTiltX = 0;
+  let targetTiltY = 0;
+  let currentTiltX = 0;
+  let currentTiltY = 0;
+
+  function renderFinalCtaTilt() {
+    const easing = 0.085;
+    currentTiltX += (targetTiltX - currentTiltX) * easing;
+    currentTiltY += (targetTiltY - currentTiltY) * easing;
+    finalCta.style.setProperty("--final-tilt-x", `${currentTiltX.toFixed(3)}deg`);
+    finalCta.style.setProperty("--final-tilt-y", `${currentTiltY.toFixed(3)}deg`);
+
+    if (Math.abs(targetTiltX - currentTiltX) > 0.005 || Math.abs(targetTiltY - currentTiltY) > 0.005) {
+      tiltFrame = window.requestAnimationFrame(renderFinalCtaTilt);
+    } else {
+      currentTiltX = targetTiltX;
+      currentTiltY = targetTiltY;
+      finalCta.style.setProperty("--final-tilt-x", `${currentTiltX}deg`);
+      finalCta.style.setProperty("--final-tilt-y", `${currentTiltY}deg`);
+      tiltFrame = null;
+    }
+  }
+
+  function setFinalCtaTilt(x, y) {
+    targetTiltX = x;
+    targetTiltY = y;
+    if (tiltFrame === null) tiltFrame = window.requestAnimationFrame(renderFinalCtaTilt);
+  }
+
+  finalCta.addEventListener("pointermove", (event) => {
+    if (document.documentElement.dataset.motion !== "on" || (event.pointerType !== "mouse" && event.pointerType !== "pen")) return;
+    const bounds = finalCta.getBoundingClientRect();
+    const pointerX = Math.max(-1, Math.min(1, ((event.clientX - bounds.left) / bounds.width - 0.5) * 2));
+    const pointerY = Math.max(-1, Math.min(1, ((event.clientY - bounds.top) / bounds.height - 0.5) * 2));
+    setFinalCtaTilt(pointerY * -1.15, pointerX * 1.65);
+  });
+
+  finalCta.addEventListener("pointerleave", () => setFinalCtaTilt(0, 0));
+  window.addEventListener("navoke:motionchange", (event) => {
+    if (!event.detail?.enabled) setFinalCtaTilt(0, 0);
+  });
 }
 
 const sectionNavigator = document.querySelector("[data-section-navigator]");
