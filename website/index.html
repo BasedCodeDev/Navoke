@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Navoke turns authenticated browser procedures into typed, resumable tools that return durable artifacts."
+    />
+    <meta name="theme-color" content="#0d0c11" />
+    <link rel="icon" type="image/png" sizes="any" href="./logo.png" />
+    <link rel="apple-touch-icon" href="./logo.png" />
+    <link rel="canonical" href="https://navoke.basedcode.dev/" />
+    <meta property="og:title" content="Navoke — Let agents invoke the web." />
+    <meta
+      property="og:description"
+      content="Turn authenticated browser procedures into typed, resumable tools that return durable artifacts."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://navoke.basedcode.dev/" />
+    <meta property="og:site_name" content="Navoke" />
+    <meta property="og:image" content="https://navoke.basedcode.dev/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Navoke — Let agents invoke the web." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Navoke — Let agents invoke the web." />
+    <meta
+      name="twitter:description"
+      content="Turn authenticated browser procedures into typed, resumable tools that return durable artifacts."
+    />
+    <meta name="twitter:image" content="https://navoke.basedcode.dev/og.png" />
+    <meta name="twitter:image:alt" content="Navoke — Let agents invoke the web." />
+    <title>Navoke — Let agents invoke the web.</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <div class="ambient-field" aria-hidden="true"></div>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Navoke home">
+        <img class="brand-mark" src="./logo.png" alt="" width="1254" height="1254" />
+        <span class="wordmark">Navoke<span aria-hidden="true">/</span></span>
+      </a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href="#why-navoke">Why Navoke</a>
+        <a href="#workflows">Workflows</a>
+      </nav>
+      <div class="header-actions">
+        <button class="motion-toggle" type="button" aria-pressed="false">
+          <span class="motion-dot" aria-hidden="true"></span>
+          <span data-motion-label>Motion on</span>
+        </button>
+        <a class="text-link header-github" href="https://github.com/BasedCodeDev/Navoke" target="_blank" rel="noreferrer">GitHub ↗</a>
+        <a class="button button-small" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">Download</a>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="hero" id="top">
+        <div class="hero-copy">
+          <p class="eyebrow"><span>01</span> Agent-native browser workflow runtime</p>
+          <h1>Let agents invoke <em>the web.</em></h1>
+          <p class="hero-lede">
+            Navoke turns authenticated browser procedures into typed, resumable tools that return durable artifacts.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
+              Download the installer <span aria-hidden="true">↗</span>
+            </a>
+            <a class="text-link" href="https://github.com/BasedCodeDev/Navoke" target="_blank" rel="noreferrer">View on GitHub ↗</a>
+          </div>
+          <p class="release-note">Installer releases are published on GitHub.</p>
+        </div>
+
+        <figure class="product-stage" aria-label="Navoke desktop application">
+          <div class="product-shot product-shot--lab" aria-hidden="true">
+            <div class="product-shot__bar"><span>workflow lab</span><span>local session</span></div>
+            <img src="./img/screenshot-workflowlab.png" alt="" width="1106" height="819" />
+          </div>
+          <div class="product-shot product-shot--runs">
+            <div class="product-shot__bar"><span>runs / completed</span><span class="status"><i aria-hidden="true"></i> local runtime</span></div>
+            <img
+              src="./img/screenshot-runs-2.png"
+              alt="Navoke Runs screen showing completed image and model workflows with registered artifacts"
+              width="1106"
+              height="819"
+              fetchpriority="high"
+            />
+          </div>
+          <div class="product-shot product-shot--detail">
+            <div class="product-shot__bar"><span>run / detail</span><span>artifacts registered</span></div>
+            <img
+              src="./img/screenshot-rundetails.png"
+              alt="Navoke run detail showing structured input and registered JSON and model artifacts"
+              width="1106"
+              height="819"
+            />
+          </div>
+          <figcaption><span>Real product / real runs</span><span>Chrome · Playwright · local artifacts</span></figcaption>
+        </figure>
+      </section>
+
+      <section class="content-section process-section" id="how-it-works">
+        <div class="section-heading reveal">
+          <p class="eyebrow"><span>02</span> The core loop</p>
+          <h2>Browser work should be callable.</h2>
+          <p>
+            Define the procedure once. Navoke gives people, scripts, and agents the same explicit contract for running it again.
+          </p>
+        </div>
+
+        <div class="invoke-panel process-invoke reveal" aria-label="Navoke workflow illustration">
+          <div class="invoke-panel__header">
+            <span>run / 0142</span>
+            <span class="status"><i aria-hidden="true"></i> completed</span>
+          </div>
+          <div class="invoke-path">
+            <article class="invoke-node">
+              <span class="node-index">01</span>
+              <small>caller</small>
+              <strong>Agent</strong>
+            </article>
+            <span class="path-arrow" aria-hidden="true">→</span>
+            <article class="invoke-node is-active">
+              <span class="node-index">02</span>
+              <small>contract</small>
+              <strong>Typed workflow</strong>
+            </article>
+            <span class="path-arrow" aria-hidden="true">→</span>
+            <article class="invoke-node">
+              <span class="node-index">03</span>
+              <small>session</small>
+              <strong>Authenticated browser</strong>
+            </article>
+            <span class="path-arrow" aria-hidden="true">→</span>
+            <article class="invoke-node artifact-node">
+              <span class="node-index">04</span>
+              <small>output</small>
+              <strong>Durable artifacts</strong>
+            </article>
+          </div>
+          <div class="invoke-panel__footer">
+            <span>progress 100%</span>
+            <span>image · model · json · trace</span>
+          </div>
+        </div>
+
+        <ol class="process-grid reveal">
+          <li>
+            <span class="step-number">01 / define</span>
+            <h3>Describe the work</h3>
+            <p>Typed input and output schemas turn a procedure into a tool that can explain what it needs.</p>
+          </li>
+          <li>
+            <span class="step-number">02 / invoke</span>
+            <h3>Start it anywhere</h3>
+            <p>Run the same workflow from the desktop app, a JSON CLI call, or an agent operating through the CLI.</p>
+          </li>
+          <li>
+            <span class="step-number">03 / observe</span>
+            <h3>See real progress</h3>
+            <p>Follow steps, events, screenshots, and traces instead of waiting on a browser with no usable state.</p>
+          </li>
+          <li>
+            <span class="step-number">04 / return</span>
+            <h3>Keep the result</h3>
+            <p>Files, models, logs, and structured outputs are registered as durable, inspectable artifacts.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="content-section proof-section" id="why-navoke">
+        <div class="section-heading section-heading-wide reveal">
+          <p class="eyebrow"><span>03</span> Proof built into every run</p>
+          <h2>Automation you can reason about.</h2>
+          <p>
+            Browser interfaces change. Navoke does not pretend otherwise. It makes failures visible, repairable, and bounded.
+          </p>
+        </div>
+
+        <div class="proof-grid reveal">
+          <article>
+            <span class="proof-label">session / 01</span>
+            <h3>Use the account you already have</h3>
+            <p>Run in a persistent Playwright profile or through the companion controller in your normal Chrome session.</p>
+          </article>
+          <article>
+            <span class="proof-label">contract / 02</span>
+            <h3>Give agents a typed surface</h3>
+            <p>Zod schemas, stable manifests, and JSON output make capabilities discoverable without teaching every click.</p>
+          </article>
+          <article>
+            <span class="proof-label">control / 03</span>
+            <h3>Pause where people matter</h3>
+            <p>Login, verification, and account checks become explicit manual states that can safely resume.</p>
+          </article>
+          <article>
+            <span class="proof-label">evidence / 04</span>
+            <h3>Inspect what actually happened</h3>
+            <p>Steps, events, traces, screenshots, and structured errors give workflow authors evidence instead of guesswork.</p>
+          </article>
+          <article>
+            <span class="proof-label">output / 05</span>
+            <h3>Return more than a click</h3>
+            <p>Every useful output is stored locally and registered with its run for preview, reuse, and traceability.</p>
+          </article>
+          <article>
+            <span class="proof-label">reuse / 06</span>
+            <h3>Keep proven procedures close</h3>
+            <p>Save successful run configurations to the workflow library and invoke them again from the app or CLI.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="content-section workflows-section" id="workflows">
+        <div class="section-heading reveal">
+          <p class="eyebrow"><span>04</span> Working examples</p>
+          <h2>From prompt to production artifact.</h2>
+          <p>Current plugins prove the runtime against real creative workflows with uploads, generation, waits, and downloads.</p>
+        </div>
+
+        <div class="workflow-list reveal">
+          <article class="workflow-card">
+            <div class="workflow-card__meta">
+              <span>navoke.chatgpt</span>
+              <span>image · json</span>
+            </div>
+            <div class="workflow-card__body">
+              <div>
+                <span class="workflow-number">01</span>
+                <h3>ChatGPT image workflows</h3>
+              </div>
+              <p>Submit prompts or source images through an authenticated Chrome tab, then capture the generated image as a registered artifact.</p>
+            </div>
+          </article>
+
+          <article class="workflow-card">
+            <div class="workflow-card__meta">
+              <span>navoke.hunyuan</span>
+              <span>model · trace · json</span>
+            </div>
+            <div class="workflow-card__body">
+              <div>
+                <span class="workflow-number">02</span>
+                <h3>Hunyuan image to 3D</h3>
+              </div>
+              <p>Upload multiple reference views, generate geometry and texture, apply post-processing, and download the final OBJ artifact.</p>
+            </div>
+          </article>
+
+          <article class="workflow-card">
+            <div class="workflow-card__meta">
+              <span>navoke.model-renderer</span>
+              <span>image · model · json</span>
+            </div>
+            <div class="workflow-card__body">
+              <div>
+                <span class="workflow-number">03</span>
+                <h3>Model rendering and bounds</h3>
+              </div>
+              <p>Render OBJ, FBX, or model ZIP inputs to PNG and extract geometry bounds through the same typed workflow contract.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="content-section author-section" id="authors">
+        <div class="author-copy reveal">
+          <p class="eyebrow"><span>05</span> For workflow authors</p>
+          <h2>Code the procedure. Keep the runtime.</h2>
+          <p>
+            Plugins own target URLs, selectors, waits, and sequencing. Navoke owns validation, execution, browser access, run state, and artifacts.
+          </p>
+          <a class="text-link" href="https://github.com/BasedCodeDev/Navoke#adding-workflows" target="_blank" rel="noreferrer">
+            Read the authoring guide ↗
+          </a>
+        </div>
+
+        <div class="code-stack reveal" aria-label="Navoke workflow and CLI examples">
+          <div class="code-window">
+            <div class="code-window__header">
+              <span>workflow.ts</span>
+              <span>typescript</span>
+            </div>
+            <pre><code><span class="code-key">manifest</span>: {
+  <span class="code-key">id</span>: <span class="code-string">"provider.example"</span>,
+  <span class="code-key">title</span>: <span class="code-string">"Provider example"</span>,
+  <span class="code-key">outputKinds</span>: [<span class="code-string">"image"</span>, <span class="code-string">"json"</span>]
+},
+<span class="code-key">inputSchema</span>,
+<span class="code-key">outputSchema</span>,
+<span class="code-key">async run</span>(input, ctx) { … }</code></pre>
+          </div>
+          <div class="terminal-line">
+            <span aria-hidden="true">$</span>
+            <code>navoke --project C:\work run provider.example --input input.json --wait</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-section local-section reveal">
+        <p class="eyebrow"><span>06</span> Local by design</p>
+        <blockquote>The browser can stay human. The workflow becomes a tool.</blockquote>
+        <div class="local-detail">
+          <p>Runs, inputs, outputs, traces, and browser profiles stay on your machine. Navoke adds a structured execution layer without moving the work to a hosted automation service.</p>
+          <ul aria-label="Local-first capabilities">
+            <li>Local API and SQLite metadata</li>
+            <li>Project-root run folders</li>
+            <li>Persistent browser profiles</li>
+            <li>User-installed workflow plugins</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="final-cta">
+        <div class="final-cta__signal" aria-hidden="true">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <div class="final-cta__content reveal">
+          <img class="cta-mark" src="./logo.png" alt="" width="1254" height="1254" aria-hidden="true" />
+          <p class="eyebrow"><span>07</span> Invoke something real</p>
+          <h2>Give your agents a better way into the browser.</h2>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/BasedCodeDev/Navoke/releases" target="_blank" rel="noreferrer">
+              Download the installer <span aria-hidden="true">↗</span>
+            </a>
+            <a class="text-link" href="https://github.com/BasedCodeDev/Navoke" target="_blank" rel="noreferrer">View the source ↗</a>
+          </div>
+          <p class="release-note">Installers will appear on the GitHub Releases page.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div>
+        <a class="brand brand-footer" href="#top" aria-label="Navoke home">
+          <img class="brand-mark" src="./logo.png" alt="" width="1254" height="1254" />
+          <span class="wordmark">Navoke<span aria-hidden="true">/</span></span>
+        </a>
+        <p>Agent → browser → artifact</p>
+      </div>
+      <div class="footer-meta">
+        <a href="https://github.com/BasedCodeDev" target="_blank" rel="noreferrer">A BasedCode project ↗</a>
+        <span>Local-first software · v0.1.0</span>
+      </div>
+    </footer>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

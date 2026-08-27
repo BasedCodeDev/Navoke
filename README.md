@@ -24,6 +24,25 @@ npm run dev
 
 Project metadata is persisted locally in SQLite under `.navoke`, while each run keeps its own project-root folder and registered artifacts.
 
+## Website
+
+The public Navoke landing page lives in `website` and builds independently from the Electron renderer.
+
+```text
+npm run dev:site
+npm run build:site
+npm run preview:site
+```
+
+GitHub Actions deploys the production build to GitHub Pages from `main`. To publish at `navoke.basedcode.dev`:
+
+1. In the repository's **Settings → Pages**, select **GitHub Actions** as the source.
+2. Set the custom domain to `navoke.basedcode.dev`.
+3. Add a DNS `CNAME` record from `navoke` to `basedcodedev.github.io`.
+4. Enable HTTPS after GitHub validates the DNS record.
+
+The Actions-based Pages deployment does not require a repository `CNAME` file.
+
 ## CLI
 
 The app ships a JSON-only command line interface named `navoke`. It controls the currently running desktop app through the local API, so open the Electron app and a project before using CLI commands.

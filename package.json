@@ -15,7 +15,9 @@
   },
   "scripts": {
     "dev": "npm run build:main && concurrently -k -n renderer,electron -c cyan,green \"vite --host 127.0.0.1 --port 5173\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist/main/main.js\"",
+    "dev:site": "vite --config website/vite.config.ts --host 127.0.0.1 --port 4173 --strictPort",
     "build": "npm run build:main && npm run build:cli && npm run build:plugins && vite build",
+    "build:site": "vite build --config website/vite.config.ts",
     "build:main": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
     "build:cli": "tsc -p tsconfig.cli.json",
     "build:plugins": "node scripts/build-plugins.cjs",
@@ -25,7 +27,8 @@
     "test": "npm run build:plugins && vitest run",
     "test:watch": "vitest",
     "pretest:e2e": "npm run build",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "preview:site": "vite preview --config website/vite.config.ts --host 127.0.0.1 --port 4174 --strictPort"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",
