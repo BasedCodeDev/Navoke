@@ -475,6 +475,8 @@ h1 em {
   min-height: 620px;
   margin: 0;
   isolation: isolate;
+  perspective: 1500px;
+  perspective-origin: 48% 44%;
 }
 
 .product-stage::before {
@@ -488,8 +490,14 @@ h1 em {
 }
 
 .product-stack {
+  --stack-tilt-x: 0deg;
+  --stack-tilt-y: 0deg;
   position: absolute;
   inset: 0;
+  transform: rotateX(var(--stack-tilt-x)) rotateY(var(--stack-tilt-y));
+  transform-origin: 48% 46%;
+  transform-style: preserve-3d;
+  will-change: transform;
 }
 
 .product-shot {
@@ -503,6 +511,7 @@ h1 em {
   background: #17161b;
   backface-visibility: hidden;
   box-shadow: none;
+  transform-style: preserve-3d;
   transform-origin: 50% 50%;
   transition:
     opacity 380ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -538,7 +547,7 @@ h1 em {
   z-index: 6;
   opacity: 1;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
-  transform: translate3d(0, 0, 0) scale(1);
+  transform: translate3d(0, 0, 42px) scale(1);
   will-change: transform, opacity;
 }
 
@@ -546,14 +555,14 @@ h1 em {
   z-index: 5;
   opacity: 0.46;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
-  transform: translate3d(12%, -10%, 0) scale(0.92) rotate(1.2deg);
+  transform: translate3d(12%, -10%, 8px) scale(0.92) rotate(1.2deg);
   will-change: transform, opacity;
 }
 
 .product-shot.is-back {
   z-index: 4;
   opacity: 0.22;
-  transform: translate3d(21%, -18%, 0) scale(0.84) rotate(2.1deg);
+  transform: translate3d(21%, -18%, -26px) scale(0.84) rotate(2.1deg);
   will-change: transform, opacity;
 }
 
@@ -563,7 +572,7 @@ h1 em {
   opacity: 0;
   pointer-events: none;
   transition: none;
-  transform: translate3d(26%, -22%, 0) scale(0.78) rotate(2.8deg);
+  transform: translate3d(26%, -22%, -42px) scale(0.78) rotate(2.8deg);
   will-change: auto;
 }
 
@@ -572,7 +581,13 @@ h1 em {
   opacity: 0;
   pointer-events: none;
   transition-duration: 340ms, 440ms;
-  transform: translate3d(-7%, 6%, 0) scale(0.985) rotate(-0.8deg);
+  transform: translate3d(-7%, 6%, 58px) scale(0.985) rotate(-0.8deg);
+}
+
+[data-motion="off"] .product-stack {
+  --stack-tilt-x: 0deg;
+  --stack-tilt-y: 0deg;
+  transition: none;
 }
 
 [data-motion="off"] .product-shot {
@@ -784,6 +799,7 @@ h1 em {
 }
 
 .process-node.is-result {
+  overflow: hidden;
   border-color: rgba(181, 104, 194, 0.3);
   background:
     radial-gradient(circle at 82% 18%, rgba(181, 104, 194, 0.2), transparent 24%),
@@ -801,6 +817,63 @@ h1 em {
   box-shadow: 0 0 18px rgba(181, 104, 194, 0.9);
   content: "";
   animation: artifact-pulse 2.4s ease-in-out infinite;
+}
+
+.process-artifact-preview {
+  position: absolute;
+  z-index: 0;
+  top: 42px;
+  right: 8px;
+  width: 168px;
+  height: 164px;
+  pointer-events: none;
+}
+
+.process-artifact-preview::before {
+  position: absolute;
+  inset: 16% 6%;
+  border-radius: 50%;
+  background: rgba(102, 54, 116, 0.22);
+  content: "";
+  filter: blur(22px);
+}
+
+.process-artifact-preview img,
+.process-artifact-preview canvas {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  inset: 0;
+}
+
+.process-artifact-preview img {
+  object-fit: contain;
+  opacity: 0.48;
+  transform: scale(0.84);
+  transition: opacity 300ms ease;
+}
+
+.process-artifact-preview canvas {
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+
+.process-artifact-preview.is-ready img {
+  opacity: 0;
+}
+
+.process-artifact-preview.is-ready canvas {
+  opacity: 1;
+}
+
+.process-node.is-result .process-node__top,
+.process-node.is-result .process-node__copy {
+  position: relative;
+  z-index: 1;
+}
+
+.process-node.is-result .process-node__copy {
+  max-width: 150px;
 }
 
 .process-node__top {
@@ -2596,6 +2669,8 @@ pre {
   }
 
   .process-node__top {
+    grid-row: 1;
+    grid-column: 1;
     align-items: center;
     flex-direction: column;
     gap: 10px;
@@ -2612,7 +2687,33 @@ pre {
   }
 
   .process-node__copy {
+    grid-row: 1;
+    grid-column: 2;
     margin-top: 0;
+  }
+
+  .process-node.is-result {
+    grid-template-rows: auto auto;
+  }
+
+  .process-node.is-result .process-node__top {
+    grid-row: 1 / 3;
+  }
+
+  .process-node.is-result .process-node__copy {
+    max-width: none;
+    grid-row: 2;
+  }
+
+  .process-artifact-preview {
+    position: relative;
+    top: auto;
+    right: auto;
+    width: min(220px, 100%);
+    height: 150px;
+    margin: -12px 0 4px;
+    grid-row: 1;
+    grid-column: 2;
   }
 
   .process-node h3 {

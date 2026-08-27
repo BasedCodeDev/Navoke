@@ -77,6 +77,39 @@ if (productStack) {
   let transitionTimer = null;
   let interactionPaused = false;
   let isAdvancing = false;
+  let tiltFrame = null;
+  let targetTiltX = 0;
+  let targetTiltY = 0;
+  let currentTiltX = 0;
+  let currentTiltY = 0;
+
+  function renderStackTilt() {
+    const easing = 0.085;
+    currentTiltX += (targetTiltX - currentTiltX) * easing;
+    currentTiltY += (targetTiltY - currentTiltY) * easing;
+    productStack.style.setProperty("--stack-tilt-x", `${currentTiltX.toFixed(3)}deg`);
+    productStack.style.setProperty("--stack-tilt-y", `${currentTiltY.toFixed(3)}deg`);
+
+    if (Math.abs(targetTiltX - currentTiltX) > 0.005 || Math.abs(targetTiltY - currentTiltY) > 0.005) {
+      tiltFrame = window.requestAnimationFrame(renderStackTilt);
+    } else {
+      currentTiltX = targetTiltX;
+      currentTiltY = targetTiltY;
+      productStack.style.setProperty("--stack-tilt-x", `${currentTiltX}deg`);
+      productStack.style.setProperty("--stack-tilt-y", `${currentTiltY}deg`);
+      tiltFrame = null;
+    }
+  }
+
+  function setStackTilt(x, y) {
+    targetTiltX = x;
+    targetTiltY = y;
+    if (tiltFrame === null) tiltFrame = window.requestAnimationFrame(renderStackTilt);
+  }
+
+  function resetStackTilt() {
+    setStackTilt(0, 0);
+  }
 
   function arrangeStack() {
     slides.forEach((slide, index) => {
@@ -139,13 +172,25 @@ if (productStack) {
     stopCycle();
   });
 
+  productStack.addEventListener("pointermove", (event) => {
+    if (document.documentElement.dataset.motion !== "on" || (event.pointerType !== "mouse" && event.pointerType !== "pen")) return;
+    const bounds = productStack.getBoundingClientRect();
+    const pointerX = Math.max(-1, Math.min(1, ((event.clientX - bounds.left) / bounds.width - 0.5) * 2));
+    const pointerY = Math.max(-1, Math.min(1, ((event.clientY - bounds.top) / bounds.height - 0.5) * 2));
+    setStackTilt(pointerY * -1.55, pointerX * 2.35);
+  });
+
   productStack.addEventListener("pointerleave", () => {
     interactionPaused = false;
+    resetStackTilt();
     startCycle();
   });
 
   document.addEventListener("visibilitychange", startCycle);
-  window.addEventListener("navoke:motionchange", startCycle);
+  window.addEventListener("navoke:motionchange", (event) => {
+    if (!event.detail?.enabled) resetStackTilt();
+    startCycle();
+  });
 
   arrangeStack();
   const imageDecodeTasks = slides
@@ -154,6 +199,183 @@ if (productStack) {
     .map((image) => image.decode?.() ?? Promise.resolve());
 
   Promise.allSettled(imageDecodeTasks).then(startCycle);
+}
+
+const swordPreview = document.querySelector("[data-sword-preview]");
+
+async function mountSwordPreview(preview) {
+  const canvas = preview.querySelector("canvas");
+  if (!canvas) return;
+
+  try {
+    const [THREE, { OBJLoader }] = await Promise.all([
+      import("three"),
+      import("three/examples/jsm/loaders/OBJLoader.js")
+    ]);
+
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      alpha: true,
+      antialias: true,
+      powerPreference: "low-power"
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
+    camera.position.set(0, 4.6, 0.15);
+    camera.up.set(0, 0, 1);
+    camera.lookAt(0, 0, 0);
+
+    scene.add(new THREE.HemisphereLight(0xd9e5ff, 0x24152f, 1.8));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 3.2);
+    keyLight.position.set(-2.5, 4, 4);
+    scene.add(keyLight);
+    const rimLight = new THREE.DirectionalLight(0xb568c2, 1.8);
+    rimLight.position.set(3, 2.5, -3);
+    scene.add(rimLight);
+
+    const assetUrl = (fileName) => new URL(`./models/longsword/${fileName}`, document.baseURI).href;
+    const textureLoader = new THREE.TextureLoader();
+    const objLoader = new OBJLoader();
+    const [albedo, normal, metallic, roughness, sword] = await Promise.all([
+      textureLoader.loadAsync(assetUrl("albedo.jpg")),
+      textureLoader.loadAsync(assetUrl("normal.jpg")),
+      textureLoader.loadAsync(assetUrl("metallic.jpg")),
+      textureLoader.loadAsync(assetUrl("roughness.jpg")),
+      objLoader.loadAsync(assetUrl("longsword.obj"))
+    ]);
+
+    albedo.colorSpace = THREE.SRGBColorSpace;
+    const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+    [albedo, normal, metallic, roughness].forEach((texture) => {
+      texture.anisotropy = Math.min(maxAnisotropy, 8);
+    });
+
+    const swordMaterial = new THREE.MeshStandardMaterial({
+      map: albedo,
+      normalMap: normal,
+      normalScale: new THREE.Vector2(0.7, 0.7),
+      metalnessMap: metallic,
+      roughnessMap: roughness,
+      metalness: 0.9,
+      roughness: 0.82,
+      side: THREE.DoubleSide
+    });
+
+    sword.traverse((child) => {
+      if (!child.isMesh) return;
+      child.material = swordMaterial;
+      if (!child.geometry.attributes.normal) child.geometry.computeVertexNormals();
+    });
+
+    const bounds = new THREE.Box3().setFromObject(sword);
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    sword.position.copy(center).multiplyScalar(-1);
+    sword.scale.setScalar(2.3 / Math.max(size.x, size.y, size.z));
+
+    const swordSpin = new THREE.Group();
+    swordSpin.add(sword);
+
+    const swordPivot = new THREE.Group();
+    swordPivot.rotation.set(0.26, -0.64, 0);
+    swordPivot.add(swordSpin);
+    scene.add(swordPivot);
+
+    let previewVisible = true;
+    let animationFrame = null;
+    let motionEnabled = document.documentElement.dataset.motion === "on";
+    const pointerTarget = new THREE.Vector2();
+    const pointerCurrent = new THREE.Vector2();
+    const pointerSurface = preview.closest(".process-node") ?? preview;
+
+    pointerSurface.addEventListener("pointermove", (event) => {
+      if (!motionEnabled || (event.pointerType !== "mouse" && event.pointerType !== "pen")) return;
+      const rect = pointerSurface.getBoundingClientRect();
+      pointerTarget.set(
+        THREE.MathUtils.clamp(((event.clientX - rect.left) / rect.width) * 2 - 1, -1, 1),
+        THREE.MathUtils.clamp(((event.clientY - rect.top) / rect.height) * 2 - 1, -1, 1)
+      );
+    });
+
+    pointerSurface.addEventListener("pointerleave", () => pointerTarget.set(0, 0));
+
+    function renderFrame(time = performance.now()) {
+      animationFrame = null;
+      if (!previewVisible || document.hidden) return;
+
+      if (motionEnabled) {
+        pointerCurrent.lerp(pointerTarget, 0.055);
+        swordPivot.rotation.x = 0.26 - pointerCurrent.y * 0.12;
+        swordPivot.rotation.y = -0.64 + pointerCurrent.x * 0.14;
+        swordSpin.rotation.x = time * 0.00016;
+      }
+
+      renderer.render(scene, camera);
+      if (motionEnabled) animationFrame = window.requestAnimationFrame(renderFrame);
+    }
+
+    function scheduleRender() {
+      if (animationFrame === null) animationFrame = window.requestAnimationFrame(renderFrame);
+    }
+
+    function resizePreview() {
+      const width = Math.max(1, preview.clientWidth);
+      const height = Math.max(1, preview.clientHeight);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      scheduleRender();
+    }
+
+    const resizeObserver = new ResizeObserver(resizePreview);
+    resizeObserver.observe(preview);
+
+    if ("IntersectionObserver" in window) {
+      const visibilityObserver = new IntersectionObserver((entries) => {
+        previewVisible = entries.some((entry) => entry.isIntersecting);
+        if (previewVisible) scheduleRender();
+        else if (animationFrame !== null) {
+          window.cancelAnimationFrame(animationFrame);
+          animationFrame = null;
+        }
+      });
+      visibilityObserver.observe(preview);
+    }
+
+    window.addEventListener("navoke:motionchange", (event) => {
+      motionEnabled = Boolean(event.detail?.enabled);
+      if (!motionEnabled) pointerTarget.set(0, 0);
+      scheduleRender();
+    });
+    document.addEventListener("visibilitychange", scheduleRender);
+
+    resizePreview();
+    renderer.render(scene, camera);
+    preview.classList.add("is-ready");
+  } catch (error) {
+    console.warn("The longsword preview could not be initialized.", error);
+  }
+}
+
+if (swordPreview) {
+  if ("IntersectionObserver" in window) {
+    const swordLoadObserver = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        swordLoadObserver.disconnect();
+        mountSwordPreview(swordPreview);
+      },
+      { rootMargin: "180px" }
+    );
+    swordLoadObserver.observe(swordPreview);
+  } else {
+    mountSwordPreview(swordPreview);
+  }
 }
 
 const sectionNavigator = document.querySelector("[data-section-navigator]");
