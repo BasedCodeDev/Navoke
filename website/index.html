@@ -75,28 +75,62 @@
         </div>
 
         <figure class="product-stage" aria-label="Navoke desktop application">
-          <div class="product-shot product-shot--lab" aria-hidden="true">
-            <div class="product-shot__bar"><span>workflow lab</span><span>local session</span></div>
-            <img src="./img/screenshot-workflowlab.png" alt="" width="1106" height="819" />
-          </div>
-          <div class="product-shot product-shot--runs">
-            <div class="product-shot__bar"><span>runs / completed</span><span class="status"><i aria-hidden="true"></i> local runtime</span></div>
-            <img
-              src="./img/screenshot-runs-2.png"
-              alt="Navoke Runs screen showing completed image and model workflows with registered artifacts"
-              width="1106"
-              height="819"
-              fetchpriority="high"
-            />
-          </div>
-          <div class="product-shot product-shot--detail">
-            <div class="product-shot__bar"><span>run / detail</span><span>artifacts registered</span></div>
-            <img
-              src="./img/screenshot-rundetails.png"
-              alt="Navoke run detail showing structured input and registered JSON and model artifacts"
-              width="1106"
-              height="819"
-            />
+          <div class="product-stack" data-product-stack role="group" aria-roledescription="carousel" aria-label="Navoke product screenshots">
+            <div class="product-shot is-front" data-stack-slide aria-hidden="false">
+              <div class="product-shot__bar"><span>Projects</span><span class="status"><i aria-hidden="true"></i> local workspace</span></div>
+              <img
+                src="./img/screenshot-projects.png"
+                alt="Navoke project picker showing a local workspace"
+                width="1106"
+                height="819"
+                fetchpriority="high"
+              />
+            </div>
+            <div class="product-shot is-middle" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Runs / completed</span><span>local runtime</span></div>
+              <img
+                src="./img/screenshot-runs-2.png"
+                alt="Navoke Runs screen showing completed image and model workflows"
+                width="1106"
+                height="819"
+              />
+            </div>
+            <div class="product-shot is-back" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Run detail</span><span>artifacts registered</span></div>
+              <img
+                src="./img/screenshot-rundetails.png"
+                alt="Navoke run detail showing structured input and registered JSON and model artifacts"
+                width="1106"
+                height="819"
+              />
+            </div>
+            <div class="product-shot is-queued" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Workflow Lab</span><span>local session</span></div>
+              <img
+                src="./img/screenshot-workflowlab.png"
+                alt="Navoke Workflow Lab showing browser controls and the workflow library"
+                width="1106"
+                height="819"
+              />
+            </div>
+            <div class="product-shot is-queued" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Plugins</span><span>installed workflows</span></div>
+              <img
+                src="./img/screenshot-plugins.png"
+                alt="Navoke Plugins screen showing installed workflow packages"
+                width="1106"
+                height="819"
+              />
+            </div>
+            <div class="product-shot is-queued" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Run library</span><span>durable artifacts</span></div>
+              <img
+                src="./img/screenshot-runs.png"
+                alt="Navoke run library showing completed 3D workflow artifacts"
+                width="1106"
+                height="819"
+              />
+            </div>
           </div>
           <figcaption><span>Real product / real runs</span><span>Chrome · Playwright · local artifacts</span></figcaption>
         </figure>
