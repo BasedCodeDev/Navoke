@@ -90,6 +90,39 @@ button,
   transform: translateY(0);
 }
 
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.icon {
+  width: 1.1em;
+  height: 1.1em;
+  flex: 0 0 auto;
+  fill: currentColor;
+}
+
+.icon-download {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.icon-link,
+.inline-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.52em;
+}
+
+.inline-brand {
+  color: var(--muted);
+}
+
 .ambient-field {
   position: absolute;
   z-index: -1;
@@ -255,16 +288,20 @@ button,
   background: #ffffff;
 }
 
+.button .icon-download {
+  font-size: 1.08rem;
+}
+
 .hero {
   position: relative;
   display: grid;
   width: min(var(--page-width), calc(100% - 48px));
   min-height: calc(100vh - 82px);
   margin: 0 auto;
-  padding: clamp(72px, 9vw, 132px) 0 100px;
-  grid-template-columns: minmax(0, 0.88fr) minmax(520px, 1.12fr);
+  padding: clamp(58px, 6.5vw, 92px) 0 clamp(72px, 8vw, 104px);
+  grid-template-columns: minmax(0, 0.94fr) minmax(500px, 1.06fr);
   align-items: center;
-  gap: clamp(56px, 7vw, 112px);
+  gap: clamp(44px, 5vw, 80px);
 }
 
 .hero-copy {
@@ -296,12 +333,13 @@ p {
 }
 
 h1 {
-  max-width: 760px;
-  margin-bottom: 32px;
-  font-size: clamp(4.2rem, 8vw, 8.7rem);
+  max-width: 680px;
+  margin-bottom: 26px;
+  font-size: clamp(3.35rem, 5.4vw, 6.6rem);
   font-weight: 700;
-  letter-spacing: -0.09em;
-  line-height: 0.86;
+  letter-spacing: -0.075em;
+  line-height: 0.92;
+  text-wrap: balance;
 }
 
 h1 em {
@@ -312,10 +350,10 @@ h1 em {
 }
 
 .hero-lede {
-  max-width: 650px;
-  margin-bottom: 34px;
+  max-width: 590px;
+  margin-bottom: 30px;
   color: var(--muted);
-  font-size: clamp(1rem, 1.65vw, 1.25rem);
+  font-size: clamp(0.96rem, 1.25vw, 1.12rem);
   line-height: 1.68;
 }
 
@@ -328,7 +366,7 @@ h1 em {
 .product-stage {
   position: relative;
   min-width: 0;
-  min-height: 620px;
+  min-height: 560px;
   margin: 0;
   isolation: isolate;
 }
@@ -724,10 +762,10 @@ h1 em {
 .author-copy h2,
 .final-cta h2 {
   margin-bottom: 0;
-  font-size: clamp(2.6rem, 5.3vw, 5.7rem);
+  font-size: clamp(2.35rem, 4.35vw, 4.8rem);
   font-weight: 700;
-  letter-spacing: -0.075em;
-  line-height: 0.96;
+  letter-spacing: -0.065em;
+  line-height: 0.98;
 }
 
 .section-heading > p:last-child,
@@ -1272,12 +1310,12 @@ pre {
   }
 
   .hero {
-    padding: 68px 0 76px;
-    gap: 54px;
+    padding: 52px 0 68px;
+    gap: 44px;
   }
 
   .product-stage {
-    min-height: 390px;
+    min-height: 360px;
   }
 
   .product-shot__bar {
@@ -1320,8 +1358,9 @@ pre {
   }
 
   h1 {
-    margin-bottom: 26px;
-    font-size: clamp(3.35rem, 18vw, 5.2rem);
+    margin-bottom: 22px;
+    font-size: clamp(2.95rem, 13.5vw, 4.2rem);
+    line-height: 0.94;
   }
 
   .hero-actions {
@@ -1408,7 +1447,7 @@ pre {
   .author-copy h2,
   .final-cta h2 {
     margin-bottom: 26px;
-    font-size: clamp(2.45rem, 12vw, 3.7rem);
+    font-size: clamp(2.15rem, 9.5vw, 3.2rem);
   }
 
   .process-grid,
