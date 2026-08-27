@@ -24,17 +24,6 @@ npm run dev
 
 Project metadata is persisted locally in SQLite under `.navoke`, while each run keeps its own project-root folder and registered artifacts.
 
-## Website
-
-The static launch page for [navoke.basedcode.dev](https://navoke.basedcode.dev) lives in `website`. Preview or deploy it with:
-
-```powershell
-npm.cmd run site:preview
-npm.cmd run site:deploy
-```
-
-Deployment uses Cloudflare Pages and requires an authenticated Wrangler session. Configure `navoke.basedcode.dev` as the Pages custom domain after the first deployment.
-
 ## CLI
 
 The app ships a JSON-only command line interface named `navoke`. It controls the currently running desktop app through the local API, so open the Electron app and a project before using CLI commands.

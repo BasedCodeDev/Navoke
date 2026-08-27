@@ -25,9 +25,7 @@
     "test": "npm run build:plugins && vitest run",
     "test:watch": "vitest",
     "pretest:e2e": "npm run build",
-    "test:e2e": "playwright test",
-    "site:preview": "npx wrangler pages dev website",
-    "site:deploy": "npx wrangler pages deploy website --project-name navoke"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",
