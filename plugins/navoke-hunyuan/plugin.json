@@ -1,7 +1,7 @@
 {
   "id": "navoke.hunyuan",
   "name": "Navoke Hunyuan",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "pluginApiVersion": "1",
   "entrypoint": "dist/index.js",
   "workflows": ["navoke.hunyuan.image-to-model", "navoke.hunyuan.global.image-to-model"],

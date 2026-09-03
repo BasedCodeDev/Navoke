@@ -42,6 +42,9 @@ export interface HunyuanSelectorConfig {
   loginReadyText?: string;
   loginRequiredSelector?: string;
   loginRequiredText?: string;
+  landingReadySelector?: string;
+  enterEditorButton?: string;
+  editorReadySelector?: string;
   quotaExhaustedPopupText?: string;
   quotaExhaustedPopupCloseButton?: string;
   imageTo3dTab?: string;
@@ -182,18 +185,18 @@ const HUNYUAN_TEXTURE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
 const HUNYUAN_TEXT = {
   login: "\u767b\u5f55",
-  imageTo3d: "\u56fe\u751f3D",
-  multipleImages: "\u591a\u5f20\u56fe\u7247",
-  addMultipleViews: "\u6dfb\u52a0\u591a\u89c6\u56fe",
-  uploading: "\u4e0a\u4f20\u4e2d",
-  detectionFailed: "\u68c0\u6d4b\u5931\u8d25",
+  imageTo3d: "图生3D|3D graphics",
+  multipleImages: "多张图片|Multiple images",
+  addMultipleViews: "添加多视图",
+  uploading: "上传中",
+  detectionFailed: "检测失败",
   modelFaceCount: "\u6a21\u578b\u9762\u6570",
   modelType: "\u6a21\u578b\u7c7b\u578b",
   geometryTexturePhased: "\u51e0\u4f55\u3001\u7eb9\u7406\u5206\u9636\u6bb5",
   generate: "\u7acb\u5373\u751f\u6210",
   generating: "\u751f\u6210\u4e2d",
   estimatedRemaining: "\u9884\u8ba1\u8fd8\u9700",
-  v31: "3D\u751f\u6210-V3.1",
+  v31: "V3.1",
   triangle: "\u4e09\u89d2\u9762",
   quad: "\u56db\u8fb9\u9762",
   smartRetopology: "\u667a\u80fd\u62d3\u6251",
@@ -237,14 +240,17 @@ function hunyuanEnabledButtonSelector(label: string): string {
 }
 
 export const DEFAULT_HUNYUAN_SELECTOR_CONFIG: HunyuanSelectorConfig = {
-  loginReadySelector: `label.t-radio-button:has-text("${HUNYUAN_TEXT.imageTo3d}")`,
-  loginRequiredSelector: `button.login-btn:has-text("${HUNYUAN_TEXT.login}")`,
+  loginReadySelector: ":is(.v3-home, .v3-sidebar-left)",
+  loginRequiredSelector: 'button.login-btn, input[type="email"]',
+  landingReadySelector: ".v3-home",
+  enterEditorButton: ".v3-home .start-but",
+  editorReadySelector: ".v3-sidebar-left",
   quotaExhaustedPopupText: HUNYUAN_TEXT.quotaExhausted,
   quotaExhaustedPopupCloseButton: `:is(.invite-tooltip-full, .invite-tooltip-content):has-text("${HUNYUAN_TEXT.quotaExhausted}") .t-icon-close`,
-  imageTo3dTab: `label.t-radio-button:has-text("${HUNYUAN_TEXT.imageTo3d}")`,
-  multipleImagesTab: `text=${HUNYUAN_TEXT.multipleImages}`,
+  imageTo3dTab: `text=/${HUNYUAN_TEXT.imageTo3d}/i`,
+  multipleImagesTab: `text=/${HUNYUAN_TEXT.multipleImages}/i`,
   addMultipleViewsButton: ".hy-multiple-views-upload-v2",
-  multipleViewsConfirmButton: `.hy-multi-view-grid__header:has-text("${HUNYUAN_TEXT.addMultipleViews}") .hy-multi-view-grid__header-close`,
+  multipleViewsConfirmButton: ".hy-multi-view-grid__header .hy-multi-view-grid__header-close",
   viewUploadInputs: {
     front: '.hy-upload-card--front input[type="file"]',
     back: '.hy-upload-card--back input[type="file"]',
@@ -264,37 +270,23 @@ export const DEFAULT_HUNYUAN_SELECTOR_CONFIG: HunyuanSelectorConfig = {
     'button[aria-label*="remove" i], button[aria-label*="delete" i], [role="button"][aria-label*="remove" i], [role="button"][aria-label*="delete" i], .hy-upload-card__delete, .hy-upload-card__remove, .t-icon-delete, .t-icon-close',
   slotEmptySelector: "",
   modelDropdown: ".model-version-select:visible",
-  modelOptionV31: `li.t-select-option:has-text("${HUNYUAN_TEXT.v31}")`,
+  modelOptionV31: `:is(.model-version-dropdown__popup, .t-select__dropdown):visible :is(li.t-select-option, .t-select-option):has-text("${HUNYUAN_TEXT.v31}")`,
   faceCountButtons: {
-    "1.5m": `div.generation-type-select:visible:has(.generation-type-select-title:has-text("${HUNYUAN_TEXT.modelFaceCount}")) .qaUJkqcCF813NIqHGF3U:visible:has-text("1.5m")`,
-    "1m": `div.generation-type-select:visible:has(.generation-type-select-title:has-text("${HUNYUAN_TEXT.modelFaceCount}")) .qaUJkqcCF813NIqHGF3U:visible:has-text("1m")`,
-    "500k": `div.generation-type-select:visible:has(.generation-type-select-title:has-text("${HUNYUAN_TEXT.modelFaceCount}")) .qaUJkqcCF813NIqHGF3U:visible:has-text("500k")`,
-    "50k": `div.generation-type-select:visible:has(.generation-type-select-title:has-text("${HUNYUAN_TEXT.modelFaceCount}")) .qaUJkqcCF813NIqHGF3U:visible:has-text("50k")`
+    "1.5m": `.v3-sidebar-left .generation-type-select:visible .qaUJkqcCF813NIqHGF3U:visible:has-text("1.5m")`,
+    "1m": `.v3-sidebar-left .generation-type-select:visible .qaUJkqcCF813NIqHGF3U:visible:has-text("1m")`,
+    "500k": `.v3-sidebar-left .generation-type-select:visible .qaUJkqcCF813NIqHGF3U:visible:has-text("500k")`,
+    "50k": `.v3-sidebar-left .generation-type-select:visible .qaUJkqcCF813NIqHGF3U:visible:has-text("50k")`
   },
-  modelTypeGeometryTexturePhased: `div.generation-type-select:visible:has(.generation-type-select-title:has-text("${HUNYUAN_TEXT.modelType}")) .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_TEXT.geometryTexturePhased}")`,
-  generateButton: `.sideBarLeft-generateBtn:not(.t-is-disabled):not([disabled]):has-text("${HUNYUAN_TEXT.generate}")`,
-  geometryRunningText: HUNYUAN_TEXT.generating,
-  geometryReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.smartRetopology),
-  retopologyTypeButtons: {
-    triangle: `.model-dialog__content__operation:has(.model-dialog__content__operation__heading:has-text("${HUNYUAN_TEXT.smartRetopology}")) .topology-panel .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_TEXT.triangle}")`,
-    quad: `.model-dialog__content__operation:has(.model-dialog__content__operation__heading:has-text("${HUNYUAN_TEXT.smartRetopology}")) .topology-panel .qaUJkqcCF813NIqHGF3U:visible:has-text("${HUNYUAN_TEXT.quad}")`
-  },
-  smartRetopologyButton: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.smartRetopology),
-  retopologyRunningText: HUNYUAN_TEXT.generating,
-  retopologyReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.generateTexture),
-  generateTextureButton: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.generateTexture),
-  textureRunningText: HUNYUAN_TEXT.generating,
-  textureReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download),
-  autoRigButton: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.autoRig),
-  autoRigRunningText: HUNYUAN_TEXT.generating,
-  autoRigReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download),
-  exportFormatDropdown: "button.download__dropdown__btn",
+  generateButton: ".v3-sidebar-left .sideBarLeft-generateBtn:not(.t-is-disabled):not([disabled])",
+  geometryRunningSelector: ".v3-sidebar-left .sideBarLeft-generateBtn:is(.t-is-disabled, [disabled])",
+  geometryRunningText: "Generating",
+  geometryReadySelector: "button.native-edit__viewport-actionBar-download:visible",
+  exportFormatDropdown: "button.native-edit__viewport-actionBar-download:visible",
   exportFormatOptions: {
-    obj: hunyuanExportOptionSelector("OBJ"),
-    glb: hunyuanExportOptionSelector("GLB")
+    obj: '.v3-download-panel .v3-download-panel__item:visible:has-text("OBJ")',
+    glb: '.v3-download-panel .v3-download-panel__item:visible:has-text("GLB")'
   },
-  downloadReadySelector: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download),
-  downloadButton: hunyuanEnabledButtonSelector(HUNYUAN_TEXT.download)
+  downloadReadySelector: "button.native-edit__viewport-actionBar-download:visible"
 };
 
 export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG: HunyuanSelectorConfig = {
@@ -363,7 +355,7 @@ export const DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG: HunyuanSelectorConfig = {
   downloadButton: hunyuanEnabledButtonSelector(HUNYUAN_GLOBAL_TEXT.download)
 };
 
-const HUNYUAN_SELECTOR_ASSIGNMENTS = [
+const HUNYUAN_GLOBAL_SELECTOR_ASSIGNMENTS = [
   { key: "loginStartSelector", label: "Login start selector", path: ["loginStartSelector"] },
   { key: "loginStartText", label: "Login start text", path: ["loginStartText"] },
   { key: "loginReadySelector", label: "Login ready selector", path: ["loginReadySelector"] },
@@ -425,6 +417,50 @@ const HUNYUAN_SELECTOR_ASSIGNMENTS = [
   { key: "downloadButton", label: "Download button", path: ["downloadButton"] }
 ];
 
+const HUNYUAN_TENCENT_SELECTOR_ASSIGNMENTS = [
+  { key: "loginReadySelector", label: "Authenticated page selector", path: ["loginReadySelector"] },
+  { key: "loginRequiredSelector", label: "Login-required selector", path: ["loginRequiredSelector"] },
+  { key: "landingReadySelector", label: "Product landing selector", path: ["landingReadySelector"] },
+  { key: "enterEditorButton", label: "Start editor button", path: ["enterEditorButton"] },
+  { key: "editorReadySelector", label: "Sheng3D editor selector", path: ["editorReadySelector"] },
+  { key: "quotaExhaustedPopupText", label: "Quota popup text", path: ["quotaExhaustedPopupText"] },
+  { key: "quotaExhaustedPopupCloseButton", label: "Quota popup close", path: ["quotaExhaustedPopupCloseButton"] },
+  { key: "imageTo3dTab", label: "3D graphics tab", path: ["imageTo3dTab"] },
+  { key: "multipleImagesTab", label: "Multiple Images tab", path: ["multipleImagesTab"] },
+  { key: "addMultipleViewsButton", label: "Add Multiple Views", path: ["addMultipleViewsButton"] },
+  { key: "multipleViewsConfirmButton", label: "Multiple Views confirm", path: ["multipleViewsConfirmButton"] },
+  ...HUNYUAN_VIEW_SLOTS.map((slot) => ({
+    key: `viewUploadInputs.${slot.selectorKey}`,
+    label: `${slot.label} upload input`,
+    path: ["viewUploadInputs", slot.selectorKey]
+  })),
+  ...HUNYUAN_VIEW_SLOTS.map((slot) => ({
+    key: `viewSlotContainers.${slot.selectorKey}`,
+    label: `${slot.label} slot container`,
+    path: ["viewSlotContainers", slot.selectorKey]
+  })),
+  { key: "slotDetectionFailedText", label: "Slot detection failed text", path: ["slotDetectionFailedText"] },
+  { key: "slotDetectionRunningSelector", label: "Slot detection running selector", path: ["slotDetectionRunningSelector"] },
+  { key: "slotAcceptedThumbnailSelector", label: "Slot accepted thumbnail", path: ["slotAcceptedThumbnailSelector"] },
+  { key: "slotRemoveButtonSelector", label: "Slot remove button", path: ["slotRemoveButtonSelector"] },
+  { key: "slotEmptySelector", label: "Slot empty selector", path: ["slotEmptySelector"] },
+  { key: "modelDropdown", label: "Model dropdown", path: ["modelDropdown"] },
+  { key: "modelOptionV31", label: "Sheng3D V3.1 option", path: ["modelOptionV31"] },
+  ...HUNYUAN_FACE_COUNTS.map((count) => ({
+    key: `faceCountButtons.${count}`,
+    label: `${count} face button`,
+    path: ["faceCountButtons", count]
+  })),
+  { key: "generateButton", label: "Generate button", path: ["generateButton"] },
+  { key: "geometryRunningSelector", label: "Generation running selector", path: ["geometryRunningSelector"] },
+  { key: "geometryRunningText", label: "Generation running text", path: ["geometryRunningText"] },
+  { key: "downloadReadySelector", label: "Generated result selector", path: ["downloadReadySelector"] },
+  { key: "downloadReadyText", label: "Generated result text", path: ["downloadReadyText"] },
+  { key: "exportFormatDropdown", label: "Download menu button", path: ["exportFormatDropdown"] },
+  { key: "exportFormatOptions.obj", label: "OBJ download option", path: ["exportFormatOptions", "obj"] },
+  { key: "exportFormatOptions.glb", label: "GLB download option", path: ["exportFormatOptions", "glb"] }
+];
+
 interface HunyuanSiteDefinition {
   workflowId: string;
   title: string;
@@ -440,7 +476,7 @@ const HUNYUAN_SITES: HunyuanSiteDefinition[] = [
   {
     workflowId: HUNYUAN_TENCENT_WORKFLOW_ID,
     title: "Hunyuan Image to 3D Model",
-    description: "Generates one textured, retopologized model from multiple Hunyuan reference views.",
+    description: "Generates one textured Sheng3D model from multiple Hunyuan reference views.",
     targetUrl: "https://3d.hunyuan.tencent.com/",
     source: "hunyuan",
     selectorDefaults: DEFAULT_HUNYUAN_SELECTOR_CONFIG,
@@ -473,6 +509,35 @@ export function mergeHunyuanSelectorConfig(
 }
 
 export function missingHunyuanSelectorKeys(input: HunyuanWorkflowInputLike): string[] {
+  const selectors = input.selectors ?? {};
+  const missing: string[] = [];
+  const requireSelector = (key: string, value: unknown): void => {
+    if (!hasSelector(value)) missing.push(key);
+  };
+  const requireWait = (label: string, selector?: string, text?: string): void => {
+    if (!hasSelector(selector) && !hasSelector(text)) missing.push(`${label}Selector or ${label}Text`);
+  };
+
+  requireSelector("landingReadySelector", selectors.landingReadySelector);
+  requireSelector("enterEditorButton", selectors.enterEditorButton);
+  requireSelector("editorReadySelector", selectors.editorReadySelector);
+  requireSelector("imageTo3dTab", selectors.imageTo3dTab);
+  requireSelector("multipleImagesTab", selectors.multipleImagesTab);
+  requireSelector("addMultipleViewsButton", selectors.addMultipleViewsButton);
+  for (const upload of buildHunyuanViewUploadPlan(input)) {
+    requireSelector(`viewUploadInputs.${upload.selectorKey}`, selectors.viewUploadInputs?.[upload.selectorKey]);
+  }
+  requireSelector("modelDropdown", selectors.modelDropdown);
+  requireSelector("modelOptionV31", selectors.modelOptionV31);
+  requireSelector(`faceCountButtons.${input.modelFaceCount ?? "50k"}`, selectors.faceCountButtons?.[input.modelFaceCount ?? "50k"]);
+  requireSelector("generateButton", selectors.generateButton);
+  requireWait("downloadReady", selectors.downloadReadySelector, selectors.downloadReadyText);
+  requireSelector("exportFormatDropdown", selectors.exportFormatDropdown);
+  requireSelector(`exportFormatOptions.${input.exportFormat ?? "obj"}`, selectors.exportFormatOptions?.[input.exportFormat ?? "obj"]);
+  return missing;
+}
+
+export function missingHunyuanGlobalSelectorKeys(input: HunyuanWorkflowInputLike): string[] {
   const selectors = input.selectors ?? {};
   const missing: string[] = [];
   const requireSelector = (key: string, value: unknown): void => {
@@ -883,6 +948,9 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       loginReadyText: stringSelectorSchema,
       loginRequiredSelector: stringSelectorSchema,
       loginRequiredText: stringSelectorSchema,
+      landingReadySelector: stringSelectorSchema,
+      enterEditorButton: stringSelectorSchema,
+      editorReadySelector: stringSelectorSchema,
       quotaExhaustedPopupText: stringSelectorSchema,
       quotaExhaustedPopupCloseButton: stringSelectorSchema,
       multipleImagesTab: stringSelectorSchema,
@@ -940,15 +1008,11 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       bottomImage: optionalImageSchema,
       left45Image: optionalImageSchema,
       right45Image: optionalImageSchema,
-      prompt: z.string().optional().default(""),
       profileName: z.string().optional().default("default"),
       headless: z.boolean().optional().default(false),
       pauseForManualLogin: z.boolean().optional().default(true),
       timeoutMinutes: z.number().min(1).max(240).optional().default(90),
       modelFaceCount: z.enum(["1.5m", "1m", "500k", "50k"]).optional().default("50k"),
-      retopologyType: z.enum(["triangle", "quad"]).optional().default("quad"),
-      generateTexture: z.boolean().optional().default(true),
-      autoRig: z.boolean().optional().default(false),
       exportFormat: z.enum(["obj", "glb"]).optional().default("obj"),
       selectors: selectorsSchema
     })
@@ -1033,7 +1097,7 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       title: site.title,
       description: site.description,
       category: "hunyuan",
-      version: "0.1.0",
+      version: "0.2.0",
       concurrency: 1,
       requiresBrowser: true,
       targetUrl: site.targetUrl,
@@ -1045,7 +1109,7 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
           label: `${site.title} selectors`,
           targetField: "selectors",
           defaultValue: site.selectorDefaults,
-          assignments: HUNYUAN_SELECTOR_ASSIGNMENTS
+          assignments: HUNYUAN_TENCENT_SELECTOR_ASSIGNMENTS
         }
       ],
       inputFields: [
@@ -1057,7 +1121,6 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
         { name: "bottomImage", label: "Bottom image", type: "fileList", fileValue: "single", maxFiles: 1 },
         { name: "left45Image", label: "Left 45 image", type: "fileList", fileValue: "single", maxFiles: 1 },
         { name: "right45Image", label: "Right 45 image", type: "fileList", fileValue: "single", maxFiles: 1 },
-        { name: "prompt", label: "Prompt", type: "textarea" },
         {
           name: "modelFaceCount",
           label: "Model face count",
@@ -1065,18 +1128,6 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
           defaultValue: "50k",
           options: HUNYUAN_FACE_COUNTS.map((value) => ({ label: value, value }))
         },
-        {
-          name: "retopologyType",
-          label: "Retopology",
-          type: "select",
-          defaultValue: "quad",
-          options: [
-            { label: "Triangle", value: "triangle" },
-            { label: "Quad", value: "quad" }
-          ]
-        },
-        { name: "generateTexture", label: "Generate texture", type: "checkbox", defaultValue: true },
-        { name: "autoRig", label: "Auto-rig", type: "checkbox", defaultValue: false },
         {
           name: "exportFormat",
           label: "Export format",
@@ -1157,6 +1208,8 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
           );
         }
 
+        const editorState = await ensureHunyuanEditorReady(page, selectors, 60_000);
+        await ctx.step("Using Hunyuan Sheng3D editor", 10, editorState);
         await clickSelector(page, selectors.imageTo3dTab!);
         await clickSelector(page, selectors.multipleImagesTab!);
         await clickSelector(page, selectors.addMultipleViewsButton!);
@@ -1233,24 +1286,14 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
 
         await ctx.step("Applying Hunyuan settings", 25, {
           modelFaceCount: input.modelFaceCount,
-          retopologyType: input.retopologyType,
-          generateTexture: input.generateTexture,
-          autoRig: input.autoRig,
           exportFormat: input.exportFormat
         });
         try {
           await clickSelector(page, selectors.modelDropdown!);
           await clickSelector(page, selectors.modelOptionV31!);
           await clickVisibleHunyuanControl(page, selectors.faceCountButtons![input.modelFaceCount]!, `faceCountButtons.${input.modelFaceCount}`);
-          await clickVisibleHunyuanControl(page, selectors.modelTypeGeometryTexturePhased!, "modelTypeGeometryTexturePhased");
-          if (input.prompt.trim() && hasSelector(selectors.promptTextbox)) {
-            await page.locator(selectors.promptTextbox).first().fill(input.prompt);
-          }
           recordPhase("settings-applied", {
             modelFaceCount: input.modelFaceCount,
-            retopologyType: input.retopologyType,
-            generateTexture: input.generateTexture,
-            autoRig: input.autoRig,
             exportFormat: input.exportFormat
           });
         } catch (error) {
@@ -1264,7 +1307,6 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
               source: site.source,
               phase: "settings",
               modelFaceCount: input.modelFaceCount,
-              retopologyType: input.retopologyType,
               exportFormat: input.exportFormat
             }
           });
@@ -1274,7 +1316,7 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
           );
         }
 
-        await ctx.step("Starting geometry generation", 35);
+        await ctx.step("Starting Sheng3D generation", 35);
         try {
           await startHunyuanGeometryGeneration(page, selectors, async (data) => {
             await ctx.waitForManualAction(
@@ -1282,7 +1324,7 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
               data
             );
           });
-          recordPhase("geometry-started", { url: page.url() });
+          recordPhase("generation-started", { url: page.url() });
         } catch (error) {
           const screenshot = await saveScreenshot(page, ctx.artifactDir, "hunyuan-generate-calibration.png");
           const screenshotArtifact = await ctx.addArtifact({
@@ -1295,7 +1337,6 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
               phase: "generate",
               selector: selectors.generateButton,
               modelFaceCount: input.modelFaceCount,
-              retopologyType: input.retopologyType,
               exportFormat: input.exportFormat
             }
           });
@@ -1304,78 +1345,19 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
             `Hunyuan generate button failed. Saved calibration screenshot artifact ${screenshotArtifact.id}. ${formatErrorMessage(error)}`
           );
         }
-        await waitForHunyuanReady(page, selectors.geometryReadySelector, selectors.geometryReadyText, timeoutMinutes(input.timeoutMinutes));
-        recordPhase("geometry-ready", { url: page.url() });
-
-        await ctx.step("Running smart retopology", 55, { retopologyType: input.retopologyType });
-        await clickVisibleHunyuanControl(page, selectors.retopologyTypeButtons![input.retopologyType]!, `retopologyTypeButtons.${input.retopologyType}`);
-        await clickAndVerifyHunyuanActionStarted(page, {
-          selector: selectors.smartRetopologyButton!,
-          selectorKey: "smartRetopologyButton",
-          runningSelector: selectors.retopologyRunningSelector,
-          runningText: selectors.retopologyRunningText,
-          readySelector: selectors.retopologyReadySelector,
-          readyText: selectors.retopologyReadyText
-        });
-        await waitForHunyuanReadyAfterRunning(
-          page,
-          selectors.retopologyRunningSelector,
-          selectors.retopologyRunningText,
-          selectors.retopologyReadySelector,
-          selectors.retopologyReadyText,
-          timeoutMinutes(input.timeoutMinutes)
-        );
-        recordPhase("retopology-ready", { retopologyType: input.retopologyType });
-
-        if (input.generateTexture) {
-          await ctx.step("Generating texture", 72);
-          await clickAndVerifyHunyuanActionStarted(page, {
-            selector: selectors.generateTextureButton!,
-            selectorKey: "generateTextureButton",
-            runningSelector: selectors.textureRunningSelector,
-            runningText: selectors.textureRunningText,
-            readySelector: selectors.textureReadySelector,
-            readyText: selectors.textureReadyText
-          });
-          await waitForHunyuanReadyAfterRunning(
-            page,
-            selectors.textureRunningSelector,
-            selectors.textureRunningText,
-            selectors.textureReadySelector,
-            selectors.textureReadyText,
-            timeoutMinutes(input.timeoutMinutes)
-          );
-          recordPhase("texture-ready");
-        }
-
-        if (input.autoRig) {
-          await ctx.step("Running auto-rig", 80);
-          await clickAndVerifyHunyuanActionStarted(page, {
-            selector: selectors.autoRigButton!,
-            selectorKey: "autoRigButton",
-            runningSelector: selectors.autoRigRunningSelector,
-            runningText: selectors.autoRigRunningText,
-            readySelector: selectors.autoRigReadySelector,
-            readyText: selectors.autoRigReadyText
-          });
-          await waitForHunyuanReadyAfterRunning(
-            page,
-            selectors.autoRigRunningSelector,
-            selectors.autoRigRunningText,
-            selectors.autoRigReadySelector,
-            selectors.autoRigReadyText,
-            timeoutMinutes(input.timeoutMinutes)
-          );
-          recordPhase("auto-rig-ready");
-        }
-
-        await ctx.step("Preparing download", 88, { exportFormat: input.exportFormat });
+        await ctx.step("Waiting for the Sheng3D model", 55);
         if (hasSelector(selectors.downloadReadySelector) || hasSelector(selectors.downloadReadyText)) {
           await waitForHunyuanReady(page, selectors.downloadReadySelector, selectors.downloadReadyText, timeoutMinutes(input.timeoutMinutes));
         }
+        recordPhase("generation-ready", { url: page.url() });
+
+        await ctx.step("Downloading result", 92, { exportFormat: input.exportFormat });
         let exportSelection: HunyuanExportFormatResolution;
+        let download: any;
         try {
-          exportSelection = await selectHunyuanExportFormat(page, selectors, input.exportFormat);
+          const directDownload = await downloadHunyuanExportFormat(page, selectors, input.exportFormat, 120_000);
+          exportSelection = directDownload.resolution;
+          download = directDownload.download;
           if (exportSelection.fallbackReason) {
             await ctx.event("hunyuan.export-format-fallback", exportSelection.fallbackReason, {
               requestedExportFormat: exportSelection.requested,
@@ -1383,7 +1365,7 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
               availableOptions: exportSelection.availableOptions
             });
           }
-          recordPhase("export-format-selected", {
+          recordPhase("export-download-started", {
             requestedExportFormat: exportSelection.requested,
             actualExportFormat: exportSelection.actual,
             availableOptions: exportSelection.availableOptions,
@@ -1407,11 +1389,6 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
             `Hunyuan export format selection failed. Saved calibration screenshot artifact ${screenshotArtifact.id}. ${formatErrorMessage(error)}`
           );
         }
-
-        await ctx.step("Downloading result", 94);
-        const downloadPromise = page.waitForEvent("download", { timeout: 120_000 });
-        await clickHunyuanActionButton(page, selectors.downloadButton!, "downloadButton", 120_000);
-        const download = await downloadPromise;
         const targetPath = path.join(ctx.artifactDir, path.basename(download.suggestedFilename()));
         await download.saveAs(targetPath);
         const downloadedModel = {
@@ -1523,9 +1500,6 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
           viewImages: uploadPlan.map(({ field, selectorKey, label, imagePath }) => ({ field, selectorKey, label, imagePath })),
           settings: {
             modelFaceCount: input.modelFaceCount,
-            retopologyType: input.retopologyType,
-            generateTexture: input.generateTexture,
-            autoRig: input.autoRig,
             exportFormat: exportSelection.actual,
             requestedExportFormat: exportSelection.requested
           },
@@ -1586,7 +1560,7 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
             label: "Hunyuan Global selectors",
             targetField: "selectors",
             defaultValue: DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG,
-            assignments: HUNYUAN_SELECTOR_ASSIGNMENTS
+            assignments: HUNYUAN_GLOBAL_SELECTOR_ASSIGNMENTS
           }
         ],
         inputFields: [
@@ -1728,7 +1702,7 @@ export function createWorkflows(sdk: WorkflowSdk): WorkflowDefinition[] {
       phaseEvents.push({ phase, completedAt: new Date().toISOString(), ...(data === undefined ? {} : { data }) });
     }
 
-    const missingSelectors = missingHunyuanSelectorKeys({ ...input, selectors });
+    const missingSelectors = missingHunyuanGlobalSelectorKeys({ ...input, selectors });
     if (missingSelectors.length > 0) {
       const calibrationPath = path.join(ctx.artifactDir, "hunyuan-global-selector-calibration.json");
       const inspection = await browserExtension.inspect(target, { signal: ctx.signal, timeoutMs: 30_000 }).catch((error) => ({
@@ -2882,6 +2856,61 @@ async function waitForHunyuanQuotaPopupHidden(page: any, selectors: HunyuanSelec
   }
 }
 
+export async function downloadHunyuanExportFormat(
+  page: any,
+  selectors: HunyuanSelectorConfig,
+  requested: HunyuanExportFormat,
+  timeoutMs = 120_000
+): Promise<{ resolution: HunyuanExportFormatResolution; download: any }> {
+  if (!hasSelector(selectors.exportFormatDropdown)) {
+    throw new Error("Hunyuan export format dropdown selector is not configured.");
+  }
+
+  await clickVisibleHunyuanControl(page, selectors.exportFormatDropdown, "exportFormatDropdown");
+  const availableOptions = await collectVisibleHunyuanExportOptions(page);
+  let resolution = resolveHunyuanExportFormat(requested, availableOptions);
+  let download = await tryDownloadHunyuanExportOption(page, selectors, resolution.actual, timeoutMs);
+  if (download) return { resolution, download };
+
+  if (requested !== "obj" && resolution.actual !== "obj") {
+    download = await tryDownloadHunyuanExportOption(page, selectors, "obj", timeoutMs);
+    if (download) {
+      resolution = {
+        requested,
+        actual: "obj",
+        availableOptions,
+        fallbackReason: `Requested ${requested.toUpperCase()} export could not be clicked; using OBJ fallback.`
+      };
+      return { resolution, download };
+    }
+  }
+
+  throw new Error(
+    `Hunyuan export format ${requested.toUpperCase()} could not start a download. ` +
+      `actualAttempt=${resolution.actual.toUpperCase()}; availableOptions=${formatHunyuanExportOptions(availableOptions)}; ` +
+      `requestedSelector=${selectors.exportFormatOptions?.[requested] ?? ""}; objSelector=${selectors.exportFormatOptions?.obj ?? ""}`
+  );
+}
+
+async function tryDownloadHunyuanExportOption(
+  page: any,
+  selectors: HunyuanSelectorConfig,
+  format: HunyuanExportFormat,
+  timeoutMs: number
+): Promise<any | undefined> {
+  const optionSelector = selectors.exportFormatOptions?.[format] ?? hunyuanExportOptionSelector(format.toUpperCase());
+  if (!hasSelector(optionSelector)) return undefined;
+
+  const downloadPromise = page.waitForEvent("download", { timeout: timeoutMs });
+  try {
+    await clickVisibleHunyuanControl(page, optionSelector, `exportFormatOptions.${format}`);
+  } catch {
+    void downloadPromise.catch(() => undefined);
+    return undefined;
+  }
+  return downloadPromise;
+}
+
 async function selectHunyuanExportFormat(
   page: any,
   selectors: HunyuanSelectorConfig,
@@ -2936,6 +2965,8 @@ async function collectVisibleHunyuanExportOptions(page: any): Promise<string[]> 
   try {
     return await page.evaluate(() => {
       const selectors = [
+        ".v3-download-panel .v3-download-panel__item",
+        ".v3-download-panel__item",
         ".download__dropdown li.t-dropdown__item",
         ".t-popup li.t-dropdown__item",
         ".t-dropdown__menu li.t-dropdown__item",
@@ -2969,8 +3000,8 @@ function formatHunyuanExportOptions(options: string[]): string {
   return options.length > 0 ? options.join(", ") : "(none detected)";
 }
 
-const HUNYUAN_GENERATE_BUTTON_READY_SELECTOR = `.sideBarLeft-generateBtn:not(.t-is-disabled):not([disabled]):has-text("${HUNYUAN_TEXT.generate}")`;
-const HUNYUAN_GENERATE_BUTTON_ANY_SELECTOR = `.sideBarLeft-generateBtn:has-text("${HUNYUAN_TEXT.generate}")`;
+const HUNYUAN_GENERATE_BUTTON_READY_SELECTOR = ".v3-sidebar-left .sideBarLeft-generateBtn:not(.t-is-disabled):not([disabled])";
+const HUNYUAN_GENERATE_BUTTON_ANY_SELECTOR = ".v3-sidebar-left .sideBarLeft-generateBtn";
 
 export async function clickHunyuanGenerateButton(page: any, selector: string, timeoutMs = 120_000): Promise<void> {
   await clickHunyuanActionButton(page, selector, "generateButton", timeoutMs, [HUNYUAN_GENERATE_BUTTON_READY_SELECTOR, HUNYUAN_GENERATE_BUTTON_ANY_SELECTOR]);
@@ -3427,6 +3458,33 @@ async function waitForHunyuanReady(page: any, selector: string | undefined, text
     return;
   }
   throw new Error("Hunyuan ready wait requires a selector or text.");
+}
+
+export async function ensureHunyuanEditorReady(
+  page: any,
+  selectors: HunyuanSelectorConfig,
+  timeoutMs: number
+): Promise<{ enteredFrom: "editor" | "landing"; url: string }> {
+  if (!hasSelector(selectors.editorReadySelector)) {
+    throw new Error("Hunyuan editor-ready selector is not configured.");
+  }
+  if (await isSelectorVisible(page, selectors.editorReadySelector, 1_000)) {
+    return { enteredFrom: "editor", url: page.url() };
+  }
+
+  const landingVisible = await isSelectorVisible(page, selectors.landingReadySelector, 1_000);
+  const enterEditorVisible = await isSelectorVisible(page, selectors.enterEditorButton, landingVisible ? 10_000 : 1_000);
+  if (!landingVisible && !enterEditorVisible) {
+    await page.locator(selectors.editorReadySelector).first().waitFor({ state: "visible", timeout: timeoutMs });
+    return { enteredFrom: "editor", url: page.url() };
+  }
+  if (!hasSelector(selectors.enterEditorButton)) {
+    throw new Error("Hunyuan landing page is visible but the editor-entry selector is not configured.");
+  }
+
+  await clickVisibleHunyuanControl(page, selectors.enterEditorButton, "enterEditorButton");
+  await page.locator(selectors.editorReadySelector).first().waitFor({ state: "visible", timeout: timeoutMs });
+  return { enteredFrom: "landing", url: page.url() };
 }
 
 export async function detectHunyuanLoginState(

@@ -7,12 +7,17 @@ import {
   clickHunyuanActionButton,
   clickHunyuanGenerateButton,
   clickVisibleHunyuanControl,
+  DEFAULT_HUNYUAN_SELECTOR_CONFIG,
   DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG,
   discoverHunyuanModelAssets,
   dismissHunyuanQuotaPopup,
+  downloadHunyuanExportFormat,
+  ensureHunyuanEditorReady,
   HUNYUAN_GLOBAL_WORKFLOW_ID,
+  HUNYUAN_TENCENT_WORKFLOW_ID,
   inferHunyuanArtifactKind,
   mergeHunyuanSelectorConfig,
+  missingHunyuanGlobalSelectorKeys,
   missingHunyuanSelectorKeys,
   resolveHunyuanExportFormat,
   createWorkflows
@@ -39,9 +44,7 @@ describe("Hunyuan workflow helpers", () => {
         frontImage: "front.png",
         backImage: "back.png",
         modelFaceCount: "50k",
-        retopologyType: "quad",
         exportFormat: "obj",
-        generateTexture: true,
         selectors
       })
     ).toEqual([]);
@@ -51,32 +54,139 @@ describe("Hunyuan workflow helpers", () => {
     });
   });
 
-  it("targets visible segmented controls for default settings selectors", () => {
+  it("targets the translated Sheng3D editor and structural result controls", () => {
     const selectors = mergeHunyuanSelectorConfig({});
+    expect(selectors.loginReadySelector).toContain(".v3-home");
+    expect(selectors.landingReadySelector).toBe(".v3-home");
+    expect(selectors.enterEditorButton).toBe(".v3-home .start-but");
+    expect(selectors.editorReadySelector).toBe(".v3-sidebar-left");
+    expect(selectors.imageTo3dTab).toContain("3D graphics");
+    expect(selectors.multipleImagesTab).toContain("Multiple images");
     expect(selectors.multipleViewsConfirmButton).toContain(".hy-multi-view-grid__header-close");
-    expect(selectors.faceCountButtons?.["50k"]).toContain(".generation-type-select-title:has-text(\"模型面数\")");
+    expect(selectors.modelOptionV31).toContain(".model-version-dropdown__popup");
+    expect(selectors.modelOptionV31).toContain("V3.1");
+    expect(selectors.faceCountButtons?.["50k"]).toContain(".v3-sidebar-left .generation-type-select:visible");
     expect(selectors.faceCountButtons?.["50k"]).toContain(".qaUJkqcCF813NIqHGF3U:visible:has-text(\"50k\")");
-    expect(selectors.faceCountButtons?.["50k"]).not.toContain("label.t-radio-button");
-    expect(selectors.faceCountButtons?.["50k"]).not.toContain(">> text=");
-    expect(selectors.modelTypeGeometryTexturePhased).toContain(".generation-type-select-title:has-text(\"模型类型\")");
-    expect(selectors.modelTypeGeometryTexturePhased).toContain(".qaUJkqcCF813NIqHGF3U:visible");
-    expect(selectors.modelTypeGeometryTexturePhased).not.toContain(">> text=");
     expect(selectors.generateButton).toContain(":not(.t-is-disabled):not([disabled])");
     expect(selectors.quotaExhaustedPopupText).toContain("已用完");
-    expect(selectors.quotaExhaustedPopupCloseButton).toContain(".invite-tooltip-full");
-    expect(selectors.quotaExhaustedPopupCloseButton).toContain(".t-icon-close");
-    expect(selectors.geometryReadySelector).toContain(":not(.t-is-disabled):not([disabled])");
-    expect(selectors.retopologyTypeButtons?.quad).toContain(".model-dialog__content__operation__heading");
-    expect(selectors.retopologyTypeButtons?.quad).toContain(".topology-panel .qaUJkqcCF813NIqHGF3U");
-    expect(selectors.retopologyTypeButtons?.quad).toContain(".qaUJkqcCF813NIqHGF3U:visible:has-text(\"四边面\")");
-    expect(selectors.retopologyTypeButtons?.quad).not.toContain(":is(button, .t-button)");
-    expect(selectors.exportFormatDropdown).toBe("button.download__dropdown__btn");
+    expect(selectors.geometryReadySelector).toBe("button.native-edit__viewport-actionBar-download:visible");
+    expect(selectors.downloadReadySelector).toBe("button.native-edit__viewport-actionBar-download:visible");
+    expect(selectors.exportFormatDropdown).toBe("button.native-edit__viewport-actionBar-download:visible");
+    expect(selectors.exportFormatOptions?.obj).toContain(".v3-download-panel__item");
     expect(selectors.exportFormatOptions?.obj).toContain("OBJ");
-    expect(selectors.exportFormatOptions?.obj).toContain("li.t-dropdown__item");
-    expect(selectors.exportFormatOptions?.obj).toContain(".t-popup");
-    expect(selectors.smartRetopologyButton).toContain(":not(.t-is-disabled):not([disabled])");
-    expect(selectors.generateTextureButton).toContain(":not(.t-is-disabled):not([disabled])");
-    expect(selectors.downloadButton).toContain(":not(.t-is-disabled):not([disabled])");
+    expect(selectors.modelTypeGeometryTexturePhased).toBeUndefined();
+    expect(selectors.smartRetopologyButton).toBeUndefined();
+    expect(selectors.generateTextureButton).toBeUndefined();
+    expect(selectors.autoRigButton).toBeUndefined();
+    expect(selectors.downloadButton).toBeUndefined();
+  });
+
+  it("registers Tencent Hunyuan v0.2.0 with only the one-step Sheng3D inputs", () => {
+    const workflows = createWorkflows(createWorkflowSdk() as any);
+    const workflow = workflows.find((candidate) => candidate.manifest.id === HUNYUAN_TENCENT_WORKFLOW_ID);
+    const globalWorkflow = workflows.find((candidate) => candidate.manifest.id === HUNYUAN_GLOBAL_WORKFLOW_ID);
+    if (!workflow || !globalWorkflow) throw new Error("Expected both Hunyuan workflows.");
+
+    expect(workflow.manifest.version).toBe("0.2.0");
+    expect(globalWorkflow.manifest.version).toBe("0.1.0");
+    const fieldNames = workflow.manifest.inputFields.map((field) => field.name);
+    expect(fieldNames).toContain("modelFaceCount");
+    expect(fieldNames).toContain("exportFormat");
+    expect(fieldNames).not.toContain("prompt");
+    expect(fieldNames).not.toContain("retopologyType");
+    expect(fieldNames).not.toContain("generateTexture");
+    expect(fieldNames).not.toContain("autoRig");
+
+    const parsed = workflow.inputSchema.parse({
+      frontImage: "C:\\tmp\\front.png",
+      backImage: "C:\\tmp\\back.png",
+      prompt: "obsolete",
+      retopologyType: "quad",
+      generateTexture: true,
+      autoRig: true
+    });
+    expect(parsed).toMatchObject({
+      modelFaceCount: "50k",
+      exportFormat: "obj",
+      profileName: "default",
+      pauseForManualLogin: true
+    });
+    expect(parsed).not.toHaveProperty("prompt");
+    expect(parsed).not.toHaveProperty("retopologyType");
+    expect(parsed).not.toHaveProperty("generateTexture");
+    expect(parsed).not.toHaveProperty("autoRig");
+  });
+
+  it("keeps staged post-processing actions out of the Tencent runner", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "../src/index.ts"), "utf8");
+    const start = source.indexOf("function createHunyuanImageToModelWorkflow");
+    const end = source.indexOf("function createHunyuanGlobalExtensionWorkflow");
+    const tencentRunner = source.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(tencentRunner).not.toContain("selectors.smartRetopologyButton");
+    expect(tencentRunner).not.toContain("selectors.generateTextureButton");
+    expect(tencentRunner).not.toContain("selectors.autoRigButton");
+    expect(tencentRunner).not.toContain("selectors.downloadButton");
+    expect(tencentRunner).toContain("downloadHunyuanExportFormat");
+  });
+
+  it("enters the Sheng3D editor from the authenticated product landing page", async () => {
+    let editorVisible = false;
+    const clicks: string[] = [];
+    const page = {
+      url: () => "https://3d.hunyuan.tencent.com/",
+      locator: (selector: string) => ({
+        first: () => ({
+          waitFor: async () => {
+            const visible = selector === ".v3-home" || selector.includes(".start-but") || (selector === ".v3-sidebar-left" && editorVisible);
+            if (!visible) throw new Error("not visible");
+          },
+          click: async () => {
+            clicks.push(selector);
+            if (selector.includes(".start-but")) editorVisible = true;
+          },
+          isVisible: async () => selector === ".v3-home" || selector.includes(".start-but") || (selector === ".v3-sidebar-left" && editorVisible),
+          isEnabled: async () => true
+        }),
+        count: async () => 1
+      })
+    };
+
+    await expect(ensureHunyuanEditorReady(page, DEFAULT_HUNYUAN_SELECTOR_CONFIG, 1_000)).resolves.toMatchObject({
+      enteredFrom: "landing"
+    });
+    expect(clicks).toContain(".v3-home .start-but");
+  });
+
+  it("starts listening for a download before clicking the Sheng3D format option", async () => {
+    const actions: string[] = [];
+    const download = { suggestedFilename: () => "model.zip" };
+    const page = {
+      locator: (selector: string) => ({
+        first: () => ({
+          click: async () => {
+            actions.push(`click:${selector}`);
+          }
+        })
+      }),
+      evaluate: async () => ["GLB", "OBJ", "FBX", "STL", "USDZ", "MP4", "GIF"],
+      waitForEvent: async (event: string) => {
+        actions.push(`wait:${event}`);
+        return download;
+      }
+    };
+
+    const result = await downloadHunyuanExportFormat(page, DEFAULT_HUNYUAN_SELECTOR_CONFIG, "obj", 1_000);
+
+    expect(result.resolution).toMatchObject({ requested: "obj", actual: "obj" });
+    expect(result.download).toBe(download);
+    const optionClickIndex = actions.findIndex((action) => action.includes("v3-download-panel__item") && action.includes("OBJ"));
+    expect(actions.indexOf("wait:download")).toBeGreaterThan(-1);
+    expect(actions.indexOf("wait:download")).toBeLessThan(optionClickIndex);
+    expect(actions.filter((action) => action === "wait:download")).toHaveLength(1);
+    expect(actions.filter((action) => action.includes("native-edit__viewport-actionBar-download"))).toHaveLength(1);
   });
 
   it("discovers an extracted OBJ, MTL, and texture asset set", () => {
@@ -114,7 +224,7 @@ describe("Hunyuan workflow helpers", () => {
     const selectors = mergeHunyuanSelectorConfig({}, DEFAULT_HUNYUAN_GLOBAL_SELECTOR_CONFIG);
 
     expect(
-      missingHunyuanSelectorKeys({
+      missingHunyuanGlobalSelectorKeys({
         frontImage: "front.png",
         backImage: "back.png",
         modelFaceCount: "50k",

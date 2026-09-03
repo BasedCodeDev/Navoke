@@ -567,20 +567,21 @@ export const appThemes: ThemeDefinition[] = [
 ];
 
 const themesById = new Map<ThemeId, ThemeDefinition>(appThemes.map((theme) => [theme.id, theme]));
+const DEFAULT_THEME_ID: ThemeId = "based-code";
 
 export function getThemeById(id: ThemeId): ThemeDefinition {
-  return themesById.get(id) ?? appThemes[0];
+  return themesById.get(id) ?? themesById.get(DEFAULT_THEME_ID)!;
 }
 
 export function isThemeId(value: string | null | undefined): value is ThemeId {
   return Boolean(value && themesById.has(value as ThemeId));
 }
 
-export function resolveThemeId(storedTheme: string | null | undefined, prefersDark: boolean): ThemeId {
+export function resolveThemeId(storedTheme: string | null | undefined): ThemeId {
   if (storedTheme === "matte-purple") return "based-code";
   if (storedTheme === "codex-graphite") return "graphite-lavender";
   if (isThemeId(storedTheme)) return storedTheme;
-  return prefersDark ? "dark" : "light";
+  return DEFAULT_THEME_ID;
 }
 
 export function applyThemeToRoot(theme: ThemeDefinition, root: HTMLElement = document.documentElement): void {

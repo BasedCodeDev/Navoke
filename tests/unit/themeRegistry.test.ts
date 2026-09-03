@@ -14,17 +14,16 @@ describe("theme registry", () => {
   });
 
   it("resolves persisted light and dark values for compatibility", () => {
-    expect(resolveThemeId("light", true)).toBe("light");
-    expect(resolveThemeId("dark", false)).toBe("dark");
-    expect(resolveThemeId("matte-purple", false)).toBe("based-code");
-    expect(resolveThemeId("codex-graphite", false)).toBe("graphite-lavender");
+    expect(resolveThemeId("light")).toBe("light");
+    expect(resolveThemeId("dark")).toBe("dark");
+    expect(resolveThemeId("matte-purple")).toBe("based-code");
+    expect(resolveThemeId("codex-graphite")).toBe("graphite-lavender");
   });
 
-  it("falls back to system preference for invalid stored values", () => {
-    expect(resolveThemeId("not-a-theme", true)).toBe("dark");
-    expect(resolveThemeId("not-a-theme", false)).toBe("light");
-    expect(resolveThemeId(null, true)).toBe("dark");
-    expect(resolveThemeId(undefined, false)).toBe("light");
+  it("uses Based Code when no valid theme is stored", () => {
+    expect(resolveThemeId("not-a-theme")).toBe("based-code");
+    expect(resolveThemeId(null)).toBe("based-code");
+    expect(resolveThemeId(undefined)).toBe("based-code");
   });
 
   it("keeps core surfaces readable", () => {

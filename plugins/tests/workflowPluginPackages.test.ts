@@ -25,7 +25,7 @@ describe("workflow plugin packages", () => {
 
     expect(manager.listPlugins()[0]).toMatchObject({
       pluginId: "navoke.hunyuan",
-      version: "0.1.0",
+      version: "0.2.0",
       status: "loaded"
     });
     expect(manager.listWorkflowRegistrations().map((registration) => registration.definition.manifest.id)).toEqual([
@@ -39,12 +39,19 @@ describe("workflow plugin packages", () => {
       .listWorkflowRegistrations()
       .find((registration) => registration.definition.manifest.id === "navoke.hunyuan.global.image-to-model")!.definition;
     expect(globalWorkflow.manifest).toMatchObject({
+      version: "0.1.0",
       targetUrl: "https://3d.hunyuanglobal.com/",
       title: "Hunyuan Global Image to 3D Model",
       requiresBrowser: false,
       outputKinds: ["model", "download", "json"],
       uiCapabilities: ["extension.tabRouting"]
     });
+    expect(workflow.manifest.version).toBe("0.2.0");
+    const tencentInputFields = workflow.manifest.inputFields.map((field) => field.name);
+    expect(tencentInputFields).not.toContain("prompt");
+    expect(tencentInputFields).not.toContain("retopologyType");
+    expect(tencentInputFields).not.toContain("generateTexture");
+    expect(tencentInputFields).not.toContain("autoRig");
     expect(manager.listPlugins()[0].capabilities).toContain("extension.browser");
     expect(workflow.inputSchema.safeParse({ frontImage: "C:\\tmp\\front.png" }).success).toBe(false);
     const parsed = workflow.inputSchema.safeParse({
@@ -55,11 +62,11 @@ describe("workflow plugin packages", () => {
     if (!parsed.success) throw new Error("Expected Hunyuan input defaults to parse.");
     expect(parsed.data).toMatchObject({
       modelFaceCount: "50k",
-      retopologyType: "quad",
-      generateTexture: true,
-      autoRig: false,
       exportFormat: "obj"
     });
+    expect(parsed.data).not.toHaveProperty("retopologyType");
+    expect(parsed.data).not.toHaveProperty("generateTexture");
+    expect(parsed.data).not.toHaveProperty("autoRig");
   });
 
   it("loads the ChatGPT workflow package with prompt, image transform, and image sequence workflows", async () => {
@@ -205,9 +212,9 @@ describe("workflow plugin packages", () => {
     });
 
     expect(run.workflowId).toBe("navoke.hunyuan.image-to-model");
-    expect(run.workflowVersion).toBe("0.1.0");
+    expect(run.workflowVersion).toBe("0.2.0");
     expect(run.pluginId).toBe("navoke.hunyuan");
-    expect(run.pluginVersion).toBe("0.1.0");
+    expect(run.pluginVersion).toBe("0.2.0");
     await runner.deleteRun(run.id);
     store.close();
   });

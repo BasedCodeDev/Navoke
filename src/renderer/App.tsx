@@ -130,8 +130,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 function getInitialThemeId(): ThemeId {
   const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  return resolveThemeId(storedTheme, prefersDark);
+  return resolveThemeId(storedTheme);
 }
 
 function getInitialFontId(): FontId {
@@ -852,7 +851,7 @@ export default function App(): JSX.Element {
             <img
               src={APP_ICON_SRC}
               alt=""
-              className="h-10 w-10 shrink-0 rounded-md border border-border bg-background object-cover"
+              className="h-10 w-10 shrink-0 rounded-full border border-border bg-background object-cover"
               draggable={false}
             />
             <div className="min-w-0">
@@ -1621,7 +1620,7 @@ function ProjectLanding({
           <img
             src={APP_ICON_SRC}
             alt=""
-            className="mx-auto h-24 w-24 rounded-lg border border-border bg-background object-cover"
+            className="mx-auto h-24 w-24 rounded-full border border-border bg-background object-cover"
             draggable={false}
           />
           <h2 className="text-3xl font-semibold">{config?.projectName ?? "Navoke"}</h2>
