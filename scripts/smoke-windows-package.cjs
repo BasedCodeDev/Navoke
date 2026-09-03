@@ -60,6 +60,25 @@ async function main() {
     const workflowIds = workflows.map((workflow) => workflow.manifest.id).sort();
     assertEqual(workflowIds, expectedWorkflows, "workflows");
 
+    const boundsWorkflowId = workflowIds.find((workflowId) => workflowId.endsWith(".geometry-bounds"));
+    if (!boundsWorkflowId) throw new Error("The bundled geometry-bounds workflow was not registered.");
+    const modelPath = path.join(tempRoot, "smoke-triangle.obj");
+    fs.writeFileSync(modelPath, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", "utf8");
+    const modelRun = await fetchJson(`${apiBaseUrl}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workflowId: boundsWorkflowId,
+        name: "Packaged headless browser smoke",
+        input: { modelFile: modelPath },
+        origin: { source: "ui" }
+      })
+    });
+    const completedModelRun = await waitForRun(apiBaseUrl, modelRun.id, 60_000);
+    if (completedModelRun.run.status !== "completed") {
+      throw new Error(`Packaged geometry workflow failed: ${JSON.stringify(completedModelRun)}`);
+    }
+
     const session = await fetchJson(`${apiBaseUrl}/api/lab/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -73,7 +92,7 @@ async function main() {
     sessionId = undefined;
 
     process.stdout.write(
-      `${JSON.stringify({ executablePath, plugins: pluginKeys.length, workflows: workflowIds.length, playwright: "ok" })}\n`
+      `${JSON.stringify({ executablePath, plugins: pluginKeys.length, workflows: workflowIds.length, headless: "ok", playwright: "ok" })}\n`
     );
   } finally {
     terminateProcessTree(child);
@@ -84,6 +103,16 @@ async function main() {
       process.stderr.write(`Could not remove smoke-test directory ${tempRoot}: ${formatError(error)}\n`);
     }
   }
+}
+
+async function waitForRun(apiBaseUrl, runId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const detail = await fetchJson(`${apiBaseUrl}/api/runs/${runId}`);
+    if (["completed", "failed", "cancelled"].includes(detail.run.status)) return detail;
+    await wait(250);
+  }
+  throw new Error(`Timed out waiting for packaged workflow run ${runId}.`);
 }
 
 function readBundledPluginManifests(executablePath) {

@@ -272,6 +272,12 @@ function resolvePackageRoot(packageName: string): string {
     throw new Error(`Invalid package name: ${packageName}`);
   }
 
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (resourcesPath) {
+    const bundledPackageRoot = path.join(resourcesPath, "packages", ...packageName.split("/"));
+    if (fs.existsSync(path.join(bundledPackageRoot, "package.json"))) return bundledPackageRoot;
+  }
+
   const entrypoint = workflowSdkRequire.resolve(packageName);
   let current = path.dirname(entrypoint);
   for (;;) {

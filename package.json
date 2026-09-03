@@ -22,7 +22,7 @@
     "build:main": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
     "build:cli": "tsc -p tsconfig.cli.json",
     "build:plugins": "node scripts/build-plugins.cjs",
-    "prepare:browser:win": "cross-env PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright install chromium --no-shell",
+    "prepare:browser:win": "cross-env PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright install chromium",
     "package:win": "npm run build && npm run prepare:browser:win && electron-builder --win nsis --x64",
     "package:win:dir": "npm run build && npm run prepare:browser:win && electron-builder --win dir --x64",
     "start": "npm run build && electron dist/main/main.js",

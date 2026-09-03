@@ -27,6 +27,12 @@ extraResources:
     filter:
       - "*/plugin.json"
       - "*/dist/**/*"
+  - from: node_modules/three
+    to: packages/three
+    filter:
+      - package.json
+      - "build/**/*"
+      - "examples/jsm/**/*"
 
 extraFiles:
   - from: LICENSE

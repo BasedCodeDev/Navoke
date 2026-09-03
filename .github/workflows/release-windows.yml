@@ -12,6 +12,8 @@ jobs:
   release-windows:
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
 
     steps:
       - name: Checkout
@@ -37,6 +39,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Install Playwright browsers
+        run: npm run prepare:browser:win
 
       - name: Test
         run: npm test
