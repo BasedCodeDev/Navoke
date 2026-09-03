@@ -79,6 +79,46 @@ describe("PluginManager", () => {
     expect(manager.listPlugins().map((plugin) => plugin.status)).toEqual(["failed", "failed"]);
     expect(manager.listWorkflowRegistrations()).toHaveLength(0);
   });
+
+  it("seeds each bundled plugin version once and preserves an uninstall", async () => {
+    const userDataDir = tempDir("navoke-user-data-");
+    const bundledRoot = tempDir("navoke-bundled-plugins-");
+    copyBundledPlugin(bundledRoot, createPluginSource("vendor.official", "0.1.0", "vendor.official.workflow"));
+
+    const manager = new PluginManager(userDataDir, { bundledPluginRoot: bundledRoot });
+    await manager.reload();
+
+    expect(manager.listPlugins().map((plugin) => `${plugin.pluginId}@${plugin.version}`)).toEqual([
+      "vendor.official@0.1.0"
+    ]);
+    await manager.uninstall("vendor.official", "0.1.0");
+    expect(manager.listPlugins()).toHaveLength(0);
+
+    const restartedManager = new PluginManager(userDataDir, { bundledPluginRoot: bundledRoot });
+    await restartedManager.reload();
+    expect(restartedManager.listPlugins()).toHaveLength(0);
+  });
+
+  it("seeds a new bundled plugin version after an older version was uninstalled", async () => {
+    const userDataDir = tempDir("navoke-user-data-");
+    const bundledRoot = tempDir("navoke-bundled-plugins-");
+    copyBundledPlugin(bundledRoot, createPluginSource("vendor.official", "0.1.0", "vendor.official.workflow"));
+
+    const manager = new PluginManager(userDataDir, { bundledPluginRoot: bundledRoot });
+    await manager.reload();
+    await manager.uninstall("vendor.official", "0.1.0");
+
+    copyBundledPlugin(
+      bundledRoot,
+      createPluginSource("vendor.official", "0.2.0", "vendor.official.workflow"),
+      "vendor.official-v2"
+    );
+    await manager.reload();
+
+    expect(manager.listPlugins().map((plugin) => `${plugin.pluginId}@${plugin.version}`)).toEqual([
+      "vendor.official@0.2.0"
+    ]);
+  });
 });
 
 function tempDir(prefix: string): string {
@@ -148,4 +188,8 @@ module.exports = {
     "utf8"
   );
   return dir;
+}
+
+function copyBundledPlugin(bundledRoot: string, sourceDir: string, folderName = path.basename(sourceDir)): void {
+  fs.cpSync(sourceDir, path.join(bundledRoot, folderName), { recursive: true });
 }

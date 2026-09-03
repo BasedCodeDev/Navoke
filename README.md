@@ -24,6 +24,21 @@ npm run dev
 
 Project metadata is persisted locally in SQLite under `.navoke`, while each run keeps its own project-root folder and registered artifacts.
 
+## Windows installer
+
+Download the latest Windows installer from the GitHub Releases page. The current prerelease is unsigned, so Windows SmartScreen may ask you to confirm that you want to run it. The installer includes the official Navoke workflow plugins and the Chromium runtime used by Playwright workflows.
+
+To load the browser controller extension, open **Plugins** in Navoke and select **Browser extension**. In Chrome, open `chrome://extensions`, enable developer mode, choose **Load unpacked**, and select that folder.
+
+Build the x64 installer locally with:
+
+```text
+npm ci
+npm run package:win
+```
+
+The installer is written to `release/Navoke-Setup-<version>-x64.exe`.
+
 ## Website
 
 The public Navoke landing page lives in `website` and builds independently from the Electron renderer.

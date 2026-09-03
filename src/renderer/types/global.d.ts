@@ -10,6 +10,7 @@ declare global {
     projectDialogCancelled?: boolean;
     platform: string;
     pluginRootDir: string | null;
+    browserExtensionDir: string | null;
   }
 
   interface NavokeWindowState {

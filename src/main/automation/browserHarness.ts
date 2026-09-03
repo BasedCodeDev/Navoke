@@ -1,8 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import type { RuntimePaths } from "../runtime/types";
 import { ensureDir } from "../runtime/paths";
+
+export function configureBundledPlaywrightBrowsers(options: {
+  resourcesPath?: string;
+  env?: NodeJS.ProcessEnv;
+} = {}): string | undefined {
+  const env = options.env ?? process.env;
+  if (Object.prototype.hasOwnProperty.call(env, "PLAYWRIGHT_BROWSERS_PATH")) {
+    return env.PLAYWRIGHT_BROWSERS_PATH;
+  }
+
+  const resourcesPath =
+    options.resourcesPath ?? (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (!resourcesPath) return undefined;
+
+  const bundledPath = path.join(resourcesPath, "playwright-browsers");
+  if (!fs.existsSync(bundledPath)) return undefined;
+  env.PLAYWRIGHT_BROWSERS_PATH = bundledPath;
+  return bundledPath;
+}
 
 export async function launchPersistentProfile(input: {
   paths: RuntimePaths;
@@ -13,6 +32,8 @@ export async function launchPersistentProfile(input: {
   const safeProfile = `${input.workflowId}-${input.profileName}`.replace(/[^\w.-]+/g, "_");
   const profileDir = path.join(input.paths.browserProfilesDir, safeProfile);
   ensureDir(profileDir);
+  configureBundledPlaywrightBrowsers();
+  const { chromium } = await import("playwright");
   return chromium.launchPersistentContext(profileDir, {
     headless: input.headless ?? false,
     acceptDownloads: true,

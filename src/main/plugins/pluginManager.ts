@@ -16,15 +16,28 @@ interface LoadedPluginVersion {
   workflows: WorkflowRegistration[];
 }
 
+interface PluginManagerOptions {
+  bundledPluginRoot?: string;
+}
+
+interface BundledPluginSeedState {
+  version: 1;
+  seeded: string[];
+}
+
 type WorkflowFactory = (sdk: WorkflowSdk) => WorkflowDefinition[] | Promise<WorkflowDefinition[]>;
+
+const BUNDLED_PLUGIN_SEED_STATE_FILE = ".bundled-seed-state.json";
 
 export class PluginManager {
   private readonly pluginRoot: string;
+  private readonly bundledPluginRoot?: string;
   private installedPlugins: InstalledPluginRecord[] = [];
   private workflowRegistrations: WorkflowRegistration[] = [];
 
-  constructor(userDataDir: string) {
+  constructor(userDataDir: string, options: PluginManagerOptions = {}) {
     this.pluginRoot = path.join(userDataDir, "plugins");
+    this.bundledPluginRoot = options.bundledPluginRoot ? path.resolve(options.bundledPluginRoot) : undefined;
   }
 
   get rootDir(): string {
@@ -41,6 +54,7 @@ export class PluginManager {
 
   async reload(): Promise<void> {
     fs.mkdirSync(this.pluginRoot, { recursive: true });
+    this.seedBundledPlugins();
     const sdk = createWorkflowSdk();
     const loaded: LoadedPluginVersion[] = [];
     for (const manifestPath of this.findPluginManifestPaths()) {
@@ -94,6 +108,37 @@ export class PluginManager {
     const resolved = path.resolve(this.pluginRoot, pluginId, version);
     assertPathInside(this.pluginRoot, resolved);
     return resolved;
+  }
+
+  private seedBundledPlugins(): void {
+    if (!this.bundledPluginRoot || !fs.existsSync(this.bundledPluginRoot)) return;
+
+    const statePath = path.join(this.pluginRoot, BUNDLED_PLUGIN_SEED_STATE_FILE);
+    const state = readBundledPluginSeedState(statePath);
+    const seeded = new Set(state.seeded);
+    let changed = false;
+
+    for (const pluginDirName of safeReadDirNames(this.bundledPluginRoot)) {
+      const sourceDir = path.join(this.bundledPluginRoot, pluginDirName);
+      const manifestPath = path.join(sourceDir, PLUGIN_MANIFEST_FILE);
+      if (!fs.existsSync(manifestPath)) continue;
+
+      const manifest = readPluginManifest(manifestPath);
+      const pluginKey = `${manifest.id}@${manifest.version}`;
+      if (seeded.has(pluginKey)) continue;
+
+      const targetDir = this.resolvePluginVersionDir(manifest.id, manifest.version);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+        fs.cpSync(sourceDir, targetDir, { recursive: true });
+      }
+      seeded.add(pluginKey);
+      changed = true;
+    }
+
+    if (changed) {
+      writeBundledPluginSeedState(statePath, { version: 1, seeded: [...seeded].sort() });
+    }
   }
 
   private findPluginManifestPaths(): string[] {
@@ -170,6 +215,24 @@ export class PluginManager {
       };
     }
   }
+}
+
+function readBundledPluginSeedState(statePath: string): BundledPluginSeedState {
+  try {
+    const value = JSON.parse(fs.readFileSync(statePath, "utf8")) as Partial<BundledPluginSeedState>;
+    return {
+      version: 1,
+      seeded: Array.isArray(value.seeded) ? value.seeded.filter((item): item is string => typeof item === "string") : []
+    };
+  } catch {
+    return { version: 1, seeded: [] };
+  }
+}
+
+function writeBundledPluginSeedState(statePath: string, state: BundledPluginSeedState): void {
+  const temporaryPath = `${statePath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  fs.renameSync(temporaryPath, statePath);
 }
 
 function readPluginManifest(manifestPath: string): PluginManifest {

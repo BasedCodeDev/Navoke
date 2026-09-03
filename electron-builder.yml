@@ -1,0 +1,51 @@
+appId: dev.basedcode.navoke
+productName: Navoke
+
+directories:
+  output: release
+
+files:
+  - dist/main/**/*
+  - dist/preload/**/*
+  - dist/renderer/**/*
+  - dist/cli/**/*
+  - package.json
+
+asar: true
+
+extraResources:
+  - from: .playwright-browsers
+    to: playwright-browsers
+    filter:
+      - "**/*"
+  - from: extension
+    to: extension
+    filter:
+      - "**/*"
+  - from: plugins
+    to: plugins
+    filter:
+      - "*/plugin.json"
+      - "*/dist/**/*"
+
+extraFiles:
+  - from: LICENSE
+    to: LICENSE
+
+win:
+  icon: public/assets/app-icon.ico
+  executableName: Navoke
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Navoke
+  license: LICENSE
+  artifactName: Navoke-Setup-${version}-${arch}.${ext}

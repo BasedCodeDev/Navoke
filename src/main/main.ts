@@ -34,6 +34,7 @@ interface AppConfig {
   projectDialogCancelled?: boolean;
   platform: NodeJS.Platform;
   pluginRootDir: string | null;
+  browserExtensionDir: string | null;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -67,7 +68,7 @@ async function bootstrap(): Promise<void> {
   Menu.setApplicationMenu(null);
   const userDataDir = app.getPath("userData");
   settingsStore = new AppSettingsStore(userDataDir);
-  pluginManager = new PluginManager(userDataDir);
+  pluginManager = new PluginManager(userDataDir, { bundledPluginRoot: resolveBundledResourceDir("plugins") });
   await pluginManager.reload();
   replaceWorkflowRegistry(createWorkflowRegistry(pluginManager));
   registerIpc();
@@ -105,7 +106,8 @@ function getConfig(): AppConfig {
     projectName: runtime?.paths.projectDir ? projectDisplayName(runtime.paths.projectDir) : null,
     recentProjects: getRecentProjects(),
     platform: process.platform,
-    pluginRootDir: pluginManager?.rootDir ?? null
+    pluginRootDir: pluginManager?.rootDir ?? null,
+    browserExtensionDir: resolveBundledResourceDir("extension") ?? null
   };
 }
 
@@ -272,6 +274,13 @@ function resolveAssetPath(relativePath: string): string | undefined {
     path.join(process.cwd(), "public", relativePath)
   ];
   return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
+function resolveBundledResourceDir(name: string): string | undefined {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, name)]
+    : [path.join(process.cwd(), name), path.join(process.resourcesPath, name)];
+  return candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isDirectory());
 }
 
 function createWindow(): BrowserWindow {

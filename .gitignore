@@ -6,6 +6,7 @@ dist/
 dist-ssr/
 out/
 release/
+.playwright-browsers/
 .vite/
 *.tsbuildinfo
 !plugins/

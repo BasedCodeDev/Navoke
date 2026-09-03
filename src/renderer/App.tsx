@@ -990,6 +990,7 @@ export default function App(): JSX.Element {
               plugins={plugins}
               workflows={workflows}
               rootDir={pluginsQuery.data?.rootDir ?? configQuery.data?.pluginRootDir ?? ""}
+              browserExtensionDir={configQuery.data?.browserExtensionDir ?? ""}
               hasProject={hasProject}
               isLoading={pluginsQuery.isLoading}
               isInstalling={installPluginMutation.isPending}
@@ -1282,6 +1283,7 @@ function PluginPanel({
   plugins,
   workflows,
   rootDir,
+  browserExtensionDir,
   hasProject,
   isLoading,
   isInstalling,
@@ -1293,6 +1295,7 @@ function PluginPanel({
   plugins: InstalledPluginRecord[];
   workflows: WorkflowSummary[];
   rootDir: string;
+  browserExtensionDir: string;
   hasProject: boolean;
   isLoading: boolean;
   isInstalling: boolean;
@@ -1315,10 +1318,23 @@ function PluginPanel({
               {rootDir || "Open a project to start the local API and manage user plugins."}
             </p>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={!hasProject}>
-            <RefreshCcw className="h-4 w-4" />
-            Refresh
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void window.navoke.openPath(browserExtensionDir)}
+              disabled={!browserExtensionDir}
+              title="Open the unpacked Navoke browser extension folder"
+            >
+              <FolderOpen className="h-4 w-4" />
+              Browser extension
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={!hasProject}>
+              <RefreshCcw className="h-4 w-4" />
+              Refresh
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-4 pt-2">
