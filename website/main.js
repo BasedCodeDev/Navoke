@@ -761,9 +761,9 @@ const sectionNavigator = document.querySelector("[data-section-navigator]");
 if (sectionNavigator) {
   const pageSections = [
     { id: "top", label: "Overview" },
-    { id: "how-it-works", label: "How it works" },
-    { id: "real-project", label: "Real project" },
     { id: "product", label: "Inside Navoke" },
+    { id: "real-project", label: "Real project" },
+    { id: "how-it-works", label: "How it works" },
     { id: "why-navoke", label: "Agent workflows" },
     { id: "workflows", label: "Marketplace" },
     { id: "authors", label: "For plugin authors" },
