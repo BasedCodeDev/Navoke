@@ -2,6 +2,11 @@ import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("navoke", {
   getConfig: () => ipcRenderer.invoke("app:get-config"),
+  getAgentSetupStatus: () => ipcRenderer.invoke("agent-setup:get-status"),
+  installAgentSetup: (targets: Array<"codex" | "claude">) => ipcRenderer.invoke("agent-setup:install", { targets }),
+  saveAgentSetupPreferences: (targets: Array<"codex" | "claude">) =>
+    ipcRenderer.invoke("agent-setup:save-preferences", { targets }),
+  dismissFirstRunAgentSetup: () => ipcRenderer.invoke("agent-setup:dismiss-first-run"),
   openProject: (path?: string) => ipcRenderer.invoke("project:open", path),
   renameProject: (projectPath: string, name: string) => ipcRenderer.invoke("project:rename", { projectPath, name }),
   selectFiles: (options?: { title?: string; filters?: Array<{ name: string; extensions: string[] }> }) =>

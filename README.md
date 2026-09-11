@@ -233,16 +233,17 @@ If a run reaches `waiting_manual`, complete the requested browser action in the 
 
 ### Agent Skill
 
-The repo includes agent skill copies at `.agents/skills/navoke` and `.claude/skills/navoke`. To make the skill available from another project, copy the appropriate folder into that repo's agent skill directory. For Claude Code, use `.claude/skills/navoke`; for other agent environments, use their supported project or global skills directory.
+The Windows desktop app opens Agent Setup on first run. It can install or update the Navoke skill for Codex and Claude Code, create a self-contained `navoke` launcher, and add that launcher to the user `PATH`. Agent Setup remains available from the app toolbar, and the app shows a status banner when a selected integration is missing or outdated.
+
+The repo also includes synchronized project skill copies at `.agents/skills/navoke` and `.claude/skills/navoke`. Use these for source development or manual installation.
 
 For per-user global install across projects:
 
 #### Linux
 
 ```bash
-# Codex: use CODEX_HOME when set; otherwise use ~/.codex
-codexHome="${CODEX_HOME:-$HOME/.codex}"
-codexSkills="$codexHome/skills"
+# Codex: personal skills live under ~/.agents/skills
+codexSkills="$HOME/.agents/skills"
 mkdir -p "$codexSkills"
 cp -R ".agents/skills/navoke" "$codexSkills/"
 
@@ -255,8 +256,8 @@ cp -R ".claude/skills/navoke" "$claudeSkills/"
 #### Windows (PowerShell)
 
 ```powershell
-# Codex: use CODEX_HOME when set; otherwise use ~/.codex
-$codexSkills = if ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "skills" } else { Join-Path $HOME ".codex\skills" }
+# Codex: personal skills live under ~/.agents/skills
+$codexSkills = Join-Path $HOME ".agents\skills"
 New-Item -ItemType Directory -Force $codexSkills | Out-Null
 Copy-Item -Recurse -Force ".agents\skills\navoke" (Join-Path $codexSkills "navoke")
 
@@ -266,7 +267,7 @@ New-Item -ItemType Directory -Force $claudeSkills | Out-Null
 Copy-Item -Recurse -Force ".claude\skills\navoke" (Join-Path $claudeSkills "navoke")
 ```
 
-The skill only teaches agents how to use the CLI. The `navoke` command itself must still be built and linked or otherwise available on `PATH`.
+Manual skill copies do not install the CLI. When developing from source, build and link the CLI as described above. With the Windows desktop installation, use Agent Setup so the skill and launcher are installed together.
 
 ## Selector Calibration
 

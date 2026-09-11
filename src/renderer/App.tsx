@@ -258,6 +258,9 @@ export default function App(): JSX.Element {
   const [themeId, setThemeId] = useState<ThemeId>(getInitialThemeId);
   const [fontId, setFontId] = useState<FontId>(getInitialFontId);
   const [themePickerOpen, setThemePickerOpen] = useState(false);
+  const [agentSetupOpen, setAgentSetupOpen] = useState(false);
+  const [agentSetupPromptHandled, setAgentSetupPromptHandled] = useState(false);
+  const [agentSetupErrors, setAgentSetupErrors] = useState<string[]>([]);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
   const [workspaceView, setWorkspaceView] = useState<"runs" | "lab" | "plugins">("runs");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -278,6 +281,11 @@ export default function App(): JSX.Element {
   const [resubmitError, setResubmitError] = useState<string | null>(null);
 
   const configQuery = useQuery({ queryKey: ["config"], queryFn: getConfig });
+  const agentSetupQuery = useQuery({
+    queryKey: ["agent-setup"],
+    queryFn: () => window.navoke.getAgentSetupStatus(),
+    refetchInterval: 30_000
+  });
   const hasProject = Boolean(configQuery.data?.apiBaseUrl && configQuery.data.projectDir);
   const apiBaseUrl = configQuery.data?.apiBaseUrl ?? "";
   const workflowsQuery = useQuery({ queryKey: ["workflows", apiBaseUrl], queryFn: listWorkflows, enabled: hasProject });
@@ -306,6 +314,18 @@ export default function App(): JSX.Element {
     refetchInterval: selectedRunId && hasProject ? 2_000 : false
   });
 
+  const installAgentSetupMutation = useMutation({
+    mutationFn: (targets: NavokeAgentSetupTarget[]) => window.navoke.installAgentSetup(targets),
+    onSuccess: (result) => {
+      queryClient.setQueryData(["agent-setup"], result.status);
+      setAgentSetupErrors(result.errors);
+      if (result.errors.length === 0) setAgentSetupOpen(false);
+    },
+    onError: (error) => {
+      setAgentSetupErrors([error instanceof Error ? error.message : String(error)]);
+    }
+  });
+
   const selectedTheme = useMemo(() => getThemeById(themeId), [themeId]);
   const selectedFont = useMemo(() => getFontById(fontId), [fontId]);
 
@@ -324,6 +344,13 @@ export default function App(): JSX.Element {
       setShowProjectLanding(true);
     }
   }, [configQuery.data, hasProject]);
+
+  useEffect(() => {
+    const setup = agentSetupQuery.data;
+    if (!setup?.supported || setup.firstRunSeen || agentSetupPromptHandled) return;
+    setAgentSetupPromptHandled(true);
+    setAgentSetupOpen(true);
+  }, [agentSetupPromptHandled, agentSetupQuery.data]);
 
   useEffect(() => {
     if (!hasProject) return;
@@ -732,9 +759,27 @@ export default function App(): JSX.Element {
       );
   }
 
+  async function closeAgentSetup(targets: NavokeAgentSetupTarget[]): Promise<void> {
+    setAgentSetupOpen(false);
+    setAgentSetupErrors([]);
+    if (agentSetupQuery.data?.firstRunSeen) return;
+    try {
+      await window.navoke.saveAgentSetupPreferences(targets);
+      const status = await window.navoke.dismissFirstRunAgentSetup();
+      queryClient.setQueryData(["agent-setup"], status);
+    } catch (error) {
+      setActionError({
+        title: "Could not save agent setup",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
   const showLanding = showProjectLanding || !hasProject;
   const currentProjectDir = configQuery.data?.projectDir ?? "";
   const projectName = configQuery.data?.projectName ?? "Navoke";
+  const agentSetup = agentSetupQuery.data;
+  const showAgentSetupBanner = Boolean(agentSetup?.supported && agentSetup.firstRunSeen && agentSetup.needsAttention);
   const reusedSourceInput = resubmitSourceRun?.input ?? librarySourceEntry?.input ?? null;
   const reusedWorkflow = resubmitSourceRun
     ? resolveRunWorkflowAvailability(resubmitSourceRun, workflows).workflow ?? undefined
@@ -883,17 +928,34 @@ export default function App(): JSX.Element {
                   <FolderOpen className="h-4 w-4" />
                   Switch Project
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void window.navoke.openPath(currentProjectDir)}
-                  disabled={!currentProjectDir}
-                >
-                  <ExternalLink className="h-4 w-4" />
-                  File Manager
-                </Button>
               </>
+            ) : null}
+            {agentSetup?.supported ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setAgentSetupErrors([]);
+                  setAgentSetupOpen(true);
+                }}
+                className={cn(agentSetup.needsAttention && "border-amber-500/60")}
+              >
+                <Bot className="h-4 w-4" />
+                Agent Setup
+              </Button>
+            ) : null}
+            {!showLanding ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void window.navoke.openPath(currentProjectDir)}
+                disabled={!currentProjectDir}
+              >
+                <ExternalLink className="h-4 w-4" />
+                File Manager
+              </Button>
             ) : null}
             <Button
               type="button"
@@ -909,6 +971,16 @@ export default function App(): JSX.Element {
           </div>
         </div>
       </header>
+
+      {showAgentSetupBanner ? (
+        <AgentSetupBanner
+          status={agentSetup!}
+          onOpen={() => {
+            setAgentSetupErrors([]);
+            setAgentSetupOpen(true);
+          }}
+        />
+      ) : null}
 
       {showLanding ? (
         <ProjectLanding
@@ -1118,6 +1190,18 @@ export default function App(): JSX.Element {
       {actionError ? (
         <ActionErrorDialog title={actionError.title} message={actionError.message} onClose={() => setActionError(null)} />
       ) : null}
+      {agentSetupOpen && agentSetup?.supported ? (
+        <AgentSetupModal
+          status={agentSetup}
+          errors={agentSetupErrors}
+          isInstalling={installAgentSetupMutation.isPending}
+          onInstall={(targets) => {
+            setAgentSetupErrors([]);
+            installAgentSetupMutation.mutate(targets);
+          }}
+          onClose={(targets) => void closeAgentSetup(targets)}
+        />
+      ) : null}
       {themePickerOpen ? (
         <ThemePickerModal
           themes={appThemes}
@@ -1131,6 +1215,169 @@ export default function App(): JSX.Element {
       ) : null}
     </main>
   );
+}
+
+function AgentSetupBanner({ status, onOpen }: { status: NavokeAgentSetupStatus; onOpen(): void }): JSX.Element {
+  const selectedAgents = status.agents.filter((agent) => status.targets.includes(agent.target));
+  const missingParts = [
+    ...(status.cli.status === "current" ? [] : ["CLI"]),
+    ...selectedAgents.filter((agent) => agent.status !== "current").map((agent) => agent.label)
+  ];
+
+  return (
+    <div className={cn("app-no-drag shrink-0 border-b px-5 py-2.5", toneClassNames.warning)}>
+      <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-2 text-sm">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span className="truncate">
+            Agent setup needs attention{missingParts.length > 0 ? `: ${missingParts.join(", ")}` : ""}.
+          </span>
+        </div>
+        <Button type="button" variant="outline" size="sm" onClick={onOpen}>
+          Install / Update
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function AgentSetupModal({
+  status,
+  errors,
+  isInstalling,
+  onInstall,
+  onClose
+}: {
+  status: NavokeAgentSetupStatus;
+  errors: string[];
+  isInstalling: boolean;
+  onInstall(targets: NavokeAgentSetupTarget[]): void;
+  onClose(targets: NavokeAgentSetupTarget[]): void;
+}): JSX.Element {
+  const [targets, setTargets] = useState<NavokeAgentSetupTarget[]>(status.targets);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isInstalling) onClose(targets);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isInstalling, onClose, targets]);
+
+  function toggleTarget(target: NavokeAgentSetupTarget): void {
+    setTargets((current) => {
+      if (current.includes(target)) {
+        return current.length === 1 ? current : current.filter((candidate) => candidate !== target);
+      }
+      return [...current, target];
+    });
+  }
+
+  return (
+    <div
+      className="app-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 px-4 py-6"
+      onMouseDown={() => {
+        if (!isInstalling) onClose(targets);
+      }}
+    >
+      <div
+        className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-background shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-setup-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+          <div>
+            <h2 id="agent-setup-title" className="text-lg font-semibold">
+              Agent Setup
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Install the Navoke skill and Windows CLI launcher for your coding agents.
+            </p>
+          </div>
+          <Button type="button" variant="ghost" size="icon" onClick={() => onClose(targets)} disabled={isInstalling} aria-label="Close agent setup">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="min-h-0 space-y-4 overflow-y-auto p-5">
+          <div className="space-y-2">
+            {status.agents.map((agent) => {
+              const selected = targets.includes(agent.target);
+              return (
+                <label key={agent.target} className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-card p-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={selected}
+                    onChange={() => toggleTarget(agent.target)}
+                    disabled={isInstalling}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-medium">{agent.label}</span>
+                      <AgentSetupStatusBadge status={agent.status} />
+                    </span>
+                    <span className="mt-1 block truncate text-xs text-muted-foreground" title={agent.path}>
+                      {agent.path}
+                    </span>
+                    {agent.error ? <span className={cn("mt-1 block text-xs", toneTextClassNames.danger)}>{agent.error}</span> : null}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="rounded-md border border-border bg-card p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-medium">Navoke CLI</div>
+              <AgentSetupStatusBadge status={status.cli.status} />
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground" title={status.cli.path}>
+              {status.cli.path}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span>PATH: {status.cli.pathConfigured ? "configured" : "missing"}</span>
+              <span>Launcher: {status.cli.verified ? "verified" : "not verified"}</span>
+            </div>
+            {status.cli.error ? <div className={cn("mt-2 text-xs", toneTextClassNames.danger)}>{status.cli.error}</div> : null}
+          </div>
+
+          {errors.length > 0 ? (
+            <div className={cn("rounded-md border p-3 text-sm", toneClassNames.danger)}>
+              <div className="font-medium">Setup did not finish</div>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {errors.map((error) => (
+                  <li key={error}>{error}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <div className={cn("rounded-md border p-3 text-xs", toneClassNames.info)}>
+            Navoke manages only its own skill folders and launcher. Restart an already-running agent if the new skill does not appear.
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-4">
+          <Button type="button" variant="ghost" onClick={() => onClose(targets)} disabled={isInstalling}>
+            {status.firstRunSeen ? "Close" : "Not now"}
+          </Button>
+          <Button type="button" onClick={() => onInstall(targets)} disabled={isInstalling || targets.length === 0}>
+            <Download className="h-4 w-4" />
+            {isInstalling ? "Setting up..." : status.needsAttention ? "Install / Update" : "Reinstall selected"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentSetupStatusBadge({ status }: { status: NavokeAgentSetupComponentStatus }): JSX.Element {
+  const label = status === "current" ? "Current" : status === "outdated" ? "Update available" : status === "missing" ? "Missing" : "Error";
+  const tone = status === "current" ? toneClassNames.success : status === "error" ? toneClassNames.danger : toneClassNames.warning;
+  return <Badge className={cn("shrink-0 border", tone)}>{label}</Badge>;
 }
 
 function AppWindowControls(): JSX.Element | null {

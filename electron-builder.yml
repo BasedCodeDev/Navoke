@@ -14,6 +14,10 @@ files:
 asar: true
 
 extraResources:
+  - from: .agents/skills/navoke
+    to: agent-skills/navoke
+    filter:
+      - "**/*"
   - from: .playwright-browsers
     to: playwright-browsers
     filter:
@@ -47,6 +51,7 @@ win:
         - x64
 
 nsis:
+  include: build/installer.nsh
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

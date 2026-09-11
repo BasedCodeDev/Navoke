@@ -5,6 +5,17 @@ import { NAVOKE_INTERNAL_DIR_NAME } from "./runtime/paths";
 interface AppSettingsModel {
   lastProjectDir?: string;
   recentProjectDirs?: string[];
+  agentSetup?: {
+    firstRunSeen?: boolean;
+    targets?: StoredAgentSetupTarget[];
+  };
+}
+
+export type StoredAgentSetupTarget = "codex" | "claude";
+
+export interface StoredAgentSetupPreferences {
+  firstRunSeen: boolean;
+  targets: StoredAgentSetupTarget[];
 }
 
 export class AppSettingsStore {
@@ -30,6 +41,15 @@ export class AppSettingsStore {
     return normalizeRecentProjectDirs(this.read());
   }
 
+  get agentSetupPreferences(): StoredAgentSetupPreferences {
+    const stored = this.read().agentSetup;
+    const targets = normalizeAgentSetupTargets(stored?.targets);
+    return {
+      firstRunSeen: Boolean(stored?.firstRunSeen),
+      targets: targets.length > 0 ? targets : ["codex", "claude"]
+    };
+  }
+
   setLastProjectDir(projectDir: string): void {
     const resolvedProjectDir = path.resolve(projectDir);
     const recentProjectDirs = [
@@ -37,6 +57,16 @@ export class AppSettingsStore {
       ...this.recentProjectDirs.filter((recentProjectDir) => path.resolve(recentProjectDir) !== resolvedProjectDir)
     ].slice(0, 20);
     this.write({ ...this.read(), lastProjectDir: resolvedProjectDir, recentProjectDirs });
+  }
+
+  setAgentSetupPreferences(preferences: StoredAgentSetupPreferences): void {
+    this.write({
+      ...this.read(),
+      agentSetup: {
+        firstRunSeen: Boolean(preferences.firstRunSeen),
+        targets: normalizeAgentSetupTargets(preferences.targets)
+      }
+    });
   }
 
   private write(settings: AppSettingsModel): void {
@@ -100,4 +130,9 @@ function normalizeRecentProjectDirs(settings: AppSettingsModel): string[] {
   }
 
   return projectDirs;
+}
+
+function normalizeAgentSetupTargets(targets: readonly string[] | undefined): StoredAgentSetupTarget[] {
+  const candidates = Array.isArray(targets) ? targets : [];
+  return (["codex", "claude"] as const).filter((target) => candidates.includes(target));
 }

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { projectDisplayName, projectMetadataPath, renameProject } from "../../src/main/projectSettings";
+import { AppSettingsStore, projectDisplayName, projectMetadataPath, renameProject } from "../../src/main/projectSettings";
 
 const tempDirs: string[] = [];
 
@@ -58,5 +58,29 @@ describe("project settings metadata", () => {
     const missingProjectDir = path.join(parentDir, "Missing Project");
 
     expect(() => renameProject(missingProjectDir, "New Name")).toThrow("Project folder not found:");
+  });
+});
+
+describe("application settings", () => {
+  function makeSettingsStore(): AppSettingsStore {
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-app-settings-"));
+    tempDirs.push(userDataDir);
+    return new AppSettingsStore(userDataDir);
+  }
+
+  it("defaults agent setup to both supported agents without marking the prompt seen", () => {
+    const store = makeSettingsStore();
+
+    expect(store.agentSetupPreferences).toEqual({ firstRunSeen: false, targets: ["codex", "claude"] });
+  });
+
+  it("persists normalized agent setup preferences without changing project settings", () => {
+    const store = makeSettingsStore();
+    store.setLastProjectDir("C:\\Work\\Example");
+
+    store.setAgentSetupPreferences({ firstRunSeen: true, targets: ["claude"] });
+
+    expect(store.agentSetupPreferences).toEqual({ firstRunSeen: true, targets: ["claude"] });
+    expect(store.lastProjectDir).toBe(path.resolve("C:\\Work\\Example"));
   });
 });

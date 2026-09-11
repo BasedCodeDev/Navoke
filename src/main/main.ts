@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from "electron";
+import { AgentSetupManager, type AgentSetupPreferences, type AgentSetupTarget } from "./agentSetup";
 import { ApiServer } from "./api/server";
 import { SqliteStore } from "./db/sqliteStore";
 import { extensionBridge } from "./extension/extensionBridge";
@@ -40,6 +42,7 @@ interface AppConfig {
 let mainWindow: BrowserWindow | null = null;
 let runtime: RuntimeState | null = null;
 let settingsStore: AppSettingsStore | null = null;
+let agentSetupManager: AgentSetupManager | null = null;
 let pluginManager: PluginManager | null = null;
 let workflows: WorkflowRegistry = new Map();
 let startupCanCreateWindow = false;
@@ -68,6 +71,7 @@ async function bootstrap(): Promise<void> {
   Menu.setApplicationMenu(null);
   const userDataDir = app.getPath("userData");
   settingsStore = new AppSettingsStore(userDataDir);
+  agentSetupManager = createAgentSetupManager();
   pluginManager = new PluginManager(userDataDir, { bundledPluginRoot: resolveBundledResourceDir("plugins") });
   await pluginManager.reload();
   replaceWorkflowRegistry(createWorkflowRegistry(pluginManager));
@@ -170,6 +174,11 @@ function getPluginManager(): PluginManager {
   return pluginManager;
 }
 
+function getAgentSetupManager(): AgentSetupManager {
+  if (!agentSetupManager) throw new Error("Agent setup is not initialized.");
+  return agentSetupManager;
+}
+
 async function closeRuntime(): Promise<void> {
   const current = runtime;
   runtime = null;
@@ -199,6 +208,18 @@ async function chooseProjectDirectory(title: string): Promise<string | null> {
 
 function registerIpc(): void {
   ipcMain.handle("app:get-config", () => getConfig());
+
+  ipcMain.handle("agent-setup:get-status", () => getAgentSetupManager().getStatus());
+
+  ipcMain.handle("agent-setup:install", (_event, input?: { targets?: AgentSetupTarget[] }) => {
+    return getAgentSetupManager().install(Array.isArray(input?.targets) ? input.targets : []);
+  });
+
+  ipcMain.handle("agent-setup:save-preferences", (_event, input?: { targets?: AgentSetupTarget[] }) => {
+    return getAgentSetupManager().savePreferences(Array.isArray(input?.targets) ? input.targets : []);
+  });
+
+  ipcMain.handle("agent-setup:dismiss-first-run", () => getAgentSetupManager().dismissFirstRun());
 
   ipcMain.handle("window:minimize", (event) => {
     const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
@@ -261,6 +282,39 @@ function registerIpc(): void {
   ipcMain.handle("shell:open-external", async (_event, url: string) => {
     await shell.openExternal(url);
   });
+}
+
+function createAgentSetupManager(): AgentSetupManager {
+  const store = settingsStore;
+  if (!store) throw new Error("Application settings are not initialized.");
+  const relativeSkillPath = path.join("agent-skills", "navoke");
+  const skillSourceDir =
+    resolveBundledResourceDir(relativeSkillPath) ??
+    (app.isPackaged ? path.join(process.resourcesPath, relativeSkillPath) : path.join(process.cwd(), ".agents", "skills", "navoke"));
+
+  return new AgentSetupManager({
+    appVersion: app.getVersion(),
+    executablePath: process.execPath,
+    cliScriptPath: resolveCliScriptPath(),
+    skillSourceDir,
+    homeDir: os.homedir(),
+    localAppDataDir: process.env.LOCALAPPDATA?.trim() || path.join(os.homedir(), "AppData", "Local"),
+    platform: process.platform,
+    preferences: {
+      get: () => store.agentSetupPreferences as AgentSetupPreferences,
+      set: (preferences) => store.setAgentSetupPreferences(preferences)
+    }
+  });
+}
+
+function resolveCliScriptPath(): string {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, "app.asar", "dist", "cli", "index.js")]
+    : [
+        path.join(process.cwd(), "dist", "cli", "index.js"),
+        path.join(process.resourcesPath, "app.asar", "dist", "cli", "index.js")
+      ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 function resolveAppIconPath(): string | undefined {

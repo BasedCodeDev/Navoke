@@ -7,7 +7,13 @@ description: Use when driving the Navoke browser workflow automation app from th
 
 Use `navoke` only when the Navoke desktop app is already running with a project open. The CLI talks to the app's local API and does not start a separate runtime.
 
-If `navoke` is not on `PATH`, build the CLI and invoke it directly from the repo:
+On Windows, use Navoke's Agent Setup screen to install or update this skill and the CLI launcher. If the current agent session has not picked up the updated user `PATH`, invoke the launcher directly:
+
+```powershell
+& "$env:LOCALAPPDATA\Navoke\bin\navoke.cmd" <command> ...
+```
+
+Only when working from a Navoke source checkout without the installed desktop integration, build and invoke the CLI directly:
 
 ```powershell
 npm.cmd run build:cli
@@ -80,10 +86,10 @@ navoke --project <project-dir> workflow <workflowId>
 4. Start and watch the run:
 
 ```powershell
-navoke --project <project-dir> run <workflowId> --input input.json --agent codex --wait
+navoke --project <project-dir> run <workflowId> --input input.json --agent <agent-name> --wait
 ```
 
-Use `--name <name>` when a human-readable run name helps identify the output in the UI. Use `--agent <name>` so the UI can show who is driving the run.
+Use `--name <name>` when a human-readable run name helps identify the output in the UI. Use `--agent codex` from Codex or `--agent claude` from Claude Code so the UI can show who is driving the run.
 
 ## ChatGPT Single Prompt Inputs
 
@@ -148,7 +154,7 @@ For `navoke.model-renderer.render-image`, use a single `modelFile` path to `.obj
 Run it with:
 
 ```powershell
-navoke --project <project-dir> run navoke.model-renderer.render-image --input render-model.json --agent codex --wait
+navoke --project <project-dir> run navoke.model-renderer.render-image --input render-model.json --agent <agent-name> --wait
 ```
 
 For `navoke.model-renderer.geometry-bounds`, use:
@@ -167,7 +173,7 @@ Use this loop with Workflow Lab when a browser plugin workflow is being built, c
 
 1. Confirm the runtime and workflow manifest with `status`, `workflows`, and `workflow`.
 2. Create a stable input JSON file with real absolute file paths. Avoid BOM-encoded JSON when creating files from PowerShell.
-3. Start a named run with `--project`, `--input`, `--agent codex`, and `--name`.
+3. Start a named run with `--project`, `--input`, the correct `--agent` value for the current agent, and `--name`.
 4. Watch in bounded chunks. If local `watch` times out, the run may still be active; call `get` or `watch` again.
 5. On failure, call `get <runId>` and preserve the exact error, current step, events, artifacts, screenshots, and trace path.
 6. Use Workflow Lab or trace snapshots to learn the real page state, then patch the plugin and tests.
@@ -182,7 +188,7 @@ For plugin reloads, try `navoke --project <project-dir> plugin-install <plugin-d
 - Run details, events, and artifacts: `navoke --project <project-dir> get <runId>`
 - Library entries: `navoke --project <project-dir> library`
 - Library entry detail: `navoke --project <project-dir> library get <entryId>`
-- Run a library entry: `navoke --project <project-dir> library run <entryId> --agent codex --wait`
+- Run a library entry: `navoke --project <project-dir> library run <entryId> --agent <agent-name> --wait`
 - Watch an existing run: `navoke --project <project-dir> watch <runId>`
 - Pause/resume/cancel/delete: `navoke --project <project-dir> pause <runId>`, `navoke --project <project-dir> resume <runId>`, `navoke --project <project-dir> cancel <runId>`, `navoke --project <project-dir> delete <runId>`
 - Installed plugins: `navoke --project <project-dir> plugins`

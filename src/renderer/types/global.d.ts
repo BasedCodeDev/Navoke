@@ -17,9 +17,48 @@ declare global {
     isMaximized: boolean;
   }
 
+  type NavokeAgentSetupTarget = "codex" | "claude";
+  type NavokeAgentSetupComponentStatus = "missing" | "current" | "outdated" | "error";
+
+  interface NavokeAgentSkillSetupStatus {
+    target: NavokeAgentSetupTarget;
+    label: string;
+    path: string;
+    status: NavokeAgentSetupComponentStatus;
+    installedVersion?: string;
+    error?: string;
+  }
+
+  interface NavokeAgentCliSetupStatus {
+    path: string;
+    status: NavokeAgentSetupComponentStatus;
+    pathConfigured: boolean;
+    verified: boolean;
+    error?: string;
+  }
+
+  interface NavokeAgentSetupStatus {
+    supported: boolean;
+    appVersion: string;
+    firstRunSeen: boolean;
+    targets: NavokeAgentSetupTarget[];
+    agents: NavokeAgentSkillSetupStatus[];
+    cli: NavokeAgentCliSetupStatus;
+    needsAttention: boolean;
+  }
+
+  interface NavokeAgentSetupInstallResult {
+    status: NavokeAgentSetupStatus;
+    errors: string[];
+  }
+
   interface Window {
     navoke: {
       getConfig(): Promise<NavokeConfig>;
+      getAgentSetupStatus(): Promise<NavokeAgentSetupStatus>;
+      installAgentSetup(targets: NavokeAgentSetupTarget[]): Promise<NavokeAgentSetupInstallResult>;
+      saveAgentSetupPreferences(targets: NavokeAgentSetupTarget[]): Promise<NavokeAgentSetupStatus>;
+      dismissFirstRunAgentSetup(): Promise<NavokeAgentSetupStatus>;
       openProject(path?: string): Promise<NavokeConfig>;
       renameProject(projectPath: string, name: string): Promise<NavokeConfig>;
       selectFiles(options?: {
