@@ -2125,7 +2125,7 @@ function RunDetailModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
+    <div className="app-no-drag fixed inset-0 z-50 overflow-hidden bg-slate-950/45 px-4 py-6" onMouseDown={onClose}>
       <div className="mx-auto flex min-h-full max-w-5xl items-start justify-center">
         <div
           className="w-full overflow-hidden rounded-lg border border-border bg-background shadow-xl"
@@ -2148,7 +2148,7 @@ function RunDetailModal({
               variant="ghost"
               size="icon"
               aria-label="Close run detail"
-              className="shrink-0"
+              className="app-no-drag shrink-0"
               onClick={onClose}
             >
               <X className="h-4 w-4" />
