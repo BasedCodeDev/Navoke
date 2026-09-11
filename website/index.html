@@ -100,72 +100,117 @@
           <p class="release-note">Installer releases are published on <span class="inline-brand">GitHub</span>.</p>
         </div>
 
-        <figure class="product-stage" aria-label="Navoke desktop application">
-          <div
-            class="product-stack"
-            data-product-stack
-            role="button"
-            tabindex="0"
-            aria-roledescription="screenshot carousel"
-            aria-label="Navoke product screenshots. Activate to show the next screenshot."
-          >
-            <div class="product-shot is-front" data-stack-slide aria-hidden="false">
-              <div class="product-shot__bar"><span>Projects</span><span class="status"><i aria-hidden="true"></i> local workspace</span></div>
-              <img
-                src="./img/screenshot-projects.png"
-                alt="Navoke project picker showing a local workspace"
-                width="1106"
-                height="819"
-                fetchpriority="high"
-              />
+        <figure
+          class="gateway-visual"
+          data-gateway
+          data-active-flow="0"
+          data-flow-phase="agent-request"
+          aria-describedby="gateway-description"
+        >
+          <div class="gateway-canvas" data-gateway-canvas>
+            <svg class="gateway-connections" data-gateway-connections aria-hidden="true">
+              <defs>
+                <marker id="gateway-arrow-request" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L8,4 L0,8 Z"></path>
+                </marker>
+                <marker id="gateway-arrow-result" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L8,4 L0,8 Z"></path>
+                </marker>
+              </defs>
+
+              <g class="gateway-route" data-gateway-route="0">
+                <path class="gateway-path gateway-path--request" data-gateway-path="agent-request" marker-end="url(#gateway-arrow-request)"></path>
+                <path class="gateway-path gateway-path--request" data-gateway-path="site-request" marker-end="url(#gateway-arrow-request)"></path>
+                <path class="gateway-path gateway-path--result" data-gateway-path="site-result" marker-end="url(#gateway-arrow-result)"></path>
+                <path class="gateway-path gateway-path--result" data-gateway-path="agent-result" marker-end="url(#gateway-arrow-result)"></path>
+                <path class="gateway-signal" data-gateway-signal="agent-request"></path>
+                <path class="gateway-signal" data-gateway-signal="site-request"></path>
+                <path class="gateway-signal gateway-signal--result" data-gateway-signal="site-result"></path>
+                <path class="gateway-signal gateway-signal--result" data-gateway-signal="agent-result"></path>
+              </g>
+              <g class="gateway-route" data-gateway-route="1">
+                <path class="gateway-path gateway-path--request" data-gateway-path="agent-request" marker-end="url(#gateway-arrow-request)"></path>
+                <path class="gateway-path gateway-path--request" data-gateway-path="site-request" marker-end="url(#gateway-arrow-request)"></path>
+                <path class="gateway-path gateway-path--result" data-gateway-path="site-result" marker-end="url(#gateway-arrow-result)"></path>
+                <path class="gateway-path gateway-path--result" data-gateway-path="agent-result" marker-end="url(#gateway-arrow-result)"></path>
+                <path class="gateway-signal" data-gateway-signal="agent-request"></path>
+                <path class="gateway-signal" data-gateway-signal="site-request"></path>
+                <path class="gateway-signal gateway-signal--result" data-gateway-signal="site-result"></path>
+                <path class="gateway-signal gateway-signal--result" data-gateway-signal="agent-result"></path>
+              </g>
+              <g class="gateway-route" data-gateway-route="2">
+                <path class="gateway-path gateway-path--request" data-gateway-path="agent-request" marker-end="url(#gateway-arrow-request)"></path>
+                <path class="gateway-path gateway-path--request" data-gateway-path="site-request" marker-end="url(#gateway-arrow-request)"></path>
+                <path class="gateway-path gateway-path--result" data-gateway-path="site-result" marker-end="url(#gateway-arrow-result)"></path>
+                <path class="gateway-path gateway-path--result" data-gateway-path="agent-result" marker-end="url(#gateway-arrow-result)"></path>
+                <path class="gateway-signal" data-gateway-signal="agent-request"></path>
+                <path class="gateway-signal" data-gateway-signal="site-request"></path>
+                <path class="gateway-signal gateway-signal--result" data-gateway-signal="site-result"></path>
+                <path class="gateway-signal gateway-signal--result" data-gateway-signal="agent-result"></path>
+              </g>
+            </svg>
+
+            <div class="gateway-cluster gateway-cluster--agents" aria-label="AI agents">
+              <button class="gateway-card" type="button" data-gateway-card data-gateway-agent data-flow-index="0" aria-label="Show the Codex to ChatGPT example">
+                <span class="gateway-card__icon gateway-card__icon--openai" aria-hidden="true">
+                  <img src="./img/brands/openai-blossom.svg" alt="" width="716" height="716" />
+                </span>
+                <span class="gateway-card__copy"><small>Agent</small><strong>Codex</strong></span>
+              </button>
+              <button class="gateway-card" type="button" data-gateway-card data-gateway-agent data-flow-index="1" aria-label="Show the Claude Code to Hunyuan example">
+                <span class="gateway-card__icon" aria-hidden="true">
+                  <img src="./img/brands/claude-spark.svg" alt="" width="94" height="94" />
+                </span>
+                <span class="gateway-card__copy"><small>Agent</small><strong>Claude Code</strong></span>
+              </button>
+              <button class="gateway-card" type="button" data-gateway-card data-gateway-agent data-flow-index="2" aria-label="Show the other agents to other websites example">
+                <span class="gateway-card__icon gateway-card__icon--generic" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M7 8 3 12l4 4M17 8l4 4-4 4M14 5l-4 14"></path></svg>
+                </span>
+                <span class="gateway-card__copy"><small>Compatible caller</small><strong>Other agents</strong></span>
+              </button>
             </div>
-            <div class="product-shot is-middle" data-stack-slide aria-hidden="true">
-              <div class="product-shot__bar"><span>Runs / completed</span><span>stored locally</span></div>
-              <img
-                src="./img/screenshot-runs-2.png"
-                alt="Navoke Runs screen showing completed image and model workflows"
-                width="1106"
-                height="819"
-              />
+
+            <div class="gateway-hub" data-gateway-hub>
+              <span class="gateway-hub__orbit" aria-hidden="true"></span>
+              <img src="./logo.png" alt="" width="1254" height="1254" aria-hidden="true" />
+              <strong>Navoke</strong>
+              <span>Website workflow engine</span>
             </div>
-            <div class="product-shot is-back" data-stack-slide aria-hidden="true">
-              <div class="product-shot__bar"><span>Run detail</span><span>results saved</span></div>
-              <img
-                src="./img/screenshot-rundetails.png"
-                alt="Navoke run detail showing workflow inputs and saved data and 3D model files"
-                width="1106"
-                height="819"
-              />
+
+            <div class="gateway-cluster gateway-cluster--sites" aria-label="Websites and services">
+              <button class="gateway-card" type="button" data-gateway-card data-gateway-site data-flow-index="0" aria-label="Show ChatGPT returning images through Navoke">
+                <span class="gateway-card__icon gateway-card__icon--openai" aria-hidden="true">
+                  <img src="./img/brands/openai-blossom.svg" alt="" width="716" height="716" />
+                </span>
+                <span class="gateway-card__copy"><small>Website</small><strong>ChatGPT</strong></span>
+              </button>
+              <button class="gateway-card" type="button" data-gateway-card data-gateway-site data-flow-index="1" aria-label="Show Hunyuan returning 3D models through Navoke">
+                <span class="gateway-card__icon" aria-hidden="true">
+                  <img src="./img/brands/hunyuan.png" alt="" width="512" height="512" />
+                </span>
+                <span class="gateway-card__copy"><small>Website</small><strong>Hunyuan</strong></span>
+              </button>
+              <button class="gateway-card" type="button" data-gateway-card data-gateway-site data-flow-index="2" aria-label="Show other websites returning files and data through Navoke">
+                <span class="gateway-card__icon gateway-card__icon--generic" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"></path></svg>
+                </span>
+                <span class="gateway-card__copy"><small>Any service</small><strong>Other websites</strong></span>
+              </button>
             </div>
-            <div class="product-shot is-queued" data-stack-slide aria-hidden="true">
-              <div class="product-shot__bar"><span>Workflow Lab</span><span>local session</span></div>
-              <img
-                src="./img/screenshot-workflowlab.png"
-                alt="Navoke Workflow Lab showing browser controls and the workflow library"
-                width="1106"
-                height="819"
-              />
-            </div>
-            <div class="product-shot is-queued" data-stack-slide aria-hidden="true">
-              <div class="product-shot__bar"><span>Plugins</span><span>installed workflows</span></div>
-              <img
-                src="./img/screenshot-plugins.png"
-                alt="Navoke Plugins screen showing installed workflow packages"
-                width="1106"
-                height="819"
-              />
-            </div>
-            <div class="product-shot is-queued" data-stack-slide aria-hidden="true">
-              <div class="product-shot__bar"><span>Run library</span><span>saved results</span></div>
-              <img
-                src="./img/screenshot-runs.png"
-                alt="Navoke run library showing saved 3D model results"
-                width="1106"
-                height="819"
-              />
-            </div>
+
+            <span class="gateway-output" data-gateway-output data-flow-index="0"><i aria-hidden="true">▧</i> Images</span>
+            <span class="gateway-output" data-gateway-output data-flow-index="1"><i aria-hidden="true">◇</i> 3D models</span>
+            <span class="gateway-output" data-gateway-output data-flow-index="2"><i aria-hidden="true">↳</i> Files + data</span>
           </div>
-          <figcaption><span>Real product / real runs</span><span>Chrome · saved sessions · local files</span></figcaption>
+
+          <div class="gateway-footer">
+            <div class="gateway-legend" aria-label="Diagram legend">
+              <span><i class="gateway-legend__line gateway-legend__line--request" aria-hidden="true"></i> Request</span>
+              <span><i class="gateway-legend__line gateway-legend__line--result" aria-hidden="true"></i> Website result</span>
+            </div>
+            <figcaption id="gateway-description">Example paths are paired for clarity. Any supported agent can run any available workflow.</figcaption>
+          </div>
         </figure>
       </section>
 
@@ -314,10 +359,93 @@
         </div>
       </section>
 
+      <section class="content-section product-tour-section" id="product">
+        <div class="product-tour-heading reveal">
+          <div>
+            <p class="eyebrow"><span>04 /</span> Inside Navoke</p>
+            <h2>See every run. <em>Keep every result.</em></h2>
+          </div>
+          <p>Projects, workflows, live progress, and saved results stay together in one local app.</p>
+        </div>
+
+        <figure class="product-stage product-stage--tour reveal" aria-label="Navoke desktop application">
+          <div
+            class="product-stack"
+            data-product-stack
+            role="button"
+            tabindex="0"
+            aria-roledescription="screenshot carousel"
+            aria-label="Navoke product screenshots. Activate to show the next screenshot."
+          >
+            <div class="product-shot is-front" data-stack-slide aria-hidden="false">
+              <div class="product-shot__bar"><span>Projects</span><span class="status"><i aria-hidden="true"></i> local workspace</span></div>
+              <img
+                src="./img/screenshot-projects.png"
+                alt="Navoke project picker showing a local workspace"
+                width="1106"
+                height="819"
+                loading="lazy"
+              />
+            </div>
+            <div class="product-shot is-middle" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Runs / completed</span><span>stored locally</span></div>
+              <img
+                src="./img/screenshot-runs-2.png"
+                alt="Navoke Runs screen showing completed image and model workflows"
+                width="1106"
+                height="819"
+                loading="lazy"
+              />
+            </div>
+            <div class="product-shot is-back" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Run detail</span><span>results saved</span></div>
+              <img
+                src="./img/screenshot-rundetails.png"
+                alt="Navoke run detail showing workflow inputs and saved data and 3D model files"
+                width="1106"
+                height="819"
+                loading="lazy"
+              />
+            </div>
+            <div class="product-shot is-queued" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Workflow Lab</span><span>local session</span></div>
+              <img
+                src="./img/screenshot-workflowlab.png"
+                alt="Navoke Workflow Lab showing browser controls and the workflow library"
+                width="1106"
+                height="819"
+                loading="lazy"
+              />
+            </div>
+            <div class="product-shot is-queued" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Plugins</span><span>installed workflows</span></div>
+              <img
+                src="./img/screenshot-plugins.png"
+                alt="Navoke Plugins screen showing installed workflow packages"
+                width="1106"
+                height="819"
+                loading="lazy"
+              />
+            </div>
+            <div class="product-shot is-queued" data-stack-slide aria-hidden="true">
+              <div class="product-shot__bar"><span>Run library</span><span>saved results</span></div>
+              <img
+                src="./img/screenshot-runs.png"
+                alt="Navoke run library showing saved 3D model results"
+                width="1106"
+                height="819"
+                loading="lazy"
+              />
+            </div>
+          </div>
+          <figcaption><span>Real product / real runs</span><span>Chrome · saved sessions · local files</span></figcaption>
+        </figure>
+      </section>
+
       <section class="content-section proof-section" id="why-navoke">
         <div class="proof-heading reveal">
           <div>
-            <p class="eyebrow"><span>04 /</span> A workflow-building loop</p>
+            <p class="eyebrow"><span>05 /</span> A workflow-building loop</p>
             <h2>Agents build their own <em>workflows.</em></h2>
           </div>
           <div class="proof-heading__copy">
@@ -378,7 +506,7 @@
         <div class="marketplace-heading reveal">
           <div class="marketplace-heading__title">
             <p class="eyebrow marketplace-eyebrow">
-              <span>05 /</span> Plugin marketplace
+              <span>06 /</span> Plugin marketplace
               <span class="marketplace-status">Coming soon</span>
             </p>
             <h2>Build it once.<br /> <em>Share the shortcut.</em></h2>
@@ -466,7 +594,7 @@
 
       <section class="content-section author-section" id="authors">
         <div class="author-copy reveal">
-          <p class="eyebrow"><span>06</span> For plugin authors</p>
+          <p class="eyebrow"><span>07 /</span> For plugin authors</p>
           <h2>Write the steps. Navoke handles the rest.</h2>
           <p>
             Your plugin describes what should happen on the website. Navoke handles inputs, browser access, progress, and saved results.
@@ -500,7 +628,7 @@
       </section>
 
       <section class="content-section local-section reveal" id="local-first">
-        <p class="eyebrow"><span>07</span> Local by design</p>
+        <p class="eyebrow"><span>08 /</span> Local by design</p>
         <blockquote>Your browser stays yours. The repeated work becomes reusable.</blockquote>
         <div class="local-detail">
           <p>Your workflow history, files, and browser sign-ins stay on your machine. Navoke organizes the work without sending it to a hosted automation service.</p>
@@ -516,7 +644,7 @@
       <section class="final-cta" id="download" data-final-tilt>
         <div class="final-cta__content reveal">
           <img class="cta-mark" src="./logo.png" alt="" width="1254" height="1254" aria-hidden="true" />
-          <p class="eyebrow"><span>08</span> Run something real</p>
+          <p class="eyebrow"><span>09 /</span> Run something real</p>
           <h2>Give your agents a better way to use the web.</h2>
           <div class="final-cta__signal" aria-hidden="true">
             <span></span><span></span><span></span><span></span>
@@ -537,7 +665,7 @@
     </main>
 
     <nav class="section-navigator" aria-label="Page section navigation" data-section-navigator>
-      <span class="section-navigator__count" aria-hidden="true" data-section-count>01 / 08</span>
+      <span class="section-navigator__count" aria-hidden="true" data-section-count>01 / 09</span>
       <button type="button" data-section-previous aria-label="No previous section" title="No previous section" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <polyline points="18 15 12 9 6 15"></polyline>

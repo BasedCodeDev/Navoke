@@ -2,7 +2,8 @@ name: Deploy Navoke website
 
 on:
   push:
-    branches: [master]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read

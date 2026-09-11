@@ -67,6 +67,286 @@ if ("IntersectionObserver" in window && motionIsEnabled()) {
   revealItems.forEach((item) => item.classList.add("is-visible"));
 }
 
+const gateway = document.querySelector("[data-gateway]");
+
+if (gateway) {
+  const canvas = gateway.querySelector("[data-gateway-canvas]");
+  const connectionLayer = gateway.querySelector("[data-gateway-connections]");
+  const hub = gateway.querySelector("[data-gateway-hub]");
+  const routes = [...gateway.querySelectorAll("[data-gateway-route]")];
+  const cards = [...gateway.querySelectorAll("[data-gateway-card]")];
+  const agentCards = [...gateway.querySelectorAll("[data-gateway-agent]")];
+  const siteCards = [...gateway.querySelectorAll("[data-gateway-site]")];
+  const outputs = [...gateway.querySelectorAll("[data-gateway-output]")];
+  const compactGatewayQuery = window.matchMedia("(max-width: 640px)");
+  const phases = ["agent-request", "site-request", "site-result", "agent-result", "complete"];
+  const phaseDurations = [820, 820, 900, 900, 880];
+  let activeFlow = 0;
+  let sequenceTimer = null;
+  let pointerFlow = null;
+  let focusFlow = null;
+  let gatewayIsVisible = true;
+  let layoutFrame = null;
+
+  function requestedFlow() {
+    return focusFlow ?? pointerFlow;
+  }
+
+  function stopGatewaySequence() {
+    if (sequenceTimer !== null) {
+      window.clearTimeout(sequenceTimer);
+      sequenceTimer = null;
+    }
+  }
+
+  function setGatewayRoute(flowIndex, phase) {
+    activeFlow = flowIndex;
+    gateway.dataset.activeFlow = String(flowIndex);
+    gateway.dataset.flowPhase = phase;
+
+    routes.forEach((route, index) => {
+      const isActive = index === flowIndex;
+      route.classList.toggle("is-active", isActive);
+      route.dataset.phase = isActive ? phase : "idle";
+    });
+
+    cards.forEach((card) => {
+      card.classList.toggle("is-active", Number(card.dataset.flowIndex) === flowIndex);
+    });
+
+    const resultIsVisible = phase === "site-result" || phase === "agent-result" || phase === "complete";
+    outputs.forEach((output) => {
+      output.classList.toggle("is-active", resultIsVisible && Number(output.dataset.flowIndex) === flowIndex);
+    });
+
+    hub?.classList.toggle("is-active", phase !== "complete");
+  }
+
+  function showStaticGateway() {
+    stopGatewaySequence();
+    gateway.dataset.flowPhase = "static";
+    routes.forEach((route) => {
+      route.classList.remove("is-active");
+      route.dataset.phase = "static";
+    });
+    cards.forEach((card) => card.classList.remove("is-active"));
+    outputs.forEach((output) => output.classList.remove("is-active"));
+    hub?.classList.remove("is-active");
+  }
+
+  function gatewayCanAutoPlay() {
+    return document.documentElement.dataset.motion === "on"
+      && !document.hidden
+      && gatewayIsVisible
+      && requestedFlow() === null;
+  }
+
+  function playGatewayFlow(flowIndex, advanceWhenComplete = true) {
+    stopGatewaySequence();
+    let phaseIndex = 0;
+
+    function runPhase() {
+      const phase = phases[phaseIndex];
+      setGatewayRoute(flowIndex, phase);
+
+      sequenceTimer = window.setTimeout(() => {
+        if (phaseIndex < phases.length - 1) {
+          phaseIndex += 1;
+          runPhase();
+          return;
+        }
+
+        sequenceTimer = null;
+        if (advanceWhenComplete && gatewayCanAutoPlay()) {
+          playGatewayFlow((flowIndex + 1) % routes.length, true);
+          return;
+        }
+
+        const interactionFlow = requestedFlow();
+        if (interactionFlow !== null) {
+          setGatewayRoute(interactionFlow, "complete");
+        } else if (gatewayCanAutoPlay()) {
+          playGatewayFlow((flowIndex + 1) % routes.length, true);
+        }
+      }, phaseDurations[phaseIndex]);
+    }
+
+    runPhase();
+  }
+
+  function refreshGatewayMotion() {
+    stopGatewaySequence();
+    if (document.documentElement.dataset.motion !== "on") {
+      showStaticGateway();
+      return;
+    }
+
+    const interactionFlow = requestedFlow();
+    if (interactionFlow !== null) {
+      setGatewayRoute(interactionFlow, "complete");
+    } else if (gatewayCanAutoPlay()) {
+      playGatewayFlow(activeFlow, true);
+    } else {
+      setGatewayRoute(activeFlow, "complete");
+    }
+  }
+
+  function pointFor(element, horizontalSide, verticalSide, laneOffset = 0) {
+    const canvasBounds = canvas.getBoundingClientRect();
+    const bounds = element.getBoundingClientRect();
+    const x = horizontalSide === "left"
+      ? bounds.left - canvasBounds.left
+      : horizontalSide === "right"
+        ? bounds.right - canvasBounds.left
+        : bounds.left - canvasBounds.left + bounds.width / 2 + laneOffset;
+    const y = verticalSide === "top"
+      ? bounds.top - canvasBounds.top
+      : verticalSide === "bottom"
+        ? bounds.bottom - canvasBounds.top
+        : bounds.top - canvasBounds.top + bounds.height / 2 + laneOffset;
+    return { x, y };
+  }
+
+  function horizontalCurve(start, end) {
+    const bend = Math.max(24, Math.abs(end.x - start.x) * 0.48);
+    return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} C ${(start.x + bend).toFixed(2)} ${start.y.toFixed(2)}, ${(end.x - bend).toFixed(2)} ${end.y.toFixed(2)}, ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+  }
+
+  function verticalCurve(start, end) {
+    const bend = Math.max(24, Math.abs(end.y - start.y) * 0.46);
+    return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} C ${start.x.toFixed(2)} ${(start.y + bend).toFixed(2)}, ${end.x.toFixed(2)} ${(end.y - bend).toFixed(2)}, ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+  }
+
+  function setRoutePath(route, name, pathData) {
+    route.querySelectorAll(`[data-gateway-path="${name}"], [data-gateway-signal="${name}"]`).forEach((path) => {
+      path.setAttribute("d", pathData);
+    });
+  }
+
+  function updateGatewayPaths() {
+    layoutFrame = null;
+    if (!canvas || !connectionLayer || !hub || routes.length === 0) return;
+
+    const canvasBounds = canvas.getBoundingClientRect();
+    if (canvasBounds.width === 0 || canvasBounds.height === 0) return;
+    connectionLayer.setAttribute("viewBox", `0 0 ${canvasBounds.width} ${canvasBounds.height}`);
+
+    const compact = compactGatewayQuery.matches;
+    const hubBounds = hub.getBoundingClientRect();
+
+    routes.forEach((route, index) => {
+      const agent = agentCards[index];
+      const site = siteCards[index];
+      const output = outputs[index];
+      if (!agent || !site || !output) return;
+
+      if (compact) {
+        const hubLane = (index - 1) * hubBounds.width * 0.28;
+        const requestOffset = -3;
+        const resultOffset = 4;
+        const agentRequestStart = pointFor(agent, "center", "bottom", requestOffset);
+        const agentRequestEnd = pointFor(hub, "center", "top", hubLane + requestOffset);
+        const siteRequestStart = pointFor(hub, "center", "bottom", hubLane + requestOffset);
+        const siteRequestEnd = pointFor(site, "center", "top", requestOffset);
+        const siteResultStart = pointFor(site, "center", "top", resultOffset);
+        const siteResultEnd = pointFor(hub, "center", "bottom", hubLane + resultOffset);
+        const agentResultStart = pointFor(hub, "center", "top", hubLane + resultOffset);
+        const agentResultEnd = pointFor(agent, "center", "bottom", resultOffset);
+
+        setRoutePath(route, "agent-request", verticalCurve(agentRequestStart, agentRequestEnd));
+        setRoutePath(route, "site-request", verticalCurve(siteRequestStart, siteRequestEnd));
+        setRoutePath(route, "site-result", verticalCurve(siteResultStart, siteResultEnd));
+        setRoutePath(route, "agent-result", verticalCurve(agentResultStart, agentResultEnd));
+
+        const labelProgress = 0.22;
+        const labelX = siteResultStart.x + (siteResultEnd.x - siteResultStart.x) * labelProgress;
+        const labelY = siteResultStart.y + (siteResultEnd.y - siteResultStart.y) * labelProgress;
+        output.style.left = `${labelX}px`;
+        output.style.top = `${labelY}px`;
+      } else {
+        const hubLane = (index - 1) * hubBounds.height * 0.27;
+        const requestOffset = -4;
+        const resultOffset = 5;
+        const agentRequestStart = pointFor(agent, "right", "center", requestOffset);
+        const agentRequestEnd = pointFor(hub, "left", "center", hubLane + requestOffset);
+        const siteRequestStart = pointFor(hub, "right", "center", hubLane + requestOffset);
+        const siteRequestEnd = pointFor(site, "left", "center", requestOffset);
+        const siteResultStart = pointFor(site, "left", "center", resultOffset);
+        const siteResultEnd = pointFor(hub, "right", "center", hubLane + resultOffset);
+        const agentResultStart = pointFor(hub, "left", "center", hubLane + resultOffset);
+        const agentResultEnd = pointFor(agent, "right", "center", resultOffset);
+
+        setRoutePath(route, "agent-request", horizontalCurve(agentRequestStart, agentRequestEnd));
+        setRoutePath(route, "site-request", horizontalCurve(siteRequestStart, siteRequestEnd));
+        setRoutePath(route, "site-result", horizontalCurve(siteResultStart, siteResultEnd));
+        setRoutePath(route, "agent-result", horizontalCurve(agentResultStart, agentResultEnd));
+
+        const labelProgress = 0.46;
+        const labelX = siteResultStart.x + (siteResultEnd.x - siteResultStart.x) * labelProgress;
+        const labelY = siteResultStart.y + (siteResultEnd.y - siteResultStart.y) * labelProgress - 12;
+        output.style.left = `${labelX}px`;
+        output.style.top = `${labelY}px`;
+      }
+    });
+  }
+
+  function scheduleGatewayLayout() {
+    if (layoutFrame !== null) window.cancelAnimationFrame(layoutFrame);
+    layoutFrame = window.requestAnimationFrame(updateGatewayPaths);
+  }
+
+  cards.forEach((card) => {
+    const flowIndex = Number(card.dataset.flowIndex);
+    card.addEventListener("pointerenter", () => {
+      pointerFlow = flowIndex;
+      stopGatewaySequence();
+      setGatewayRoute(flowIndex, "complete");
+    });
+    card.addEventListener("pointerleave", () => {
+      pointerFlow = null;
+      refreshGatewayMotion();
+    });
+    card.addEventListener("focus", () => {
+      focusFlow = flowIndex;
+      stopGatewaySequence();
+      setGatewayRoute(flowIndex, "complete");
+    });
+    card.addEventListener("blur", () => {
+      focusFlow = null;
+      refreshGatewayMotion();
+    });
+    card.addEventListener("click", () => playGatewayFlow(flowIndex, false));
+  });
+
+  if ("ResizeObserver" in window && canvas) {
+    const gatewayResizeObserver = new ResizeObserver(scheduleGatewayLayout);
+    gatewayResizeObserver.observe(canvas);
+    gatewayResizeObserver.observe(hub);
+    cards.forEach((card) => gatewayResizeObserver.observe(card));
+  } else {
+    window.addEventListener("resize", scheduleGatewayLayout);
+  }
+
+  if ("IntersectionObserver" in window) {
+    const gatewayVisibilityObserver = new IntersectionObserver(
+      ([entry]) => {
+        gatewayIsVisible = entry.isIntersecting;
+        refreshGatewayMotion();
+      },
+      { threshold: 0.12 }
+    );
+    gatewayVisibilityObserver.observe(gateway);
+  }
+
+  compactGatewayQuery.addEventListener("change", scheduleGatewayLayout);
+  document.addEventListener("visibilitychange", refreshGatewayMotion);
+  window.addEventListener("navoke:motionchange", refreshGatewayMotion);
+  window.addEventListener("load", scheduleGatewayLayout, { once: true });
+  document.fonts?.ready.then(scheduleGatewayLayout);
+  scheduleGatewayLayout();
+  refreshGatewayMotion();
+}
+
 const productStack = document.querySelector("[data-product-stack]");
 
 if (productStack) {
@@ -83,6 +363,7 @@ if (productStack) {
   let targetTiltY = 0;
   let currentTiltX = 0;
   let currentTiltY = 0;
+  let stackIsVisible = !("IntersectionObserver" in window);
 
   function renderStackTilt() {
     const easing = 0.085;
@@ -185,7 +466,7 @@ if (productStack) {
 
   function startCycle() {
     stopCycle();
-    if (document.documentElement.dataset.motion !== "on" || document.hidden || interactionIsPaused() || slides.length < 2) return;
+    if (document.documentElement.dataset.motion !== "on" || document.hidden || !stackIsVisible || interactionIsPaused() || slides.length < 2) return;
     cycleTimer = window.setInterval(advanceStack, 4000);
   }
 
@@ -230,6 +511,17 @@ if (productStack) {
     if (!event.detail?.enabled) resetStackTilt();
     startCycle();
   });
+
+  if ("IntersectionObserver" in window) {
+    const productStackObserver = new IntersectionObserver(
+      ([entry]) => {
+        stackIsVisible = entry.isIntersecting;
+        startCycle();
+      },
+      { threshold: 0.18 }
+    );
+    productStackObserver.observe(productStack);
+  }
 
   arrangeStack();
   const imageDecodeTasks = slides
@@ -471,6 +763,7 @@ if (sectionNavigator) {
     { id: "top", label: "Overview" },
     { id: "how-it-works", label: "How it works" },
     { id: "real-project", label: "Real project" },
+    { id: "product", label: "Inside Navoke" },
     { id: "why-navoke", label: "Agent workflows" },
     { id: "workflows", label: "Marketplace" },
     { id: "authors", label: "For plugin authors" },
