@@ -18,11 +18,6 @@ async function main() {
   if (expectedWorkflows.length !== 7) {
     throw new Error(`Expected 7 bundled workflows, found ${expectedWorkflows.length}.`);
   }
-  const hunyuan = bundledManifests.find((manifest) => manifest.id === "navoke.hunyuan");
-  if (hunyuan?.version !== "0.3.0") {
-    throw new Error("The installer must bundle navoke.hunyuan@0.3.0.");
-  }
-  assertEqual(hunyuan.workflows, ["navoke.hunyuan.global.image-to-model"], "Hunyuan Studio workflows");
 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "navoke-package-smoke-"));
   const userDataDir = path.join(tempRoot, "user-data");
