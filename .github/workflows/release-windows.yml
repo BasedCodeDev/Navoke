@@ -51,7 +51,7 @@ jobs:
 
       - name: Verify generated plugin files are current
         shell: pwsh
-        run: git diff --exit-code -- plugins/navoke-chatgpt/dist/index.js plugins/navoke-hunyuan/dist/index.js plugins/navoke-model-renderer/dist/index.js
+        run: git diff --exit-code -- plugins/navoke-chatgpt/dist/index.js plugins/navoke-hunyuan/dist/index.js plugins/navoke-hunyuan/dist/studioHelpers.js plugins/navoke-model-renderer/dist/index.js
 
       - name: Install and smoke test packaged app
         id: package
@@ -63,7 +63,7 @@ jobs:
           }
 
           $installDir = Join-Path $env:RUNNER_TEMP 'NavokeInstall'
-          $process = Start-Process -FilePath $installer[0].FullName -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
+          $process = Start-Process -FilePath $installer[0].FullName -ArgumentList '/S', "/D=$installDir" -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0) {
             throw "Installer exited with code $($process.ExitCode)."
           }

@@ -7,7 +7,7 @@ describe("generic browser extension popup", () => {
   it("warns when compatible tabs exist but no browser controller is connected", async () => {
     const harness = loadPopupHarness({
       statusBody: {
-        requiredProtocolVersion: 6,
+        requiredProtocolVersion: 7,
         compatible: 1,
         incompatible: 0,
         compatibleControllers: 0,
@@ -27,7 +27,7 @@ describe("generic browser extension popup", () => {
   it("surfaces popup-triggered controller heartbeat failures", async () => {
     const harness = loadPopupHarness({
       statusBody: {
-        requiredProtocolVersion: 6,
+        requiredProtocolVersion: 7,
         compatible: 1,
         incompatible: 0,
         compatibleControllers: 0,
@@ -45,7 +45,7 @@ describe("generic browser extension popup", () => {
   it("shows the connected browser controller id when available", async () => {
     const harness = loadPopupHarness({
       statusBody: {
-        requiredProtocolVersion: 6,
+        requiredProtocolVersion: 7,
         compatible: 1,
         incompatible: 0,
         compatibleControllers: 1,
@@ -63,7 +63,7 @@ describe("generic browser extension popup", () => {
   it("shows controller command polling diagnostics when available", async () => {
     const harness = loadPopupHarness({
       statusBody: {
-        requiredProtocolVersion: 6,
+        requiredProtocolVersion: 7,
         compatible: 1,
         incompatible: 0,
         compatibleControllers: 1,

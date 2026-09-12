@@ -1,17 +1,30 @@
 {
   "manifest_version": 3,
   "name": "Navoke Browser Controller",
-  "version": "0.1.8",
+  "version": "0.1.10",
   "description": "Generic local browser controller for Navoke workflows.",
-  "permissions": ["tabs", "storage", "scripting", "alarms", "downloads"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "alarms",
+    "downloads",
+    "debugger"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start"
     }
   ],

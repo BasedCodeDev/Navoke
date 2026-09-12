@@ -66,6 +66,19 @@ describe("WorkflowLab", () => {
     });
   });
 
+  it("records hover actions on the shared extension command queue", async () => {
+    const bridge = new ExtensionBridge();
+    bridge.heartbeat({ id: "lab-tab", url: "https://example.test/", protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION, extensionVersion: "0.1.9" });
+    const lab = new WorkflowLab(createRuntimePaths(path.join(tempDir, "app-data")), bridge);
+    const session = await lab.createSession({ mode: "extension", clientId: "lab-tab" });
+    const pending = lab.runAction(session.id, { kind: "hover", selector: "button" });
+    const command = bridge.nextCommand("lab-tab")!;
+    expect(command.command).toEqual({ kind: "action", action: { kind: "hover", selector: "button" } });
+    bridge.completeCommand(command.id, { ok: true });
+    await expect(pending).resolves.toMatchObject({ entry: { type: "action.completed" } });
+    expect(lab.getSession(session.id).actionLog).toEqual(expect.arrayContaining([expect.objectContaining({ type: "action.completed" })]));
+  });
+
   it("stages attach-file actions for extension lab sessions", async () => {
     const paths = createRuntimePaths(path.join(tempDir, "app-data"));
     const bridge = new ExtensionBridge();

@@ -28,6 +28,7 @@ export type WorkflowLabSessionMode = "playwright" | "extension";
 export type WorkflowLabProfileWorkflowId = string;
 
 export type WorkflowLabAction =
+  | { kind: "hover"; selector: string }
   | { kind: "click"; selector: string }
   | { kind: "fill"; selector: string; value: string }
   | { kind: "submit"; selector: string }
@@ -324,6 +325,10 @@ export class WorkflowLab {
     }
 
     const locator = page.locator(action.selector).first();
+    if (action.kind === "hover") {
+      await locator.hover();
+      return;
+    }
     if (action.kind === "fill") {
       await locator.fill(action.value);
       return;
@@ -490,6 +495,7 @@ export class WorkflowLab {
 }
 
 function describeAction(action: WorkflowLabAction): string {
+  if (action.kind === "hover") return `Hovered ${action.selector}`;
   if (action.kind === "click") return `Clicked ${action.selector}`;
   if (action.kind === "fill") return `Filled ${action.selector}`;
   if (action.kind === "submit") return `Submitted ${action.selector}`;
@@ -509,7 +515,7 @@ function defaultLabProfileName(profileWorkflowId: WorkflowLabProfileWorkflowId |
 
 function assertLabAction(action: WorkflowLabAction): void {
   if (!action || typeof action !== "object") throw new Error("Workflow Lab action is required.");
-  if (!["click", "fill", "submit", "attach-file"].includes(action.kind)) {
+  if (!["click", "hover", "fill", "submit", "attach-file"].includes(action.kind)) {
     throw new Error("Unsupported Workflow Lab action kind.");
   }
   if (!("selector" in action) || typeof action.selector !== "string" || action.selector.trim().length === 0) {

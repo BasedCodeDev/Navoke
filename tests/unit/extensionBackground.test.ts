@@ -4,6 +4,30 @@ import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 describe("generic browser extension background controller", () => {
+  it("keeps a new background window rendering without activating its window or tab", async () => {
+    const windowsCreate = vi.fn(async () => ({ id: 7, tabs: [{ id: 42, windowId: 7 }] }));
+    const debuggerAttach = vi.fn(async () => undefined);
+    const debuggerSendCommand = vi.fn(async () => undefined);
+    const tabsUpdate = vi.fn();
+    const windowsUpdate = vi.fn();
+    const harness = loadBackgroundHarness({ tabsCreate: vi.fn(), windowsCreate, debuggerAttach, debuggerSendCommand, tabsUpdate, windowsUpdate });
+    await harness.performControllerCommand({ id: "bg", kind: "controller-command", protocolVersion: 7, command: { kind: "open-window", url: "https://example.test/", focused: false } });
+    expect(windowsCreate).toHaveBeenCalledWith({ url: "https://example.test/", focused: false });
+    expect(debuggerAttach).toHaveBeenCalledWith({ tabId: 42 }, "1.3");
+    expect(debuggerSendCommand).toHaveBeenCalledWith({ tabId: 42 }, "Emulation.setFocusEmulationEnabled", { enabled: true });
+    expect(tabsUpdate).not.toHaveBeenCalled();
+    expect(windowsUpdate).not.toHaveBeenCalled();
+  });
+
+  it("cleans up only its newly created background tab if rendering setup fails", async () => {
+    const tabsRemove = vi.fn(async () => undefined);
+    const debuggerDetach = vi.fn(async () => undefined);
+    const harness = loadBackgroundHarness({ tabsCreate: vi.fn(async () => ({ id: 42 })), tabsRemove, debuggerDetach, debuggerSendCommand: async () => { throw new Error("protocol failure"); } });
+    await expect(harness.performControllerCommand({ id: "bg", kind: "controller-command", protocolVersion: 7, command: { kind: "open-tab", url: "https://example.test/", active: false } })).rejects.toThrow("Could not enable background page rendering");
+    expect(debuggerDetach).toHaveBeenCalledWith({ tabId: 42 });
+    expect(tabsRemove).toHaveBeenCalledExactlyOnceWith(42);
+  });
+
   it("handles open-tab controller commands through chrome.tabs.create", async () => {
     const createdTabs: unknown[] = [];
     const harness = loadBackgroundHarness({
@@ -16,7 +40,7 @@ describe("generic browser extension background controller", () => {
     const result = await harness.performControllerCommand({
       id: "command-1",
       kind: "controller-command",
-      protocolVersion: 6,
+      protocolVersion: 7,
       command: { kind: "open-tab", url: "https://example.test/#navoke-tab=route-1", active: true }
     });
 
@@ -38,7 +62,7 @@ describe("generic browser extension background controller", () => {
     const result = await harness.performControllerCommand({
       id: "command-1",
       kind: "controller-command",
-      protocolVersion: 6,
+      protocolVersion: 7,
       command: { kind: "open-tab", url: "https://example.test/#navoke-tab=route-1", active: true }
     });
 
@@ -80,7 +104,7 @@ describe("generic browser extension background controller", () => {
     const result = await harness.performControllerCommand({
       id: "command-1",
       kind: "controller-command",
-      protocolVersion: 6,
+      protocolVersion: 7,
       command: { kind: "open-window", url: "https://example.test/#navoke-tab=route-1", focused: true }
     });
 
@@ -106,7 +130,7 @@ describe("generic browser extension background controller", () => {
     const result = await harness.performControllerCommand({
       id: "command-1",
       kind: "controller-command",
-      protocolVersion: 6,
+      protocolVersion: 7,
       command: { kind: "focus-tab", tabId: 42, windowId: 7, focused: true }
     });
 
@@ -127,7 +151,7 @@ describe("generic browser extension background controller", () => {
     const result = await harness.performControllerCommand({
       id: "command-1",
       kind: "controller-command",
-      protocolVersion: 6,
+      protocolVersion: 7,
       command: { kind: "close-tab", tabId: 42 }
     });
 
@@ -147,7 +171,7 @@ describe("generic browser extension background controller", () => {
       harness.performControllerCommand({
         id: "command-1",
         kind: "controller-command",
-        protocolVersion: 6,
+        protocolVersion: 7,
         command: { kind: "close-tab", tabId: 42 }
       })
     ).resolves.toMatchObject({ ok: true, action: "close-tab", tabId: 42, alreadyClosed: true });
@@ -174,7 +198,7 @@ describe("generic browser extension background controller", () => {
           : {
               status: 200,
               ok: true,
-              text: async () => JSON.stringify({ ok: true, compatible: true, controllerId: "controller-id", requiredProtocolVersion: 6 })
+              text: async () => JSON.stringify({ ok: true, compatible: true, controllerId: "controller-id", requiredProtocolVersion: 7 })
             };
       }
     });
@@ -328,7 +352,7 @@ describe("generic browser extension background controller", () => {
               JSON.stringify({
                 id: "command-1",
                 kind: "controller-command",
-                protocolVersion: 6,
+                protocolVersion: 7,
                 command: { kind: "open-tab", url: "https://example.test/#navoke-tab=route-1", active: true }
               })
           };
@@ -340,7 +364,7 @@ describe("generic browser extension background controller", () => {
         return {
           status: 200,
           ok: true,
-          text: async () => JSON.stringify({ ok: true, compatible: true, controllerId: "controller-id", requiredProtocolVersion: 6 })
+          text: async () => JSON.stringify({ ok: true, compatible: true, controllerId: "controller-id", requiredProtocolVersion: 7 })
         };
       }
     });
@@ -374,6 +398,9 @@ function loadBackgroundHarness(options: {
   windowsCreate?: (input: unknown) => Promise<unknown>;
   windowsUpdate?: (windowId: number, input: unknown) => Promise<unknown>;
   scriptingExecuteScript?: (input: unknown) => Promise<unknown>;
+  debuggerAttach?: (target: unknown, version: string) => Promise<void>;
+  debuggerSendCommand?: (target: unknown, method: string, params: unknown) => Promise<void>;
+  debuggerDetach?: (target: unknown) => Promise<void>;
   fetch?: (url: string, options?: unknown) => Promise<{ status: number; ok: boolean; text(): Promise<string> }>;
 }): {
   performControllerCommand(payload: unknown): Promise<unknown>;
@@ -423,6 +450,7 @@ function loadBackgroundHarness(options: {
         create: options.windowsCreate ?? vi.fn(),
         update: options.windowsUpdate ?? vi.fn()
       },
+      debugger: { attach: options.debuggerAttach ?? vi.fn(async () => undefined), sendCommand: options.debuggerSendCommand ?? vi.fn(async () => undefined), detach: options.debuggerDetach ?? vi.fn(async () => undefined) },
       scripting: options.scriptingExecuteScript
         ? {
             executeScript: options.scriptingExecuteScript

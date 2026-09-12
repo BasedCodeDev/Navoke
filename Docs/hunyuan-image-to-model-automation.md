@@ -1,72 +1,77 @@
-# Hunyuan Sheng3D Image-To-Model Automation
+# Hunyuan Global Studio props
 
-## Goal
+`navoke.hunyuan@0.3.0` exposes one workflow: `navoke.hunyuan.global.image-to-model`.
+It replaces the China workflow and old Global implementation with the calibrated Studio
+pipeline from `Based.NotMonsters/Art/OrnamentalProps/navoke-studio` v0.3.10.
 
-`navoke.hunyuan.image-to-model` automates Tencent Hunyuan's Sheng3D editor. It accepts a front image plus at least one additional view, generates one textured model, and downloads an OBJ or GLB artifact.
+## Inputs and behavior
 
-This document applies only to `https://3d.hunyuan.tencent.com/`. The separate `navoke.hunyuan.global.image-to-model` workflow retains its existing staged generation behavior.
-
-## Sheng3D v0.2.0 Flow
-
-1. Open Tencent Hunyuan with the persistent `hunyuan/default` Playwright profile.
-2. Reuse an authenticated session or pause for login/account checks.
-3. If Hunyuan opens its product landing page, click the **立即开始 / Start now** control and wait for the Sheng3D editor.
-4. Select **图生3D / 3D graphics**, **多张图片 / Multiple images**, and the multi-view uploader.
-5. Upload the front image and at least one additional named view. Wait for every slot to be accepted before closing the modal.
-6. Select Sheng3D V3.1 and the requested face count (`50k` by default).
-7. Start the single end-to-end generation operation and wait for the model download control.
-8. Open the download panel and click OBJ or GLB. Selecting the format initiates the download, so the workflow starts listening for the Playwright download event before clicking the format.
-9. Register the model, extracted OBJ sidecars/textures when supplied, manifest, and Playwright trace.
-
-The Tencent v0.2.0 input contract no longer exposes prompt, retopology, texture-generation, or auto-rig settings. Those controls were part of the previous staged UI and are not present in the Sheng3D flow.
-
-## Calibrated Page States and Selectors
-
-- Login page: `button.login-btn` or the email input is visible.
-- Authenticated product landing: `.v3-home` is visible and `.v3-home .start-but` enters the editor.
-- Sheng3D editor: `.v3-sidebar-left` is visible.
-- Multi-view uploader: `.hy-multiple-views-upload-v2` and the eight `.hy-upload-card--*` containers remain stable.
-- Model picker: `.model-version-select:visible`; the visible TDesign popup contains the V3.1 option.
-- Face count: the visible `.generation-type-select` segment controls under `.v3-sidebar-left` contain `1.5m`, `1m`, `500k`, and `50k`.
-- Generate: `.sideBarLeft-generateBtn`, excluding disabled states.
-- Generated result/download opener: `button.native-edit__viewport-actionBar-download`.
-- Download formats: `.v3-download-panel__item` entries for OBJ, GLB, FBX, STL, USDZ, MP4, and GIF. The public workflow intentionally supports OBJ and GLB only.
-
-Visible labels can be translated to English in the saved browser profile, so structural selectors are preferred where the site provides stable classes.
-
-## Artifact Behavior
-
-- A downloaded OBJ ZIP is extracted into the run's `model-assets` directory.
-- The extracted OBJ is registered as the model artifact, with matching MTL and texture files recorded in metadata and the JSON manifest.
-- A direct GLB download is registered without extraction.
-- If extraction fails, the original download is retained as a download artifact with the error recorded.
-- Every run records a manifest and Playwright trace. Selector failures also register a calibration screenshot.
-
-## Release Verification
-
-Use Workflow Lab to inspect live page states and the Navoke CLI to prove the installed plugin. The release proof uses the existing wooden-ladder front and left-45-degree images, Sheng3D V3.1, `50k`, OBJ export, and the `default` browser profile.
-
-Run the focused plugin tests first, followed by:
-
-```powershell
-npm.cmd run typecheck
-npm.cmd test
-npm.cmd run build
-node --check extension\content.js
-node --check extension\popup.js
-node --check extension\background.js
+```json
+{
+  "frontImage": "C:\\art\\front.png",
+  "backImage": "C:\\art\\rear.png",
+  "topology": "Quads"
+}
 ```
 
-Install the new package into the active project, verify `navoke.hunyuan@0.2.0` is loaded, then remove the legacy `based-blink.hunyuan@0.1.0` package. Historical runs and artifacts are not removed.
+Both references are required. The form provides single PNG file pickers and a topology
+dropdown: `Quads` (default), `Triangles`, or `Original`. Obsolete fields are rejected; update
+saved inputs rather than assuming older generation/export options still apply.
 
-## v0.2.0 Release Proof
+The workflow opens an unfocused, run-owned window in the connected Chrome profile at
+`https://hy3d.tencent.ai/studio/creation/prop/geo`. It uploads the verified Front View and Back
+View slots, selects 50k geometry, and requires a running state before accepting completion.
+Quads and Triangles run Medium retopology and upload the references again for Image-to-Texture.
+Original skips retopology and verifies that both uploaded reference URLs remain in the texture
+stage. All branches paint textures and export a GLB with embedded images.
 
-The installed `navoke.hunyuan@0.2.0` package completed the wooden-ladder proof on 27 August 2026:
+No cursor movement or native desktop automation is used. Login, verification, and controller
+disconnection pause for manual action. Resume continues the in-memory workflow at its current
+stage. Restarting the app or retrying a failed run does not resume completed stages.
 
-- Run: `1621a94a-bf07-4edf-a566-6dd155980ce9`
-- Model artifact: `1a83f663-b0ea-469e-9c73-06943b600656`
-- Manifest artifact: `07485190-80c0-4c85-8aaa-475fe35b0bac`
-- Trace artifact: `5d7d7a2c-fc20-4004-af53-209b8e3c52fa`
-- Model: `c432980e19528a8ec4231e2806d1d956.obj` with `material.mtl` and base-color, metallic, normal, and roughness PBR textures.
+## Requirements and artifacts
 
-Both input views were accepted on their first upload attempt. The generation completed through the new single-step flow, selecting OBJ directly triggered the Playwright download event, and the returned ZIP was extracted and registered successfully.
+- Navoke running with the intended project open and its `.navoke/runtime.json` present.
+- Browser Controller 0.1.10 / protocol 7 connected in the authenticated Hunyuan Chrome profile.
+- Three concurrent runs are supported; exports within this plugin are serialized.
+- Do not overlap downloads with another loaded Hunyuan plugin/version: the download watcher
+  is shared, while the export gate is local to this plugin module.
+
+Outputs are registered beneath the run's artifact directory:
+
+- `prop.glb`: validated GLB v2 mesh with embedded textures.
+- `model-manifest.json`: references, selected topology, requested geometry setting, actual
+  exported vertex/triangle counts, materials, image count, and file size. GLB triangles are
+  measured from exported primitives even when Quads retopology was selected.
+- `lab-*.json`: initial, before/running/complete, and export inspections.
+- `workflow-lab-session.json`: Lab action/wait history, also saved on failure or cancellation.
+- `last-ui-state.json`: best-effort failure inspection.
+
+The output contains `artifactIds` and `summary`. Cleanup closes only the run-owned window
+and Lab session. Keep the controller profile open across separate runs (an existing user
+window is sufficient). Render downloaded models to check identity and visual quality;
+structural validation cannot establish likeness.
+
+## Upgrade and verification
+
+Build and install `plugins/navoke-hunyuan` through the CLI for the confirmed project. Remove
+the installed `navoke.hunyuan@0.2.0` package through the plugin API/UI when upgrading: two
+versions declaring the same workflow ID cannot both load. Verify that version 0.3.0 registers
+only `navoke.hunyuan.global.image-to-model`.
+
+`navoke.hunyuan.image-to-model` is retired with no alias. Historical runs and artifacts remain;
+saved configurations need the new workflow ID/input contract. The separate
+`notmonsters.hunyuan-studio` source and installation are unchanged.
+
+Regression coverage lives in the Hunyuan plugin tests and shared plugin package tests. Run
+`npm.cmd run typecheck`, `npm.cmd test`, `npm.cmd run build`, and `node --check` on all three
+extension scripts before handoff. Use live Quads and Original runs with known references to
+validate the installed package, registered GLBs, visual identity, diagnostics, and cleanup.
+
+Live verification on 12 September 2026 completed both branches with the installed 0.3.0
+package: Quads run `1c0684d4-a1d9-4606-bc8c-347f79a2f1fe` exported 3,388 triangles;
+Original run `0e8ad412-697b-4a35-ae16-b2c50f9c7b5e` retained 50,000 triangles. Both exported
+three embedded images and closed their windows and Lab sessions. Front/rear renders confirmed
+the reference model's identity. Quads introduced gaps in thin shelf surfaces; use Original
+when retopology damages thin geometry. These are workflow proofs, not acceptance of every
+generated mesh as a production asset.

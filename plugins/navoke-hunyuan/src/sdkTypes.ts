@@ -1,7 +1,7 @@
 import type * as zod from "zod";
 
 export interface WorkflowContext {
-  paths: unknown;
+  paths: { projectDir: string };
   artifactDir: string;
   runId: string;
   signal: AbortSignal;
@@ -141,6 +141,7 @@ export type ExtensionBrowserTarget =
         url?: string;
         title?: string;
         openMode?: "window" | "tab";
+        background?: boolean;
         clientId?: string;
         tabId?: number;
         windowId?: number;

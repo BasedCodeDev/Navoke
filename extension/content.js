@@ -2,7 +2,7 @@
 if (globalThis.__navokeBrowserControllerContentStarted) return;
 globalThis.__navokeBrowserControllerContentStarted = true;
 
-const NAVOKE_EXTENSION_PROTOCOL_VERSION = 6;
+const NAVOKE_EXTENSION_PROTOCOL_VERSION = 7;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const API_BASE_URL = "http://127.0.0.1:39201";
 const ROUTING_TOKEN_PARAM = "navoke-tab";
@@ -472,6 +472,18 @@ function fillElementDiagnostics(element) {
 
 async function performAction(action) {
   if (!action || typeof action !== "object") throw new Error("Navoke browser action is required.");
+  if (action.kind === "hover") {
+    const { element, candidateCount, visibleCount, enabledCount } = firstActionableElement(action.selector);
+    // DOM events stay inside this tab: no OS pointer movement or browser focus.
+    const rect = element.getBoundingClientRect();
+    const position = { clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2, cancelable: true, composed: true };
+    for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"]) {
+      const Pointer = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+      const EventType = type.startsWith("pointer") ? Pointer : MouseEvent;
+      element.dispatchEvent(new EventType(type, { ...position, bubbles: !type.endsWith("enter"), pointerType: "mouse" }));
+    }
+    return { ok: true, action: "hover", selector: action.selector, candidateCount, visibleCount, enabledCount };
+  }
   if (action.kind === "click") {
     const textFilter = createTextFilter(action);
     const { element, candidateCount, visibleCount, enabledCount, textMatchCount } = firstActionableElement(action.selector, textFilter);

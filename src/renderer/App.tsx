@@ -2925,7 +2925,7 @@ function WorkflowLabPanel({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [inspection, setInspection] = useState<WorkflowLabInspectionResult | null>(null);
   const [selector, setSelector] = useState("");
-  const [actionKind, setActionKind] = useState<"click" | "fill" | "submit" | "attach-file">("click");
+  const [actionKind, setActionKind] = useState<"click" | "hover" | "fill" | "submit" | "attach-file">("click");
   const [fillValue, setFillValue] = useState("");
   const [actionFiles, setActionFiles] = useState<string[]>([]);
   const [waitKind, setWaitKind] = useState<"element" | "text" | "image-count" | "url" | "network-idle" | "document-ready">("element");
@@ -3061,6 +3061,7 @@ function WorkflowLabPanel({
     const trimmedSelector = selector.trim();
     if (!trimmedSelector) throw new Error("Choose a selector for the action probe.");
     if (actionKind === "fill") return { kind: "fill" as const, selector: trimmedSelector, value: fillValue };
+    if (actionKind === "hover") return { kind: "hover" as const, selector: trimmedSelector };
     if (actionKind === "submit") return { kind: "submit" as const, selector: trimmedSelector };
     if (actionKind === "attach-file") {
       if (actionFiles.length === 0) throw new Error("Choose at least one file to attach.");
@@ -3287,12 +3288,13 @@ function WorkflowLabPanel({
                 <Label>Action</Label>
                 <select
                   value={actionKind}
-                  onChange={(event) => setActionKind(event.target.value as "click" | "fill" | "submit" | "attach-file")}
+                  onChange={(event) => setActionKind(event.target.value as "click" | "hover" | "fill" | "submit" | "attach-file")}
                   className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
                 >
                   <option value="click">Click</option>
                   <option value="fill">Fill</option>
                   <option value="submit">Submit</option>
+                  <option value="hover">Hover</option>
                   <option value="attach-file">Attach file</option>
                 </select>
               </div>

@@ -1,9 +1,9 @@
 {
   "id": "navoke.hunyuan",
   "name": "Navoke Hunyuan",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "pluginApiVersion": "1",
   "entrypoint": "dist/index.js",
-  "workflows": ["navoke.hunyuan.image-to-model", "navoke.hunyuan.global.image-to-model"],
-  "capabilities": ["filesystem.artifacts", "browser", "extension.browser"]
+  "workflows": ["navoke.hunyuan.global.image-to-model"],
+  "capabilities": ["filesystem.artifacts", "extension.browser"]
 }

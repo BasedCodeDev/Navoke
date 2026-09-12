@@ -26,9 +26,9 @@ describe("ExtensionBridge", () => {
       extensionVersion: "0.0.1"
     });
 
-    expect(NAVOKE_EXTENSION_PROTOCOL_VERSION).toBe(6);
+    expect(NAVOKE_EXTENSION_PROTOCOL_VERSION).toBe(7);
     expect(bridge.status()).toMatchObject({
-      requiredProtocolVersion: 6,
+      requiredProtocolVersion: 7,
       connected: 2,
       compatible: 1,
       incompatible: 1,
@@ -38,7 +38,7 @@ describe("ExtensionBridge", () => {
         latestControllerHeartbeatOk: true
       }),
       clients: expect.arrayContaining([
-        expect.objectContaining({ compatible: false, incompatibilityReason: expect.stringContaining("protocol 6") }),
+        expect.objectContaining({ compatible: false, incompatibilityReason: expect.stringContaining("protocol 7") }),
         expect.objectContaining({ compatible: true, controllerId: "controller-1", tabId: 42, windowId: 7 })
       ])
     });
@@ -285,6 +285,17 @@ describe("ExtensionBridge", () => {
       openedWindowId: 2,
       openedControllerId: "controller-1"
     });
+  });
+
+  it.each(["window", "tab"] as const)("opens background %s without activating it", async (openMode) => {
+    const bridge = new ExtensionBridge();
+    bridge.controllerHeartbeat({ controllerId: "controller-1", protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION, extensionVersion: "0.1.9", capabilities: CONTROLLER_CAPABILITIES });
+    const wait = bridge.ensureRoutedTab({ target: { mode: "new", routingToken: "background-route", url: "https://example.test/", openMode, background: true }, timeoutMs: 1000 });
+    const command = bridge.nextControllerCommand("controller-1")!;
+    expect(command.command).toMatchObject(openMode === "window" ? { kind: "open-window", focused: false } : { kind: "open-tab", active: false });
+    bridge.completeControllerCommand(command.id, { ok: true, tabId: 1, windowId: 2 });
+    bridge.heartbeat({ clientId: "background-tab", routingToken: "background-route", protocolVersion: NAVOKE_EXTENSION_PROTOCOL_VERSION, extensionVersion: "0.1.9", url: "https://example.test/" });
+    await expect(wait).resolves.toMatchObject({ id: "background-tab" });
   });
 
   it("does not mark pre-existing routed clients as controller-opened", async () => {

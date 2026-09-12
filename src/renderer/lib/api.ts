@@ -366,6 +366,7 @@ export interface WorkflowLabSessionSummary {
 }
 
 export type WorkflowLabAction =
+  | { kind: "hover"; selector: string }
   | { kind: "click"; selector: string }
   | { kind: "fill"; selector: string; value: string }
   | { kind: "submit"; selector: string }

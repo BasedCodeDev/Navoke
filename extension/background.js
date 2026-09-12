@@ -1,4 +1,4 @@
-const NAVOKE_EXTENSION_PROTOCOL_VERSION = 6;
+const NAVOKE_EXTENSION_PROTOCOL_VERSION = 7;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const API_BASE_URL = "http://127.0.0.1:39201";
 const CONTROLLER_ID_STORAGE_KEY = "navokeBrowserControllerId";
@@ -291,6 +291,7 @@ async function performControllerCommand(payload) {
   if (command.kind === "open-window") {
     const win = await chrome.windows.create({ url: command.url, focused: command.focused !== false });
     const tab = Array.isArray(win.tabs) ? win.tabs[0] : null;
+    if (command.focused === false) await enableBackgroundRendering(tab?.id);
     const injection = await injectContentScriptIntoTab(tab?.id);
     return {
       ok: true,
@@ -303,6 +304,7 @@ async function performControllerCommand(payload) {
     };
   }
   const tab = await chrome.tabs.create({ url: command.url, active: command.active !== false });
+  if (command.active === false) await enableBackgroundRendering(tab.id);
   const injection = await injectContentScriptIntoTab(tab.id);
   return {
     ok: true,
@@ -317,6 +319,24 @@ async function performControllerCommand(payload) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Keep run-owned background pages rendering without activating Chrome or the OS cursor.
+// This is the same page-focus emulation used by Playwright's Chromium driver.
+async function enableBackgroundRendering(tabId) {
+  if (typeof tabId !== "number") throw new Error("Background rendering requires an owned tab id.");
+  const target = { tabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    await chrome.debugger.sendCommand(target, "Emulation.setFocusEmulationEnabled", { enabled: true });
+  } catch (error) {
+    if (attached) await chrome.debugger.detach(target).catch(() => {});
+    // Only the tab just created for this command is closed on setup failure.
+    await chrome.tabs.remove(tabId).catch(() => {});
+    throw new Error("Could not enable background page rendering. Reload the updated Navoke extension: " + (error instanceof Error ? error.message : String(error)));
+  }
 }
 
 async function waitForInjectableTab(tabId) {

@@ -6,6 +6,15 @@ import { describe, expect, it } from "vitest";
 describe("generic browser extension content script", () => {
   const extensionDir = path.resolve(__dirname, "../../extension");
 
+  it("hovers through DOM events without clicking or focusing", async () => {
+    const events: string[] = [];
+    const element = createFakeElement({ isContentEditable: false, onClick: () => { throw new Error("Unexpected click"); }, dispatchEvent: event => events.push(event.type) });
+    element.focus = () => { throw new Error("Unexpected focus"); };
+    const harness = loadContentScriptHarness(element);
+    await expect(harness.performAction({ kind: "hover", selector: "button" })).resolves.toMatchObject({ ok: true, action: "hover" });
+    expect(events).toEqual(["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"]);
+  });
+
   it("does not ship site-specific hostnames or task kinds", () => {
     const files = ["content.js", "background.js", "popup.js", "manifest.json"].map((file) =>
       fs.readFileSync(path.join(extensionDir, file), "utf8")

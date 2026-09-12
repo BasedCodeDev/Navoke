@@ -1,4 +1,4 @@
-const NAVOKE_EXTENSION_PROTOCOL_VERSION = 6;
+const NAVOKE_EXTENSION_PROTOCOL_VERSION = 7;
 const API_BASE_URL = "http://127.0.0.1:39201";
 
 async function refresh() {

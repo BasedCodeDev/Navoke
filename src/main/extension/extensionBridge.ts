@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { inferMimeType } from "../utils/files";
 
-export const NAVOKE_EXTENSION_PROTOCOL_VERSION = 6;
+export const NAVOKE_EXTENSION_PROTOCOL_VERSION = 7;
 export const NAVOKE_ROUTING_TOKEN_PARAM = "navoke-tab";
 const LEGACY_BLINK_ROUTING_TOKEN_PARAM = "based-blink-tab";
 const ROUTING_TOKEN_PARAMS = [NAVOKE_ROUTING_TOKEN_PARAM, LEGACY_BLINK_ROUTING_TOKEN_PARAM] as const;
@@ -27,6 +27,7 @@ export type ExtensionBrowserTarget =
       url?: string;
       title?: string;
       openMode?: "window" | "tab";
+      background?: boolean;
       clientId?: string;
       tabId?: number;
       windowId?: number;
@@ -162,6 +163,7 @@ export interface ExtensionCommandFilePayload {
 }
 
 export type ExtensionBrowserAction =
+  | { kind: "hover"; selector: string }
   | { kind: "click"; selector: string; text?: string; textMatch?: "contains" | "exact" | "regex"; caseSensitive?: boolean }
   | { kind: "fill"; selector: string; value: string }
   | { kind: "submit"; selector: string }
@@ -599,7 +601,7 @@ export class ExtensionBridge {
       try {
         openResult = await this.openWindowWithController({
           url,
-          focused: true,
+          focused: input.target.background !== true,
           controllerId: input.target.controllerId,
           timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
           signal: input.signal
@@ -612,7 +614,7 @@ export class ExtensionBridge {
       try {
         openResult = await this.openTabWithController({
           url,
-          active: true,
+          active: input.target.mode !== "new" || input.target.background !== true,
           controllerId: input.target.mode === "any" ? undefined : input.target.controllerId,
           timeoutMs: Math.min(input.timeoutMs ?? CONTROLLER_COMMAND_LEASE_MS, CONTROLLER_COMMAND_LEASE_MS),
           signal: input.signal
