@@ -83,13 +83,13 @@ if (gateway) {
   const phaseDurations = [820, 820, 900, 900, 880];
   let activeFlow = 0;
   let sequenceTimer = null;
-  let pointerFlow = null;
-  let focusFlow = null;
+  let pointerSelection = null;
+  let focusSelection = null;
   let gatewayIsVisible = true;
   let layoutFrame = null;
 
-  function requestedFlow() {
-    return focusFlow ?? pointerFlow;
+  function requestedSelection() {
+    return focusSelection ?? pointerSelection;
   }
 
   function stopGatewaySequence() {
@@ -103,6 +103,7 @@ if (gateway) {
     activeFlow = flowIndex;
     gateway.dataset.activeFlow = String(flowIndex);
     gateway.dataset.flowPhase = phase;
+    delete gateway.dataset.interaction;
 
     routes.forEach((route, index) => {
       const isActive = index === flowIndex;
@@ -122,9 +123,36 @@ if (gateway) {
     hub?.classList.toggle("is-active", phase !== "complete");
   }
 
+  function setGatewayCapability(selection, phase = "complete") {
+    activeFlow = selection.index;
+    gateway.dataset.activeFlow = String(selection.index);
+    gateway.dataset.flowPhase = phase;
+    gateway.dataset.interaction = selection.kind;
+
+    routes.forEach((route) => {
+      route.classList.add("is-active");
+      route.dataset.phase = phase;
+    });
+
+    agentCards.forEach((card, index) => {
+      card.classList.toggle("is-active", selection.kind === "agent" ? index === selection.index : true);
+    });
+    siteCards.forEach((card, index) => {
+      card.classList.toggle("is-active", selection.kind === "site" ? index === selection.index : true);
+    });
+
+    const resultIsVisible = phase === "site-result" || phase === "agent-result" || phase === "complete";
+    outputs.forEach((output, index) => {
+      output.classList.toggle("is-active", resultIsVisible && (selection.kind === "agent" || index === selection.index));
+    });
+
+    hub?.classList.add("is-active");
+  }
+
   function showStaticGateway() {
     stopGatewaySequence();
     gateway.dataset.flowPhase = "static";
+    delete gateway.dataset.interaction;
     routes.forEach((route) => {
       route.classList.remove("is-active");
       route.dataset.phase = "static";
@@ -138,7 +166,7 @@ if (gateway) {
     return document.documentElement.dataset.motion === "on"
       && !document.hidden
       && gatewayIsVisible
-      && requestedFlow() === null;
+      && requestedSelection() === null;
   }
 
   function playGatewayFlow(flowIndex, advanceWhenComplete = true) {
@@ -162,11 +190,42 @@ if (gateway) {
           return;
         }
 
-        const interactionFlow = requestedFlow();
-        if (interactionFlow !== null) {
-          setGatewayRoute(interactionFlow, "complete");
+        const interaction = requestedSelection();
+        if (interaction !== null) {
+          setGatewayCapability(interaction);
+          scheduleGatewayLayout();
         } else if (gatewayCanAutoPlay()) {
           playGatewayFlow((flowIndex + 1) % routes.length, true);
+        }
+      }, phaseDurations[phaseIndex]);
+    }
+
+    runPhase();
+  }
+
+  function playGatewayCapability(selection) {
+    stopGatewaySequence();
+    let phaseIndex = 0;
+
+    function runPhase() {
+      const phase = phases[phaseIndex];
+      setGatewayCapability(selection, phase);
+      scheduleGatewayLayout();
+
+      sequenceTimer = window.setTimeout(() => {
+        if (phaseIndex < phases.length - 1) {
+          phaseIndex += 1;
+          runPhase();
+          return;
+        }
+
+        sequenceTimer = null;
+        const interaction = requestedSelection();
+        if (interaction !== null) {
+          setGatewayCapability(interaction);
+          scheduleGatewayLayout();
+        } else if (gatewayCanAutoPlay()) {
+          playGatewayFlow(activeFlow, true);
         }
       }, phaseDurations[phaseIndex]);
     }
@@ -181,14 +240,15 @@ if (gateway) {
       return;
     }
 
-    const interactionFlow = requestedFlow();
-    if (interactionFlow !== null) {
-      setGatewayRoute(interactionFlow, "complete");
+    const interaction = requestedSelection();
+    if (interaction !== null) {
+      setGatewayCapability(interaction);
     } else if (gatewayCanAutoPlay()) {
       playGatewayFlow(activeFlow, true);
     } else {
       setGatewayRoute(activeFlow, "complete");
     }
+    scheduleGatewayLayout();
   }
 
   function pointFor(element, horizontalSide, verticalSide, laneOffset = 0) {
@@ -233,11 +293,14 @@ if (gateway) {
 
     const compact = compactGatewayQuery.matches;
     const hubBounds = hub.getBoundingClientRect();
+    const interaction = requestedSelection();
 
     routes.forEach((route, index) => {
-      const agent = agentCards[index];
-      const site = siteCards[index];
-      const output = outputs[index];
+      const agentIndex = interaction?.kind === "agent" ? interaction.index : index;
+      const siteIndex = interaction?.kind === "site" ? interaction.index : index;
+      const agent = agentCards[agentIndex];
+      const site = siteCards[siteIndex];
+      const output = outputs[siteIndex];
       if (!agent || !site || !output) return;
 
       if (compact) {
@@ -261,8 +324,10 @@ if (gateway) {
         const labelProgress = 0.22;
         const labelX = siteResultStart.x + (siteResultEnd.x - siteResultStart.x) * labelProgress;
         const labelY = siteResultStart.y + (siteResultEnd.y - siteResultStart.y) * labelProgress;
-        output.style.left = `${labelX}px`;
-        output.style.top = `${labelY}px`;
+        if (interaction?.kind !== "site" || index === interaction.index) {
+          output.style.left = `${labelX}px`;
+          output.style.top = `${labelY}px`;
+        }
       } else {
         const hubLane = (index - 1) * hubBounds.height * 0.27;
         const requestOffset = -4;
@@ -284,8 +349,10 @@ if (gateway) {
         const labelProgress = 0.46;
         const labelX = siteResultStart.x + (siteResultEnd.x - siteResultStart.x) * labelProgress;
         const labelY = siteResultStart.y + (siteResultEnd.y - siteResultStart.y) * labelProgress - 12;
-        output.style.left = `${labelX}px`;
-        output.style.top = `${labelY}px`;
+        if (interaction?.kind !== "site" || index === interaction.index) {
+          output.style.left = `${labelX}px`;
+          output.style.top = `${labelY}px`;
+        }
       }
     });
   }
@@ -296,26 +363,33 @@ if (gateway) {
   }
 
   cards.forEach((card) => {
-    const flowIndex = Number(card.dataset.flowIndex);
+    const selection = {
+      kind: card.hasAttribute("data-gateway-agent") ? "agent" : "site",
+      index: Number(card.dataset.flowIndex)
+    };
     card.addEventListener("pointerenter", () => {
-      pointerFlow = flowIndex;
-      stopGatewaySequence();
-      setGatewayRoute(flowIndex, "complete");
+      pointerSelection = selection;
+      refreshGatewayMotion();
     });
     card.addEventListener("pointerleave", () => {
-      pointerFlow = null;
+      pointerSelection = null;
       refreshGatewayMotion();
     });
     card.addEventListener("focus", () => {
-      focusFlow = flowIndex;
-      stopGatewaySequence();
-      setGatewayRoute(flowIndex, "complete");
-    });
-    card.addEventListener("blur", () => {
-      focusFlow = null;
+      focusSelection = selection;
       refreshGatewayMotion();
     });
-    card.addEventListener("click", () => playGatewayFlow(flowIndex, false));
+    card.addEventListener("blur", () => {
+      focusSelection = null;
+      refreshGatewayMotion();
+    });
+    card.addEventListener("click", () => {
+      if (document.documentElement.dataset.motion === "on") {
+        playGatewayCapability(selection);
+      } else {
+        showStaticGateway();
+      }
+    });
   });
 
   if ("ResizeObserver" in window && canvas) {
